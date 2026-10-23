@@ -1,4 +1,4 @@
-// Package migrations applies platform metadata schema, never user target SQL.
+// Package migrations mengelola migrasi schema metadata platform.
 package migrations
 
 import (
@@ -20,7 +20,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	defer tx.Rollback(context.Background())
-	// Serialize metadata setup across simultaneous application deployments.
+	// Serialisasi migrasi metadata antar deployment.
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(3110001)"); err != nil {
 		return err
 	}
