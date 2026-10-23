@@ -11,8 +11,11 @@ type Pinger interface {
 	Ping(context.Context) error
 }
 
-func New(db Pinger) http.Handler {
+func New(db Pinger, register ...func(*http.ServeMux)) http.Handler {
 	mux := http.NewServeMux()
+	for _, module := range register {
+		module(mux)
+	}
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})

@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"encoding/base64"
+	"testing"
+)
 
 func TestLoad(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
@@ -17,5 +20,25 @@ func TestLoad(t *testing.T) {
 	cfg, err = Load()
 	if err != nil || cfg.HTTPAddr != ":9090" {
 		t.Fatal("address override ignored")
+	}
+}
+
+func TestLoadAPI(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://localhost/platform")
+	t.Setenv("APP_ORIGIN", "http://localhost:8080")
+	t.Setenv("TARGET_CREDENTIAL_KEY", base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if _, err := LoadAPI(); err != nil {
+		t.Fatal(err)
+	}
+	for _, origin := range []string{"", "localhost:8080", "http://localhost:8080/", "https://user:password@example.com", "http://localhost:8080?x=1"} {
+		t.Setenv("APP_ORIGIN", origin)
+		if _, err := LoadAPI(); err == nil {
+			t.Fatalf("invalid origin accepted: %q", origin)
+		}
+	}
+	t.Setenv("APP_ORIGIN", "http://localhost:8080")
+	t.Setenv("TARGET_CREDENTIAL_KEY", "not a key")
+	if _, err := LoadAPI(); err == nil {
+		t.Fatal("invalid key accepted")
 	}
 }
