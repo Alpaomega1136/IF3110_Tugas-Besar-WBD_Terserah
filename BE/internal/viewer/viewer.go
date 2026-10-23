@@ -95,7 +95,7 @@ func (s *Service) read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	schema, table := r.PathValue("schema"), r.PathValue("table")
-	if strings.HasPrefix(schema, "pg_") || schema == "information_schema" {
+	if strings.HasPrefix(schema, "pg_") || schema == "information_schema" || schema == "_terserah" {
 		httpx.Error(w, 403, "forbidden", "System schema is not available in the data viewer")
 		return
 	}
@@ -127,7 +127,7 @@ func (s *Service) read(w http.ResponseWriter, r *http.Request) {
 	}
 	var result any
 	if schema == "" {
-		items, e := jsonQuery(r.Context(), tx, `SELECT COALESCE(jsonb_agg(nspname ORDER BY nspname),'[]'::jsonb) FROM pg_catalog.pg_namespace WHERE nspname NOT LIKE 'pg\_%' ESCAPE '\' AND nspname<>'information_schema' AND pg_catalog.has_schema_privilege(oid,'USAGE')`)
+		items, e := jsonQuery(r.Context(), tx, `SELECT COALESCE(jsonb_agg(nspname ORDER BY nspname),'[]'::jsonb) FROM pg_catalog.pg_namespace WHERE nspname NOT LIKE 'pg\_%' ESCAPE '\' AND nspname NOT IN ('information_schema','_terserah') AND pg_catalog.has_schema_privilege(oid,'USAGE')`)
 		err = e
 		result = map[string]any{"schemas": items}
 	} else {

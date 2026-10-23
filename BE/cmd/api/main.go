@@ -16,6 +16,7 @@ import (
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/database"
 	"terserah/backend/internal/httpapi"
+	"terserah/backend/internal/runner"
 	"terserah/backend/internal/viewer"
 )
 
@@ -52,6 +53,7 @@ func run() error {
 	handler := httpapi.New(pool, sessions.Register, func(mux *http.ServeMux) {
 		targets.Register(mux, sessions)
 		viewer.New(targets).Register(mux, sessions)
+		runner.New(pool, targets).Register(mux, sessions)
 		admin.NewService(admin.NewPostgresStore(pool), nil).Register(mux, sessions)
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
