@@ -15,6 +15,7 @@ import (
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/database"
 	"terserah/backend/internal/httpapi"
+	"terserah/backend/internal/viewer"
 )
 
 func main() {
@@ -47,7 +48,7 @@ func run() error {
 	if err != nil {
 		return errors.New("cannot initialize target connections")
 	}
-	handler := httpapi.New(pool, sessions.Register, func(mux *http.ServeMux) { targets.Register(mux, sessions) })
+	handler := httpapi.New(pool, sessions.Register, func(mux *http.ServeMux) { targets.Register(mux, sessions); viewer.New(targets).Register(mux, sessions) })
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	result := make(chan error, 1)
 	go func() { result <- server.ListenAndServe() }()

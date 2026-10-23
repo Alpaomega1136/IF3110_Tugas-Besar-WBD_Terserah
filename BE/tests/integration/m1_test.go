@@ -23,6 +23,7 @@ import (
 	"terserah/backend/internal/database"
 	"terserah/backend/internal/httpapi"
 	"terserah/backend/internal/secretbox"
+	"terserah/backend/internal/viewer"
 	"terserah/backend/migrations"
 )
 
@@ -93,7 +94,10 @@ func newM1App(t *testing.T) *m1App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app.http = httpapi.New(db, sessions.Register, func(mux *http.ServeMux) { app.targets.Register(mux, sessions) })
+	app.http = httpapi.New(db, sessions.Register, func(mux *http.ServeMux) {
+		app.targets.Register(mux, sessions)
+		viewer.New(app.targets).Register(mux, sessions)
+	})
 	hash, err := auth.HashPassword(testPassword)
 	if err != nil {
 		t.Fatal(err)
