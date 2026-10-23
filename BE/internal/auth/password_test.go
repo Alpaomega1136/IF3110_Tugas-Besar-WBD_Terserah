@@ -27,3 +27,18 @@ func TestPassword(t *testing.T) {
 		t.Fatal("short password accepted")
 	}
 }
+
+func TestLegacyPasswordCompatibility(t *testing.T) {
+	// Interoperability vector generated independently with Python hashlib.
+	legacy := "$pbkdf2-sha256$i=210000$AAECAwQFBgcICQoLDA0ODw$2QNDrl+R+uQV/xJCW4gZazJPobMhzqlqdv5qX/CgJFY"
+	if !CheckPassword(legacy, "old-pass") || CheckPassword(legacy, "wrong") {
+		t.Fatal("legacy verifier is incompatible")
+	}
+	if _, err := HashPassword("old-pass"); err == nil {
+		t.Fatal("new passwords bypass minimum length")
+	}
+	upgraded, err := canonicalPasswordHash("old-pass")
+	if err != nil || !CheckPassword(upgraded, "old-pass") {
+		t.Fatal("legacy password cannot be upgraded")
+	}
+}

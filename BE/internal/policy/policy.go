@@ -3,6 +3,11 @@ package policy
 
 type Access string
 
+func ParseAccess(raw string) (Access, bool) {
+	a := Access(raw)
+	return a, a == View || a == Edit
+}
+
 const (
 	None Access = ""
 	View Access = "view"

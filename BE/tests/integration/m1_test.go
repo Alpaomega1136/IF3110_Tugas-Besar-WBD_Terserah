@@ -18,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	adminapi "terserah/backend/internal/admin"
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/database"
@@ -97,6 +98,7 @@ func newM1App(t *testing.T) *m1App {
 	app.http = httpapi.New(db, sessions.Register, func(mux *http.ServeMux) {
 		app.targets.Register(mux, sessions)
 		viewer.New(app.targets).Register(mux, sessions)
+		adminapi.NewService(adminapi.NewPostgresStore(db), app.clock.Now).Register(mux, sessions)
 	})
 	hash, err := auth.HashPassword(testPassword)
 	if err != nil {

@@ -325,10 +325,31 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(context.Background())
 	// Recheck the account inside the transaction before creating a session.
-	err = tx.QueryRow(r.Context(), "SELECT is_platform_admin FROM users WHERE id=$1 AND is_active=true AND password_hash=$2 FOR SHARE", p.ID, passwordHash).Scan(&p.IsPlatformAdmin)
+	var latestHash string
+	err = tx.QueryRow(r.Context(), "SELECT is_platform_admin,password_hash FROM users WHERE id=$1 AND is_active=true FOR UPDATE", p.ID).Scan(&p.IsPlatformAdmin, &latestHash)
 	if err != nil {
-		s.authError(w, ErrUnauthenticated)
+		if errors.Is(err, pgx.ErrNoRows) {
+			s.authError(w, ErrUnauthenticated)
+		} else {
+			s.authError(w, err)
+		}
 		return
+	}
+	if latestHash != passwordHash && !CheckPassword(latestHash, input.Password) {
+		httpx.Error(w, 401, "invalid_credentials", "Invalid username or password")
+		return
+	}
+	passwordHash = latestHash
+	if strings.HasPrefix(passwordHash, "$pbkdf2-sha256$i=210000$") {
+		upgraded, upgradeErr := canonicalPasswordHash(input.Password)
+		if upgradeErr != nil {
+			s.authError(w, upgradeErr)
+			return
+		}
+		if _, err = tx.Exec(r.Context(), "UPDATE users SET password_hash=$2 WHERE id=$1", p.ID, upgraded); err != nil {
+			s.authError(w, err)
+			return
+		}
 	}
 	if c, e := r.Cookie(CookieName); e == nil {
 		if _, err = tx.Exec(r.Context(), "UPDATE sessions SET revoked_at=$2 WHERE id IN (SELECT session_id FROM session_tokens WHERE token_hash=$1)", tokenHash(c.Value), s.now()); err != nil {

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"terserah/backend/internal/admin"
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/config"
 	"terserah/backend/internal/connections"
@@ -48,7 +49,11 @@ func run() error {
 	if err != nil {
 		return errors.New("cannot initialize target connections")
 	}
-	handler := httpapi.New(pool, sessions.Register, func(mux *http.ServeMux) { targets.Register(mux, sessions); viewer.New(targets).Register(mux, sessions) })
+	handler := httpapi.New(pool, sessions.Register, func(mux *http.ServeMux) {
+		targets.Register(mux, sessions)
+		viewer.New(targets).Register(mux, sessions)
+		admin.NewService(admin.NewPostgresStore(pool), nil).Register(mux, sessions)
+	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	result := make(chan error, 1)
 	go func() { result <- server.ListenAndServe() }()
