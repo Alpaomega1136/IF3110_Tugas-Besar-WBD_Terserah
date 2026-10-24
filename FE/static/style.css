@@ -86,3 +86,17 @@ button:disabled {
     background-color: #9ca3af;
     cursor: not-allowed;
 }
+
+#login-message {
+    margin-top: 16px;
+    font-size: 14px;
+    text-align: center;
+}
+
+.error-message {
+    color: #dc2626;
+}
+
+.success-message {
+    color: #16a34a;
+}
