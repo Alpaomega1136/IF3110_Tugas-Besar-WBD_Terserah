@@ -1,11 +1,47 @@
-# Frontend
 
-Folder ini dimiliki pengembang frontend. Framework, package manager, dan isi aplikasi belum ditentukan.
+# Terserah — Frontend
 
-- Letakkan project frontend langsung di `FE/`.
-- Backend development: `http://localhost:8080`.
-- Gunakan proxy development `/api` dan `/health` ke backend agar request cookie tetap same-origin; deployment juga memakai satu origin.
-- Kontrak yang sudah tersedia: [API](../docs/api.md). Endpoint fitur lainnya masih direncanakan.
-- Saat auth diimplementasikan, gunakan cookie session HttpOnly dan header CSRF sesuai kontrak bersama BE. Jangan simpan session identifier di localStorage.
-- Tambahkan perintah run/build/test frontend di README ini setelah stack dipilih.
+Frontend IF3110 Milestone 1 untuk Database Management Platform.
 
+## Teknologi
+
+- Go 1.26.2 (`net/http` dan `html/template`)
+- JavaScript ES Modules tanpa bundler
+- HTML dan CSS
+- Same-origin reverse proxy untuk backend Go
+
+## Menjalankan
+
+Jalankan BE pada port 8080 terlebih dahulu.
+
+Dari direktori `FE/`:
+
+```powershell
+go run .
+```
+
+Frontend: http://localhost:3000
+
+Environment opsional:
+
+- `FE_HTTP_ADDR` — default `:3000`
+- `FE_BACKEND_URL` — default `http://localhost:8080`
+
+## Halaman
+
+- `/login` — login
+- `/dashboard` — akun dan daftar database yang dapat diakses
+- `/admin/users` — administrasi pengguna
+- `/admin/groups` — group dan membership
+- `/admin/grants` — database grants untuk group
+- `/databases/{id}/drafts` — editor migration draft, memerlukan akses `edit`
+- `/databases/{id}/history` — riwayat eksekusi migration, memerlukan akses `view` atau `edit`
+
+## Pengujian
+
+Dari direktori `FE/`:
+
+```powershell
+go test ./...
+go vet ./...
+```

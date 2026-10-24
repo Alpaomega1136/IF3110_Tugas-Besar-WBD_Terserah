@@ -68,6 +68,16 @@ async function loadDatabases() {
             }
 
             row.appendChild(actionCell);
+       
+            const historyCell = document.createElement("td");
+            const historyLink = document.createElement("a");
+
+            historyLink.href = `/databases/${encodeURIComponent(String(database.id))}/history`;
+
+            historyLink.textContent = "Lihat History";
+
+            historyCell.appendChild(historyLink);
+            row.appendChild(historyCell);
 
             databasesBody.appendChild(row);
         }

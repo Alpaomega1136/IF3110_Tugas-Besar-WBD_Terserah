@@ -48,6 +48,11 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 		return nil, fmt.Errorf("parse drafts template: %w", err)
 	}
 
+	historyTemplate, err := parsePageTemplate("history")
+	if err != nil {
+		return nil, fmt.Errorf("parse history template: %w", err)
+	}
+
 	staticFiles, err := fs.Sub(assets, "static")
 	if err != nil {
 		return nil, fmt.Errorf("load static files: %w", err)
@@ -116,6 +121,25 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 
 			pageHandler(draftsTemplate, PageData{
 				Title:      "Migration Drafts - Terserah",
+				DatabaseID: strconv.FormatInt(id, 10),
+			})(w, r)
+		},
+	)
+
+	mux.HandleFunc("GET /databases/{id}/history",
+		func(w http.ResponseWriter, r *http.Request) {
+			id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+			if err != nil || id <= 0 {
+				http.Error(
+					w,
+					"ID database tidak valid",
+					http.StatusBadRequest,
+				)
+				return
+			}
+
+			pageHandler(historyTemplate, PageData{
+				Title:      "Migration History - Terserah",
 				DatabaseID: strconv.FormatInt(id, 10),
 			})(w, r)
 		},

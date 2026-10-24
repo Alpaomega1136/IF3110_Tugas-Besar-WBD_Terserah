@@ -43,7 +43,7 @@ func TestRootRedirectAndStatic(t *testing.T) {
 		t.Fatalf("unexpected root response: %d %q", w.Code, w.Header().Get("Location"))
 	}
 
-	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js", "/static/js/users.js", "/static/js/groups.js", "/static/js/grants.js", "/static/js/drafts.js"} {
+	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js", "/static/js/users.js", "/static/js/groups.js", "/static/js/grants.js", "/static/js/drafts.js", "/static/js/history.js"} {
 		w = httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, asset, nil))
 		if w.Code != http.StatusOK {
@@ -101,6 +101,7 @@ func TestDashboardPage(t *testing.T) {
 		`id="databases-empty"`,
 		`/static/js/dashboard.js`,
 		`<th scope="col">Draft Migration</th>`,
+		`<th scope="col">Migration History</th>`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("dashboard page missing %q", expected)
@@ -459,7 +460,7 @@ func TestDatabaseAndGrantProxy(t *testing.T) {
 							t.Errorf("body = %q, want %q", gotBody, tc.body)
 						}
 
-						w.Header().Set("Content-Type",  "application/json")
+						w.Header().Set("Content-Type", "application/json")
 
 						_, _ = io.WriteString(w, `{"status":"ok"}`)
 					},
@@ -532,6 +533,7 @@ func TestDraftsPageAndInvalidIDs(t *testing.T) {
 				`id="draft-form"`,
 				`id="draft-list-body"`,
 				`id="draft-detail"`,
+				`href="/databases/5/history"`,
 				`/static/js/drafts.js`,
 			} {
 				if !strings.Contains(w.Body.String(), part) {
@@ -640,6 +642,146 @@ func TestDraftAPIProxy(t *testing.T) {
 					"proxy returned %d",
 					w.Code,
 				)
+			}
+		})
+	}
+}
+
+func TestHistoryAPIProxy(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		path     string
+		response string
+	}{
+		{
+			"list",
+			"/api/v1/databases/5/migrations",
+			`{"migrations":[]}`,
+		},
+		{
+			"detail by version",
+			"/api/v1/databases/5/migrations/7",
+			`{"migration":{"id":"3","database_id":"5","version":7,"status":"success","sql":"SELECT 1;"}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != http.MethodGet || r.URL.Path != tc.path {
+						t.Errorf("upstream received %s %s", r.Method, r.URL.Path)
+					}
+
+					if r.Host != "localhost:3000" ||
+						r.Header.Get("Origin") != "http://localhost:3000" {
+						t.Error("Host/Origin not preserved")
+					}
+
+					if got := r.Header.Get("Cookie"); got != "terserah_session=test-session" {
+						t.Errorf("cookie=%q", got)
+					}
+
+					if got := r.Header.Get("X-CSRF-Token"); got != "" {
+						t.Errorf("read-only GET unexpectedly sent CSRF token %q", got)
+					}
+
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, tc.response)
+				},
+			))
+			defer backend.Close()
+
+			h := testHandler(t, backend.URL)
+
+			r := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			r.Host = "localhost:3000"
+			r.Header.Set("Origin", "http://localhost:3000")
+			r.Header.Set("Cookie", "terserah_session=test-session")
+
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+
+			if w.Code != http.StatusOK ||
+				strings.TrimSpace(w.Body.String()) != tc.response {
+				t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestHistoryAPIProxyPreservesForbidden(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(
+				w,
+				`{"error":{"code":"forbidden","message":"Insufficient database permission"}}`,
+			)
+		},
+	))
+	defer backend.Close()
+
+	h := testHandler(t, backend.URL)
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/databases/5/migrations",
+		nil,
+	))
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403", w.Code)
+	}
+
+	if !strings.Contains(w.Body.String(), `"forbidden"`) {
+		t.Fatal("upstream permission error not preserved")
+	}
+}
+
+func TestHistoryPageAndInvalidIDs(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/databases/5/history", http.StatusOK},
+		{"/databases/0/history", http.StatusBadRequest},
+		{"/databases/nope/history", http.StatusBadRequest},
+		{"/databases/9223372036854775808/history", http.StatusBadRequest},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.path, nil))
+
+			if w.Code != tc.want {
+				t.Fatalf("status=%d, want=%d", w.Code, tc.want)
+			}
+
+			if tc.want != http.StatusOK {
+				return
+			}
+
+			for _, part := range []string{
+				"Migration History - Terserah",
+				`data-database-id="5"`,
+				`id="history-list-body"`,
+				`id="history-detail-sql"`,
+				`id="history-refresh"`,
+				`/static/js/history.js`,
+			} {
+				if !strings.Contains(w.Body.String(), part) {
+					t.Errorf("history page missing %q", part)
+				}
+			}
+
+			if strings.Contains(w.Body.String(), `id="login-form"`) {
+				t.Error("history page rendered login form")
+			}
+
+			if got := w.Header().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("Cache-Control=%q, want no-store", got)
 			}
 		})
 	}
