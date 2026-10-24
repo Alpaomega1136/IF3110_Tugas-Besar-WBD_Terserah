@@ -1,0 +1,129 @@
+{{define "content"}}
+<div class="app-shell">
+    <header class="app-header">
+        <a class="app-brand" href="/dashboard">Terserah</a>
+        <nav class="app-nav" aria-label="Navigasi utama">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/admin/users" aria-current="page">Users</a>
+        </nav>
+    </header>
+
+    <main class="app-main">
+        <h1>User Management</h1>
+        <p>Daftar akun yang terdaftar pada platform.</p>
+        
+        <section id="create-user-section" class="dashboard-panel" aria-labelledby="create-user-heading" hidden>
+            <h2 id="create-user-heading">Tambah Pengguna</h2>
+
+            <form id="create-user-form" class="create-user-form" novalidate>
+                <div class="form-group">
+                    <label for="create-username">Username (wajib)</label>
+                    <input id="create-username" name="username" type="text"
+                        autocomplete="off" required maxlength="100"
+                        aria-describedby="create-username-error">
+                    <p id="create-username-error" class="error-message" hidden></p>
+                </div>
+
+                <div class="form-group">
+                    <label for="create-password">Password (wajib)</label>
+                    <input id="create-password" name="password" type="password"
+                        autocomplete="new-password" required minlength="8"
+                        aria-describedby="create-password-error">
+                    <p id="create-password-error" class="error-message" hidden></p>
+                </div>
+
+                <label class="create-user-checkbox" for="create-is-admin">
+                    <input id="create-is-admin" name="is_platform_admin" type="checkbox">
+                    Jadikan Platform Admin
+                </label>
+
+                <button id="create-user-submit" type="submit">
+                    Buat Pengguna
+                </button>
+
+                <p id="create-user-message" role="status" aria-live="polite" hidden></p>
+            </form>
+        </section>
+
+        <p id="users-status" role="status" aria-live="polite">
+            Memeriksa akses...
+        </p>
+
+        <p id="users-error" class="error-message"
+           role="alert" hidden></p>
+
+        <p id="users-empty" hidden>
+            Belum ada pengguna.
+        </p>
+
+        <section id="users-section" class="dashboard-panel"
+                 aria-label="Daftar pengguna" hidden>
+            <div class="users-table-wrapper">
+                <table class="users-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">ID</th>
+                            <th scope="col">Username</th>
+                            <th scope="col">Peran</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">Jumlah group</th>
+                            <th scope="col">Dibuat</th>
+                            <th scope="col">Aksi</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-body"></tbody>
+                </table>
+            </div>
+        </section>
+        
+        <section id="edit-user-section" class="dashboard-panel" aria-labelledby="edit-user-heading" hidden>
+            <h2 id="edit-user-heading">
+                Edit Pengguna: <span id="edit-user-name"></span>
+            </h2>
+
+            <p>
+                Username tidak dapat diubah. Kosongkan password
+                jika tidak ingin menggantinya.
+            </p>
+
+            <form id="edit-user-form" class="edit-user-form" novalidate>
+                <div class="form-group">
+                    <label for="edit-password">
+                        Password Baru (opsional)
+                    </label>
+                    <input id="edit-password" type="password"
+                        autocomplete="new-password"
+                        aria-describedby="edit-password-error">
+                    <p id="edit-password-error" class="error-message" hidden></p>
+                </div>
+
+                <label class="edit-user-checkbox" for="edit-is-admin">
+                    <input id="edit-is-admin" type="checkbox">
+                    Platform Admin
+                </label>
+
+                <label class="edit-user-checkbox" for="edit-is-active">
+                    <input id="edit-is-active" type="checkbox">
+                    Akun Aktif
+                </label>
+
+                <div class="edit-user-actions">
+                    <button type="submit" id="edit-user-submit">
+                        Simpan Perubahan
+                    </button>
+
+                    <button type="button" id="edit-user-cancel" class="button-secondary">
+                        Batal
+                    </button>
+                </div>
+
+                <p id="edit-user-message"
+                role="status" aria-live="polite" hidden></p>
+            </form>
+        </section>
+
+    </main>
+</div>
+
+<script type="module" src="/static/js/users.js"></script>
+{{end}}

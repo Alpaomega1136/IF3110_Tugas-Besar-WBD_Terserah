@@ -43,7 +43,7 @@ func TestRootRedirectAndStatic(t *testing.T) {
 		t.Fatalf("unexpected root response: %d %q", w.Code, w.Header().Get("Location"))
 	}
 
-	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js"} {
+	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js", "/static/js/users.js"} {
 		w = httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, asset, nil))
 		if w.Code != http.StatusOK {
@@ -109,5 +109,90 @@ func TestDashboardPage(t *testing.T) {
 
 	if got := w.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestAdminUsersPage(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(
+		w,
+		httptest.NewRequest(http.MethodGet, "/admin/users", nil),
+	)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /admin/users returned %d", w.Code)
+	}
+
+	body := w.Body.String()
+
+	for _, expected := range []string{
+		"User Management - Terserah",
+		`id="create-user-form"`,
+		`id="create-password"`,
+		`id="users-section"`,
+		`/static/js/users.js`,
+		`id="edit-user-form"`,
+		`id="edit-user-submit"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("users page missing %q", expected)
+		}
+	}
+
+	if strings.Contains(body, `id="login-form"`) {
+		t.Fatal("users page rendered login content")
+	}
+
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestUpdateUserProxy(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPatch {
+				t.Errorf("method = %s, want PATCH", r.Method)
+			}
+
+			if r.URL.Path != "/api/v1/admin/users/12" {
+				t.Errorf("unexpected path: %s", r.URL.Path)
+			}
+
+			if got := r.Header.Get("X-CSRF-Token"); got != "test-token" {
+				t.Errorf("CSRF token = %q", got)
+			}
+
+			if got := r.Header.Get("Cookie"); got != "terserah_session=test-session" {
+				t.Errorf("cookie = %q", got)
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w,
+				`{"user":{"id":"12","is_active":false}}`,
+			)
+		},
+	))
+	defer backend.Close()
+
+	h := testHandler(t, backend.URL)
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/v1/admin/users/12",
+		strings.NewReader(`{"is_active":false}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", "test-token")
+	req.Header.Set("Cookie", "terserah_session=test-session")
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("PATCH returned %d, want 200", w.Code)
 	}
 }
