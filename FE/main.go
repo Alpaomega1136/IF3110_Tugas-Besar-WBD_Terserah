@@ -4,6 +4,8 @@ import (
     "html/template"
     "log"
     "net/http"
+	"net/http/httputil"
+	"net/url"
 )
 
 func main() {
@@ -13,6 +15,16 @@ func main() {
     }
 
     mux := http.NewServeMux()
+
+	backendURL, err := url.Parse("http://localhost:8080")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(backendURL)
+
+	mux.Handle("/api/", proxy)
+	mux.Handle("/health/", proxy)
 
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
