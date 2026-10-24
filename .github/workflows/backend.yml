@@ -37,7 +37,8 @@ jobs:
         run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -race -coverprofile=coverage.out ./...
-      - run: go test -race -tags=integration ./tests/integration/... -count=1
+      # Integration fault tests mutate shared target fixture privileges/identity.
+      - run: go test -p 1 -race -tags=integration ./tests/... -count=1 -timeout=240s
         env:
           TEST_DATABASE_URL: postgres://test:test_only@localhost:5432/platform_test?sslmode=disable
           TEST_TARGET_DATABASE_URL: postgres://test:test_only@localhost:5432/m1_target_one?sslmode=disable
