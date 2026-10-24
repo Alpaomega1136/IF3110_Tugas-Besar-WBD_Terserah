@@ -100,9 +100,18 @@ async function setupViewer({ access = "view", schemas = ["public"], listed = tru
     const ui = installDOM([
         "viewer-page", "viewer-status", "viewer-error", "viewer-workspace", "viewer-schemas-status",
         "viewer-database-name", "viewer-target-name", "viewer-access", "viewer-drafts-link",
-        "viewer-schemas-list", "viewer-schemas-empty"
+        "viewer-schemas-list", "viewer-schemas-empty", "viewer-schemas-error", "viewer-refresh-schemas",
+        "viewer-tables-panel", "viewer-selected-schema", "viewer-refresh-tables", "viewer-tables-status",
+        "viewer-tables-error", "viewer-tables-empty", "viewer-tables-list", "viewer-detail",
+        "viewer-selected-table", "viewer-refresh-detail", "viewer-detail-status", "viewer-detail-error", "viewer-metadata",
+        "viewer-rows-panel", "viewer-refresh-rows", "viewer-row-limit", "viewer-rows-status", "viewer-rows-error",
+        "viewer-rows-head", "viewer-rows-body", "viewer-rows-table", "viewer-rows-empty", "viewer-rows-summary",
+        "viewer-rows-prev", "viewer-rows-next", "viewer-columns-body", "viewer-constraints-body", "viewer-indexes-body",
+        "viewer-columns-table", "viewer-constraints-table", "viewer-indexes-table", "viewer-columns-empty",
+        "viewer-constraints-empty", "viewer-indexes-empty"
     ]);
     ui.$("viewer-page").dataset.databaseId = big;
+    ui.$("viewer-row-limit").value = "50";
     for (const id of ["viewer-error", "viewer-workspace", "viewer-schemas-empty", "viewer-drafts-link"]) ui.$(id).hidden = true;
     const calls = [];
     globalThis.fetch = async (url) => {
@@ -246,7 +255,7 @@ test("viewer checks grant then reads schema list safely", async () => {
     assert.equal(ui.$("viewer-workspace").hidden, false);
     assert.equal(ui.$("viewer-drafts-link").hidden, true);
     assert.equal(ui.$("viewer-schemas-list").children[0].textContent, '<img src=x onerror="x">');
-    assert.equal(ui.$("viewer-schemas-list").children[0].children.length, 0);
+    assert.equal(ui.$("viewer-schemas-list").children[0].children[0].textContent, '<img src=x onerror="x">');
 });
 
 test("viewer denies admin without grant, no schema request is made", async () => {

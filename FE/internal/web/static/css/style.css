@@ -635,3 +635,36 @@ button:focus-visible {
 @media (max-width: 640px) {
     .database-workspace-links { flex-direction: column; align-items: flex-start; }
 }
+
+/* Read-only PostgreSQL explorer */
+.viewer-explorer { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.viewer-explorer > .dashboard-panel { min-width: 0; margin: 0; }
+.viewer-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.viewer-heading h2 { margin: 0; overflow-wrap: anywhere; }
+.viewer-heading button, .viewer-controls button { width: auto; }
+.viewer-button { width: auto; min-width: 90px; padding: 8px 12px; }
+.viewer-message { margin: 12px 0; line-height: 1.5; overflow-wrap: anywhere; }
+.viewer-object-list { list-style: none; display: grid; gap: 8px; margin: 14px 0 0; }
+.viewer-object-list li { display: flex; align-items: center; min-width: 0; gap: 10px; }
+.viewer-object-button { flex: 1; min-width: 0; text-align: left; background: #e5e7eb; color: #111827; overflow-wrap: anywhere; }
+.viewer-object-button:hover:not(:disabled) { background: #dbeafe; }
+.viewer-object-button.viewer-selected { background: #1d4ed8; color: #fff; }
+.viewer-object-description { flex-shrink: 0; font-size: 12px; color: #4b5563; }
+.viewer-subsection { min-width: 0; margin-top: 24px; }
+.viewer-subsection h3 { font-size: 16px; margin-bottom: 10px; }
+.viewer-scroll { max-width: 100%; margin-top: 10px; border: 1px solid #e5e7eb; border-radius: 6px; }
+.viewer-scroll:focus-visible, #viewer-row-limit:focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
+.viewer-table { min-width: 650px; }
+.viewer-table th { min-width: 120px; white-space: nowrap; }
+.viewer-cell-value { display: block; max-height: 140px; max-width: 480px; min-width: 90px; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; }
+.viewer-null { font-style: italic; color: #6b7280; }
+.viewer-empty-string { font-style: italic; color: #4b5563; }
+.viewer-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.viewer-controls label { font-size: 14px; font-weight: 600; }
+.viewer-controls select { padding: 8px; border: 1px solid #9ca3af; border-radius: 6px; background: #fff; }
+.viewer-pagination { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-top: 14px; }
+.viewer-pagination p { font-size: 14px; color: #374151; }
+@media (max-width: 760px) {
+    .viewer-explorer { grid-template-columns: 1fr; }
+    .viewer-object-list li { flex-wrap: wrap; }
+}

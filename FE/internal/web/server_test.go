@@ -1045,3 +1045,84 @@ func TestPhase3GrantAndViewerProxyContract(t *testing.T) {
 		})
 	}
 }
+
+func TestViewerCompletePageAndEmbeddedModule(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/databases/9007199254740993/viewer", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("viewer page status=%d body=%s", w.Code, w.Body.String())
+	}
+	for _, expected := range []string{
+		`data-database-id="9007199254740993"`, `id="viewer-schemas-list"`, `id="viewer-tables-list"`,
+		`id="viewer-columns-body"`, `id="viewer-constraints-body"`, `id="viewer-indexes-body"`,
+		`id="viewer-rows-head"`, `id="viewer-rows-body"`, `id="viewer-row-limit"`,
+		`id="viewer-rows-prev"`, `id="viewer-rows-next"`, `id="viewer-rows-error"`,
+		`id="viewer-workspace" hidden`, `/static/js/viewer.js`, `Migration History`,
+	} {
+		if !strings.Contains(w.Body.String(), expected) {
+			t.Errorf("viewer page missing %s", expected)
+		}
+	}
+	if strings.Contains(w.Body.String(), `id="login-form"`) || strings.Contains(w.Body.String(), `id="draft-sql"`) {
+		t.Fatal("viewer page rendered unrelated form")
+	}
+	for _, asset := range []string{"/static/js/viewer.js", "/static/css/style.css"} {
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, asset, nil))
+		if w.Code != http.StatusOK {
+			t.Errorf("asset %s returned %d", asset, w.Code)
+		}
+	}
+}
+
+func TestViewerReadOnlyProxyPreservesEncodedPathAndErrorStatus(t *testing.T) {
+	paths := []string{
+		"/api/v1/databases/9007199254740993/schemas",
+		"/api/v1/databases/9007199254740993/schemas/data%20%2F%20%252026/tables",
+		"/api/v1/databases/9007199254740993/schemas/data%20%2F%20%252026/tables/orders%20%2F%20%22draft%22",
+		"/api/v1/databases/9007199254740993/schemas/data%20%2F%20%252026/tables/orders%20%2F%20%22draft%22/rows?limit=10&offset=20",
+	}
+	calls := 0
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls >= len(paths) {
+			t.Error("unexpected request count")
+			return
+		}
+		if r.Method != http.MethodGet || r.URL.RequestURI() != paths[calls] {
+			t.Errorf("backend received %s %s, want GET %s", r.Method, r.URL.RequestURI(), paths[calls])
+		}
+		if r.Header.Get("Cookie") != "terserah_session=test-session" {
+			t.Error("session cookie not forwarded")
+		}
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		if calls == 4 {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			_, _ = io.WriteString(w, `{"error":{"code":"result_too_large"}}`)
+		} else {
+			_, _ = io.WriteString(w, `{"tables":[]}`)
+		}
+	}))
+	defer backend.Close()
+	h := testHandler(t, backend.URL)
+	for index, path := range paths {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Cookie", "terserah_session=test-session")
+		h.ServeHTTP(w, req)
+		want := http.StatusOK
+		if index == 3 {
+			want = http.StatusRequestEntityTooLarge
+		}
+		if w.Code != want {
+			t.Errorf("proxy %s: got %d, want %d", path, w.Code, want)
+		}
+		if index == 3 && !strings.Contains(w.Body.String(), "result_too_large") {
+			t.Error("proxy did not forward BE2 size error")
+		}
+	}
+	if calls != len(paths) {
+		t.Fatalf("received %d requests, want %d", calls, len(paths))
+	}
+}

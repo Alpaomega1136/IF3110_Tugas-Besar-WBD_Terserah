@@ -33,7 +33,7 @@ Environment opsional:
 - `/admin/groups` — group dan membership
 - `/admin/grants` — pilih koneksi PostgreSQL nyata, atur/revoke grant View atau Edit untuk group
 - `/admin/databases` — kelola koneksi PostgreSQL target (Platform Admin): daftar, tambah, edit, test, hapus
-- `/databases/{id}/viewer` — landing Viewer read-only dengan daftar schema dan pemeriksaan grant (eksplorasi tabel/data dilanjutkan FASE 4)
+- `/databases/{id}/viewer` — explorer PostgreSQL read-only: schemas, tables, columns, constraints, indexes, rows, pagination
 - `/databases/{id}/drafts` — editor migration draft, memerlukan akses `edit`
 - `/databases/{id}/history` — riwayat eksekusi migration, memerlukan akses `view` atau `edit`
 
@@ -67,3 +67,22 @@ database dari `/api/v1/databases` (grant efektif). `view` membuka Viewer/History
 `edit` juga dapat membuka Draft. Platform Admin tidak otomatis mendapat grant target.
 Setelah grant berubah, anggota yang terpengaruh mungkin perlu login ulang karena
 session dicabut oleh backend. Semua aksi tetap diperiksa ulang oleh BE.
+
+## Database Viewer 
+
+Buka `/databases/{id}/viewer` dari Dashboard setelah admin memberikan grant `view` atau `edit` melalui group. Pilih schema lalu tabel. Viewer memuat metadata (kolom, constraint, index) dan data baris menggunakan API baca BE2, tidak menjalankan SQL dan tidak mengubah target database.
+
+Data baris dibatasi 10–200 per halaman (default 50) dengan `limit`/`offset`; urutan `primary_key` atau `physical` ditampilkan dari response BE. Nilai `NULL` dibedakan dari string kosong. Nama schema/tabel di-encode per segmen URL; data tidak pernah dimasukkan melalui `innerHTML`.
+
+Jika target offline (503), pilih tombol muat ulang setelah koneksi pulih. Jika respons baris melebihi 4 MiB (413), turunkan jumlah baris per halaman. Pada 403 akses dicabut, workspace disembunyikan; pada 401 browser diarahkan ke login. Izin ditentukan oleh BE, bukan sekadar link frontend. Schema sistem tidak ditawarkan.
+
+Tes regresi JS dan Viewer dapat dijalankan tanpa dependency npm:
+
+```powershell
+# Dari FE/
+node --experimental-default-type=module --test test/*.test.mjs
+go test ./...
+go vet ./...
+```
+
+Pengujian browser memerlukan PostgreSQL target terpisah dari metadata, kredensial target valid, serta grant yang sesuai. Tes otomatis mock HTTP bukan pengganti uji browser FE–BE–PostgreSQL.
