@@ -18,8 +18,9 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("resource not found")
-	ErrConflict = errors.New("resource conflict")
+	ErrNotFound  = errors.New("resource not found")
+	ErrConflict  = errors.New("resource conflict")
+	ErrLastAdmin = errors.New("cannot remove the last active platform admin")
 )
 
 type UserView struct {
@@ -147,6 +148,10 @@ func (s *Service) HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := s.store.UpdateUser(r.Context(), id, params, s.now())
 	if err != nil {
+		if errors.Is(err, ErrLastAdmin) {
+			httpx.Error(w, http.StatusConflict, "last_active_admin", "At least one active Platform Admin must remain")
+			return
+		}
 		if errors.Is(err, ErrNotFound) {
 			httpx.Error(w, http.StatusNotFound, "not_found", "User not found")
 			return
@@ -365,6 +370,13 @@ func (s *PostgresStore) UpdateUser(ctx context.Context, id int64, params UpdateU
 		return UserView{}, err
 	}
 	defer tx.Rollback(context.Background())
+	// Share bootstrap's lock and acquire it before user row locks so concurrent
+	// deactivations cannot both count the other admin as a remaining account.
+	if params.IsPlatformAdmin != nil || params.IsActive != nil {
+		if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(3110002)"); err != nil {
+			return UserView{}, err
+		}
+	}
 
 	var u UserView
 	var oldHash string
@@ -392,6 +404,15 @@ func (s *PostgresStore) UpdateUser(ctx context.Context, id int64, params UpdateU
 	newActive := u.IsActive
 	if params.IsActive != nil {
 		newActive = *params.IsActive
+	}
+	if u.IsPlatformAdmin && u.IsActive && (!newAdmin || !newActive) {
+		var other bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id<>$1 AND is_platform_admin AND is_active)`, id).Scan(&other); err != nil {
+			return UserView{}, err
+		}
+		if !other {
+			return UserView{}, ErrLastAdmin
+		}
 	}
 
 	err = tx.QueryRow(ctx, `

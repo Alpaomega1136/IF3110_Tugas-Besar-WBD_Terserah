@@ -15,6 +15,17 @@ import (
 var errHistorySetup = errors.New("target history must be provisioned with a restricted executor")
 var errTargetIdentity = errors.New("target identity changed or is already registered")
 
+// Internal queries must not resolve operators/functions from writable schemas.
+// Save the user's path so unqualified migration DDL still creates in their schema.
+func internalSearchPath(ctx context.Context, tx pgx.Tx) (string, error) {
+	var path string
+	if err := tx.QueryRow(ctx, `SELECT pg_catalog.current_setting('search_path')`).Scan(&path); err != nil {
+		return "", err
+	}
+	_, err := tx.Exec(ctx, `SET LOCAL search_path=pg_catalog,pg_temp`)
+	return path, err
+}
+
 func (s *Service) signature(id int64, execution string, version int64, sql string, actor int64) string {
 	payload, _ := json.Marshal([]any{"terserah-receipt-v1", id, execution, version, sql, actor})
 	mac := hmac.New(sha256.New, s.key)

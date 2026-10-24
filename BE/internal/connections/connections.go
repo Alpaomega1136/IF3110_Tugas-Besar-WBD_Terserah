@@ -341,11 +341,11 @@ func (s *Service) open(ctx context.Context, c Connection) (*pgxpool.Pool, error)
 	// the same PostgreSQL instance can be reached through different host aliases.
 	var metadataName, targetName string
 	var metadataStart, targetStart time.Time
-	if err = s.db.QueryRow(connectCtx, "SELECT current_database(),pg_catalog.pg_postmaster_start_time()").Scan(&metadataName, &metadataStart); err != nil {
+	if err = s.db.QueryRow(connectCtx, "SELECT pg_catalog.current_database(),pg_catalog.pg_postmaster_start_time()").Scan(&metadataName, &metadataStart); err != nil {
 		pool.Close()
 		return nil, errors.New("cannot inspect metadata database")
 	}
-	if err = pool.QueryRow(connectCtx, "SELECT current_database(),pg_catalog.pg_postmaster_start_time()").Scan(&targetName, &targetStart); err != nil {
+	if err = pool.QueryRow(connectCtx, "SELECT pg_catalog.current_database(),pg_catalog.pg_postmaster_start_time()").Scan(&targetName, &targetStart); err != nil {
 		pool.Close()
 		return nil, ErrTargetUnavailable
 	}

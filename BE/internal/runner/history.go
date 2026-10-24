@@ -137,6 +137,10 @@ func (s *Service) reconcile(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	if _, err = internalSearchPath(ctx, tx); err != nil {
+		fail(w, err)
+		return
+	}
 	// This is the same lock acquired BEFORE publishing a running ledger row.
 	// Owning it proves that no runner transaction can still commit this attempt.
 	if _, err = tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003)`); err != nil {

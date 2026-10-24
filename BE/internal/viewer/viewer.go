@@ -121,7 +121,7 @@ func (s *Service) read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(context.Background())
-	if _, err = tx.Exec(r.Context(), "SET LOCAL statement_timeout='5s'"); err != nil {
+	if _, err = tx.Exec(r.Context(), "SET LOCAL statement_timeout='5s'; SET LOCAL search_path=pg_catalog,pg_temp"); err != nil {
 		fail(w, err)
 		return
 	}

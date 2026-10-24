@@ -4,6 +4,7 @@
 -- No login/password/role memberships are created or changed by this script.
 \set ON_ERROR_STOP on
 BEGIN;
+SET LOCAL search_path=pg_catalog,pg_temp;
 CREATE SCHEMA IF NOT EXISTS _terserah;
 CREATE TABLE IF NOT EXISTS _terserah.migration_receipts (
     execution_id text PRIMARY KEY,

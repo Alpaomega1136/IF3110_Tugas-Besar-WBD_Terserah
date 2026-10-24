@@ -214,6 +214,10 @@ func (s *Service) run(ctx context.Context, p auth.Principal, id, draftID, revisi
 	if err != nil {
 		return result, err
 	}
+	userPath, err := internalSearchPath(ctx, tx)
+	if err != nil {
+		return result, err
+	}
 	if _, err = tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003)`); err != nil {
 		return result, err
 	}
@@ -278,6 +282,7 @@ func (s *Service) run(ctx context.Context, p auth.Principal, id, draftID, revisi
 	if err = meta.Commit(ctx); err != nil {
 		return result, err
 	}
+	_, err = tx.Exec(ctx, `SELECT pg_catalog.set_config('search_path',$1,true)`, userPath)
 	for _, part := range parts {
 		if err != nil {
 			break
@@ -285,6 +290,9 @@ func (s *Service) run(ctx context.Context, p auth.Principal, id, draftID, revisi
 		// pgx.Tx.Exec falls back to simple protocol for parameterless SQL.
 		// ExecParams forces one server-parsed command and discards returned rows.
 		_, err = tx.Conn().PgConn().ExecParams(ctx, part, nil, nil, nil, nil).Close()
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `SET LOCAL search_path=pg_catalog,pg_temp`)
 	}
 	if err == nil {
 		_, err = tx.Exec(ctx, `INSERT INTO _terserah.migration_receipts(execution_id,version,sql,executed_by,signature) VALUES($1,$2,$3,$4,$5)`, result.ExecutionID, result.Version, sql, p.ID, s.signature(id, result.ExecutionID, result.Version, sql, p.ID))
