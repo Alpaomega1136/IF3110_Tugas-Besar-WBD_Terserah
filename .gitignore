@@ -13,3 +13,6 @@ coverage.out
 Thumbs.db
 tmp/
 
+# Frontend tests
+FE/tests/
+FE/package.json
