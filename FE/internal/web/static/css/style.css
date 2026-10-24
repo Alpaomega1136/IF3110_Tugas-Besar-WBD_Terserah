@@ -595,3 +595,32 @@ button:focus-visible {
         margin-bottom: 10px;
     }
 }
+/* Database Connections */
+.connection-intro { margin: 0 0 20px; line-height: 1.6; color: #374151; }
+.connection-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.connection-heading h2 { margin: 0; }
+.connection-heading button, .connection-submit { width: auto; }
+.connection-table { min-width: 940px; }
+.connection-actions { white-space: nowrap; }
+.connection-action { width: auto; margin: 2px 4px 2px 0; padding: 8px 12px; }
+.connection-danger { background: #b91c1c; }
+.connection-danger:hover:not(:disabled) { background: #991b1b; }
+.connection-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; }
+.connection-form .form-group input, .connection-form .form-group select {
+    width: 100%; min-width: 0; padding: 12px; border: 1px solid #d1d5db; border-radius: 6px;
+    background: #fff; color: #111827; font: inherit;
+}
+.connection-form .form-group :is(input, select):focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
+.connection-message { margin: 14px 0; line-height: 1.6; overflow-wrap: anywhere; }
+.connection-identity { display: grid; grid-template-columns: minmax(110px, 160px) minmax(0, 1fr); gap: 10px; margin: 18px 0; }
+.connection-identity dt { font-weight: 700; }
+.connection-identity dd { overflow-wrap: anywhere; }
+.connection-buttons { display: flex; flex-wrap: wrap; gap: 12px; }
+.connection-buttons button { width: auto; }
+.app-nav { flex-wrap: wrap; }
+.app-nav [aria-current="page"] { font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }
+@media (max-width: 640px) {
+    .connection-form-grid { grid-template-columns: 1fr; }
+    .connection-identity { grid-template-columns: 1fr; gap: 4px; }
+    .connection-identity dd { margin-bottom: 8px; }
+}

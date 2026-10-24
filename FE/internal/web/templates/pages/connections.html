@@ -1,0 +1,135 @@
+{{define "content"}}
+<div class="app-shell">
+    <header class="app-header">
+        <a class="app-brand" href="/dashboard">Terserah</a>
+        <nav class="app-nav" aria-label="Navigasi utama">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/admin/users">Users</a>
+            <a href="/admin/groups">Groups</a>
+            <a href="/admin/grants">Grants</a>
+            <a href="/admin/databases" aria-current="page">Connections</a>
+        </nav>
+    </header>
+
+    <main class="app-main">
+        <h1>Koneksi Database Target</h1>
+        <p class="connection-intro">Daftarkan PostgreSQL target yang terpisah dari database metadata platform. Hak akses pengguna diberikan melalui Group dan Grant.</p>
+        <p id="connections-status" role="status" aria-live="polite">Memeriksa akses...</p>
+        <p id="connections-error" class="error-message connection-message" role="alert" hidden></p>
+        <p id="connections-forbidden" class="error-message" role="alert" hidden>Hanya Platform Admin yang dapat mengelola koneksi database.</p>
+
+        <div id="connections-content" hidden>
+            <section class="dashboard-panel" aria-labelledby="connections-list-heading">
+                <div class="connection-heading">
+                    <h2 id="connections-list-heading">Daftar Koneksi</h2>
+                    <button id="connections-refresh" type="button" class="button-secondary">Muat Ulang</button>
+                </div>
+                <p id="connections-empty" hidden>Belum ada koneksi. Tambahkan target PostgreSQL melalui form di bawah.</p>
+                <div id="connections-table" class="users-table-wrapper" hidden>
+                    <table class="users-table connection-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">ID</th>
+                                <th scope="col">Nama</th>
+                                <th scope="col">Host:Port</th>
+                                <th scope="col">Database</th>
+                                <th scope="col">Username</th>
+                                <th scope="col">SSL</th>
+                                <th scope="col">Dibuat</th>
+                                <th scope="col">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="connections-body"></tbody>
+                    </table>
+                </div>
+                <p id="connection-action-message" role="status" aria-live="polite" hidden></p>
+            </section>
+
+            <section class="dashboard-panel" aria-labelledby="connection-create-heading">
+                <h2 id="connection-create-heading">Tambah Koneksi</h2>
+                <p class="form-help">Semua field wajib. Password disimpan terenkripsi oleh backend dan tidak dapat ditampilkan kembali. Gunakan database target, bukan database metadata platform.</p>
+                <form id="connection-create-form" class="connection-form" novalidate>
+                    <div class="connection-form-grid">
+                        <div class="form-group">
+                            <label for="connection-create-name">Nama koneksi</label>
+                            <input id="connection-create-name" name="name" maxlength="100" required autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="connection-create-host">Host</label>
+                            <input id="connection-create-host" name="host" maxlength="253" required autocomplete="off" placeholder="localhost">
+                        </div>
+                        <div class="form-group">
+                            <label for="connection-create-port">Port</label>
+                            <input id="connection-create-port" name="port" type="number" min="1" max="65535" step="1" value="5432" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="connection-create-database">Nama database target</label>
+                            <input id="connection-create-database" name="database_name" maxlength="63" required autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="connection-create-username">Username PostgreSQL</label>
+                            <input id="connection-create-username" name="username" maxlength="63" required autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="connection-create-password">Password PostgreSQL</label>
+                            <input id="connection-create-password" name="password" type="password" required autocomplete="new-password">
+                        </div>
+                        <div class="form-group">
+                            <label for="connection-create-sslmode">SSL mode</label>
+                            <select id="connection-create-sslmode" name="sslmode" required>
+                                <option value="verify-full" selected>verify-full (default)</option>
+                                <option value="verify-ca">verify-ca</option>
+                                <option value="require">require</option>
+                                <option value="disable">disable (lokal saja)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <p id="connection-create-error" class="error-message connection-message" role="alert" hidden></p>
+                    <button id="connection-create-submit" type="submit" class="connection-submit">Daftarkan Koneksi</button>
+                </form>
+            </section>
+
+            <section id="connection-edit-section" class="dashboard-panel" aria-labelledby="connection-edit-heading" hidden>
+                <h2 id="connection-edit-heading">Edit: <span id="connection-edit-name"></span></h2>
+                <p class="form-help">Identitas target (host, port, nama database) tidak dapat diubah. Untuk mengganti target, buat koneksi baru. Biarkan password kosong untuk mempertahankan password saat ini.</p>
+                <dl class="connection-identity">
+                    <dt>Host</dt><dd id="connection-edit-host"></dd>
+                    <dt>Port</dt><dd id="connection-edit-port"></dd>
+                    <dt>Database</dt><dd id="connection-edit-database"></dd>
+                </dl>
+                <form id="connection-edit-form" class="connection-form" novalidate>
+                    <div class="connection-form-grid">
+                        <div class="form-group">
+                            <label for="connection-edit-title">Nama koneksi</label>
+                            <input id="connection-edit-title" name="name" maxlength="100" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="connection-edit-username">Username PostgreSQL</label>
+                            <input id="connection-edit-username" name="username" maxlength="63" required autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="connection-edit-password">Password baru (opsional)</label>
+                            <input id="connection-edit-password" name="password" type="password" autocomplete="new-password">
+                        </div>
+                        <div class="form-group">
+                            <label for="connection-edit-sslmode">SSL mode</label>
+                            <select id="connection-edit-sslmode" name="sslmode" required>
+                                <option value="verify-full">verify-full</option>
+                                <option value="verify-ca">verify-ca</option>
+                                <option value="require">require</option>
+                                <option value="disable">disable (lokal saja)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <p id="connection-edit-error" class="error-message connection-message" role="alert" hidden></p>
+                    <div class="connection-buttons">
+                        <button id="connection-edit-submit" type="submit">Simpan Perubahan</button>
+                        <button id="connection-edit-cancel" type="button" class="button-secondary">Batal</button>
+                    </div>
+                </form>
+            </section>
+        </div>
+    </main>
+</div>
+<script type="module" src="/static/js/connections.js"></script>
+{{end}}

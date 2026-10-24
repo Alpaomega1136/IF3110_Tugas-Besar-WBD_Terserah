@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -845,6 +846,112 @@ func TestMergedAPIContractProxy(t *testing.T) {
 			}
 			if name == "csrf" && !strings.Contains(w.Header().Get("Set-Cookie"), "HttpOnly") {
 				t.Fatal("prelogin cookie missing from proxy response")
+			}
+		})
+	}
+}
+
+func TestAdminDatabaseConnectionsPage(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/admin/databases", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /admin/databases: status=%d body=%s", w.Code, w.Body.String())
+	}
+	for _, part := range []string{
+		"Database Connections - Terserah", `id="connections-content" hidden`,
+		`id="connections-forbidden"`, `id="connections-body"`,
+		`id="connection-create-form"`, `id="connection-edit-form"`,
+		`id="connection-create-password"`, `id="connection-edit-password"`,
+		`/static/js/connections.js`,
+	} {
+		if !strings.Contains(w.Body.String(), part) {
+			t.Errorf("connections page missing %q", part)
+		}
+	}
+	if strings.Contains(w.Body.String(), `id="login-form"`) {
+		t.Error("connections page rendered login form")
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control=%q, want no-store", got)
+	}
+	for _, asset := range []string{"/static/js/connections.js", "/static/css/style.css"} {
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, asset, nil))
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s: status=%d", asset, w.Code)
+		}
+	}
+}
+
+func TestAdminDatabaseConnectionsNavigation(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+	for _, path := range []string{"/dashboard", "/admin/users", "/admin/groups", "/admin/grants"} {
+		t.Run(path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `href="/admin/databases"`) {
+				t.Fatalf("page %s missing admin connections link; status=%d", path, w.Code)
+			}
+		})
+	}
+}
+
+func TestAdminDatabaseConnectionsProxyContract(t *testing.T) {
+	const largeID = "9007199254740993"
+	fixtures := []struct {
+		method, path, payload, response string
+		status                          int
+	}{
+		{"GET", "/api/v1/admin/databases", "", `{"databases":[{"id":"9007199254740993","name":"target","host":"localhost","port":5432,"database_name":"app","username":"demo","sslmode":"disable"}]}`, 200},
+		{"POST", "/api/v1/admin/databases", `{"name":"target","host":"localhost","port":5432,"database_name":"app","username":"demo","password":"secret","sslmode":"disable"}`, `{"id":"9007199254740993","name":"target"}`, 201},
+		{"PATCH", "/api/v1/admin/databases/" + largeID, `{"name":"updated","username":"editor","sslmode":"require"}`, `{"id":"9007199254740993","name":"updated"}`, 200},
+		{"POST", "/api/v1/admin/databases/" + largeID + "/test", "", `{"status":"ok"}`, 200},
+		{"POST", "/api/v1/admin/databases/" + largeID + "/test", "", `{"error":{"code":"target_unavailable","message":"Cannot connect"}}`, 503},
+		{"PATCH", "/api/v1/admin/databases/" + largeID, "", `{"error":{"code":"connection_conflict","message":"Conflict"}}`, 409},
+		{"DELETE", "/api/v1/admin/databases/" + largeID, "", "", 204},
+		{"GET", "/api/v1/admin/databases", "", `{"error":{"code":"forbidden","message":"Access denied"}}`, 403},
+	}
+	var expected struct{ method, path, payload string }
+	var response string
+	var status int
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != expected.method || r.URL.Path != expected.path {
+			t.Errorf("upstream request: %s %s, want %s %s", r.Method, r.URL.Path, expected.method, expected.path)
+		}
+		if r.Host != "localhost:3000" || r.Header.Get("Cookie") != "terserah_session=opaque" {
+			t.Errorf("proxy dropped browser host or session cookie")
+		}
+		if r.Method != http.MethodGet {
+			if r.Header.Get("Origin") != "http://localhost:3000" || r.Header.Get("X-CSRF-Token") != "token" {
+				t.Errorf("proxy dropped CSRF headers")
+			}
+		}
+		body, _ := io.ReadAll(r.Body)
+		if string(body) != expected.payload {
+			t.Errorf("payload=%q, want %q", body, expected.payload)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, response)
+	}))
+	defer backend.Close()
+	h := testHandler(t, backend.URL)
+	for index, tc := range fixtures {
+		t.Run(strconv.Itoa(index), func(t *testing.T) {
+			expected.method, expected.path, expected.payload = tc.method, tc.path, tc.payload
+			status, response = tc.status, tc.response
+			r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.payload))
+			r.Host = "localhost:3000"
+			r.Header.Set("Cookie", "terserah_session=opaque")
+			if tc.method != http.MethodGet {
+				r.Header.Set("Origin", "http://localhost:3000")
+				r.Header.Set("X-CSRF-Token", "token")
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != tc.status || strings.TrimSpace(w.Body.String()) != tc.response {
+				t.Fatalf("proxy %s %s: status=%d body=%q", tc.method, tc.path, w.Code, w.Body.String())
 			}
 		})
 	}

@@ -32,6 +32,7 @@ Environment opsional:
 - `/admin/users` — administrasi pengguna
 - `/admin/groups` — group dan membership
 - `/admin/grants` — database grants untuk group
+- `/admin/databases` — kelola koneksi PostgreSQL target (Platform Admin): daftar, tambah, edit, test, hapus
 - `/databases/{id}/drafts` — editor migration draft, memerlukan akses `edit`
 - `/databases/{id}/history` — riwayat eksekusi migration, memerlukan akses `view` atau `edit`
 
@@ -43,3 +44,16 @@ Dari direktori `FE/`:
 go test ./...
 go vet ./...
 ```
+## Pengujian connection management
+
+```powershell
+# Dari FE/
+node --experimental-default-type=module --test test/*.test.mjs
+go test ./...
+go vet ./...
+```
+
+Lakukan smoke test dengan BE gabungan dan PostgreSQL target terpisah dari metadata.
+`APP_ORIGIN` BE harus sesuai origin browser FE (`http://localhost:3000`).
+Kredensial target hanya dimasukkan saat pendaftaran/pergantian password, tidak dibaca ulang melalui API.
+Jika test koneksi mengembalikan `metadata_target_forbidden`, hapus entri tersebut: metadata platform tidak boleh menjadi database target.

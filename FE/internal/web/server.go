@@ -38,6 +38,11 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 		return nil, fmt.Errorf("parse groups template: %w", err)
 	}
 
+	connectionsTemplate, err := parsePageTemplate("connections")
+	if err != nil {
+		return nil, fmt.Errorf("parse connections template: %w", err)
+	}
+
 	grantsTemplate, err := parsePageTemplate("grants")
 	if err != nil {
 		return nil, fmt.Errorf("parse grants template: %w", err)
@@ -100,6 +105,12 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 	mux.HandleFunc("GET /admin/groups",
 		pageHandler(groupsTemplate, PageData{
 			Title: "Group Management - Terserah",
+		}),
+	)
+
+	mux.HandleFunc("GET /admin/databases",
+		pageHandler(connectionsTemplate, PageData{
+			Title: "Database Connections - Terserah",
 		}),
 	)
 
