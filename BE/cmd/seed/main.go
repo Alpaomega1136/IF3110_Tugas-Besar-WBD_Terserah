@@ -1,3 +1,4 @@
+// Seed retains the BE-01 CLI variables but only initializes the first admin.
 package main
 
 import (
@@ -30,8 +31,8 @@ func run() bool {
 		username = "admin"
 	}
 	password := os.Getenv("ADMIN_PASSWORD")
-	if err := auth.ValidatePassword(password); err != nil {
-		slog.Error("ADMIN_PASSWORD must be between 8 and 1024 bytes")
+	if len(password) < 12 || len(password) > 1024 {
+		slog.Error("ADMIN_PASSWORD must be between 12 and 1024 bytes")
 		return false
 	}
 
@@ -49,12 +50,10 @@ func run() bool {
 		return false
 	}
 
-	svc := auth.NewService(auth.NewPostgresStore(pool), auth.Config{})
-	user, err := svc.BootstrapAdmin(ctx, username, password)
-	if err != nil {
-		slog.Error("cannot bootstrap platform admin")
+	if err := auth.BootstrapAdmin(ctx, pool, username, password); err != nil {
+		slog.Error(err.Error())
 		return false
 	}
-	slog.Info("platform admin bootstrapped", "id", user.ID, "username", user.Username)
+	slog.Info("bootstrap admin created")
 	return true
 }

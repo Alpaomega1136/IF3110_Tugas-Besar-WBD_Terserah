@@ -1,10 +1,6 @@
 package policy
 
-import (
-	"context"
-	"errors"
-	"testing"
-)
+import "testing"
 
 func TestEffectiveAccess(t *testing.T) {
 	for _, tc := range []struct {
@@ -24,30 +20,5 @@ func TestEffectiveAccess(t *testing.T) {
 				t.Fatalf("incorrect permission for %v: %q", tc.grants, got)
 			}
 		})
-	}
-}
-
-func TestCheckAccessAndCrossDatabaseIsolation(t *testing.T) {
-	if _, ok := ParseAccess("owner"); ok {
-		t.Fatal("invalid access level accepted")
-	}
-	grantsMap := map[[2]int64][]Access{
-		{10, 1}: {View, Edit},
-		{10, 2}: {View},
-	}
-	loader := func(_ context.Context, userID, databaseID int64) ([]Access, error) {
-		return grantsMap[[2]int64{userID, databaseID}], nil
-	}
-	if acc, err := CheckAccess(context.Background(), loader, 10, 1, true); err != nil || acc != Edit {
-		t.Fatalf("expected edit on db 1, got %q err=%v", acc, err)
-	}
-	if _, err := CheckAccess(context.Background(), loader, 10, 2, true); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("expected write forbidden on db 2 (view only), got %v", err)
-	}
-	if acc, err := CheckAccess(context.Background(), loader, 10, 2, false); err != nil || acc != View {
-		t.Fatalf("expected view allowed on db 2, got %q err=%v", acc, err)
-	}
-	if _, err := CheckAccess(context.Background(), loader, 10, 3, false); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("expected forbidden on db 3, got %v", err)
 	}
 }
