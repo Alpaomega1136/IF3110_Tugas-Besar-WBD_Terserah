@@ -26,7 +26,7 @@ async function setup({ access = "edit", selected = true, confirm = true, backend
     const ids = [
         "draft-page", "draft-page-status", "draft-page-error", "draft-workspace", "draft-database-name",
         "draft-target-name", "draft-access", "draft-list-status", "draft-list-error", "draft-list-empty",
-        "draft-list-table", "draft-list-body", "draft-new", "draft-form", "draft-editor-heading",
+        "draft-list-table", "draft-list-body", "draft-new", "draft-pagination", "draft-prev", "draft-next", "draft-page-number", "draft-form", "draft-editor-heading",
         "draft-current-id", "draft-title", "draft-sql", "draft-title-error", "draft-sql-error",
         "draft-save", "draft-save-message", "draft-detail", "draft-detail-author", "draft-detail-created",
         "draft-detail-updated", "draft-detail-sql", "draft-execution", "draft-execute", "draft-reload",
@@ -61,7 +61,7 @@ async function setup({ access = "edit", selected = true, confirm = true, backend
         if (url === "/api/v1/auth/me") return reply({ id: "11", username: "editor", is_platform_admin: false });
         if (url === "/api/v1/databases") return reply({ databases: [{ id: databaseID, name: "Demo", database_name: "disposable", access }] });
         if (url === "/api/v1/auth/csrf") return reply({ csrf_token: "csrf-value" });
-        if (url === base) return method === "GET" ? reply({ drafts: selected ? [draft] : [], has_more: false }) : reply(draft, 201);
+        if (url === base || url === `${base}?limit=50`) return method === "GET" ? reply({ drafts: selected ? [draft] : [], has_more: false, next_after: null }) : reply(draft, 201);
         if (url === `${base}/${draftID}` && method === "GET") return reply(freshDraft);
         if (url === `${base}/${draftID}/execute` && method === "POST") {
             return reply({ execution_id: "a1b2c3d4", version: "9007199254740997", status: "success", error_code: null });

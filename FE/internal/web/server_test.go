@@ -1170,3 +1170,103 @@ func TestExecuteMigrationProxyPreservesRevisionAndCSRF(t *testing.T) {
 		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
 	}
 }
+
+func TestPhase6HistoryAndDraftPaginationPages(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+	cases := []struct {
+		path     string
+		expected []string
+	}{
+		{"/databases/9007199254740993/history", []string{
+			`data-database-id="9007199254740993"`, `id="history-pagination"`,
+			`id="history-prev"`, `id="history-next"`, `id="history-page-number"`,
+			`id="history-reconcile-panel"`, `id="history-reconcile"`,
+			`id="history-reconcile-body"`, `id="history-detail-sql"`,
+		}},
+		{"/databases/9007199254740993/drafts", []string{
+			`data-database-id="9007199254740993"`, `id="draft-pagination"`,
+			`id="draft-prev"`, `id="draft-next"`, `id="draft-page-number"`,
+			`id="draft-execute"`,
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			for _, expected := range tc.expected {
+				if !strings.Contains(w.Body.String(), expected) {
+					t.Errorf("missing %q", expected)
+				}
+			}
+			if w.Header().Get("Cache-Control") != "no-store" {
+				t.Error("private page cache header missing")
+			}
+		})
+	}
+	for _, asset := range []string{
+		"/static/js/pagination.js", "/static/js/history.js", "/static/js/drafts.js",
+		"/static/css/style.css",
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, asset, nil))
+		if w.Code != http.StatusOK {
+			t.Errorf("missing embedded asset %s: %d", asset, w.Code)
+		}
+	}
+}
+
+func TestPhase6CursorAndReconcileAPIProxy(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		status int
+		body   string
+	}{
+		{"history first", "GET", "/api/v1/databases/9007199254740993/migrations?limit=50", 200, `{"migrations":[],"has_more":false,"next_before":null}`},
+		{"history next", "GET", "/api/v1/databases/9007199254740993/migrations?limit=50&before=9007199254741199", 200, `{"migrations":[],"has_more":false,"next_before":null}`},
+		{"draft next", "GET", "/api/v1/databases/9007199254740993/drafts?limit=50&after=9007199254741199", 200, `{"drafts":[],"has_more":false,"next_after":null}`},
+		{"reconcile accepted", "POST", "/api/v1/databases/9007199254740993/migrations/reconcile", 200, `{"reconciled":[]}`},
+		{"reconcile forbidden", "POST", "/api/v1/databases/9007199254740993/migrations/reconcile", 403, `{"error":{"code":"forbidden"}}`},
+		{"reconcile conflict", "POST", "/api/v1/databases/9007199254740993/migrations/reconcile", 409, `{"error":{"code":"target_history_unprotected"}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != tc.method || r.URL.RequestURI() != tc.path {
+					t.Errorf("got %s %s, want %s %s", r.Method, r.URL.RequestURI(), tc.method, tc.path)
+				}
+				if r.Host != "localhost:3000" || r.Header.Get("Cookie") != "terserah_session=test" {
+					t.Errorf("lost original host or session: host=%q cookie=%q", r.Host, r.Header.Get("Cookie"))
+				}
+				if tc.method == "POST" {
+					if r.Header.Get("Origin") != "http://localhost:3000" || r.Header.Get("X-CSRF-Token") != "csrf" {
+						t.Error("reconcile POST lost origin or CSRF")
+					}
+				} else if r.Header.Get("X-CSRF-Token") != "" {
+					t.Error("list GET should not send CSRF")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer backend.Close()
+			h := testHandler(t, backend.URL)
+			r := httptest.NewRequest(tc.method, tc.path, nil)
+			r.Host = "localhost:3000"
+			r.Header.Set("Cookie", "terserah_session=test")
+			if tc.method == "POST" {
+				r.Header.Set("Origin", "http://localhost:3000")
+				r.Header.Set("X-CSRF-Token", "csrf")
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != tc.status || strings.TrimSpace(w.Body.String()) != tc.body {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}

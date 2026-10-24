@@ -4,6 +4,7 @@ import {
     isCSRFError
 } from "./auth.js";
 import { executionFeedback, parseExecutionResult, executeErrorMessage } from "./execution.js";
+import { positiveInt64, parseCursorPage } from "./pagination.js";
 
 const page = document.getElementById("draft-page");
 const databaseId = page.dataset.databaseId;
@@ -21,6 +22,10 @@ const listEmpty = document.getElementById("draft-list-empty");
 const listTable = document.getElementById("draft-list-table");
 const listBody = document.getElementById("draft-list-body");
 const newButton = document.getElementById("draft-new");
+const pagination = document.getElementById("draft-pagination");
+const prevButton = document.getElementById("draft-prev");
+const nextButton = document.getElementById("draft-next");
+const pageNumber = document.getElementById("draft-page-number");
 
 const form = document.getElementById("draft-form");
 const heading = document.getElementById("draft-editor-heading");
@@ -59,6 +64,18 @@ let busy = false;
 let allowNavigation = false;
 let executing = false;
 let lockedExecution = null; // A sent request may have an unknown outcome. Never retry it automatically.
+let cursors = [null];
+let currentPage = 0;
+let hasMore = false;
+let nextCursor = null;
+const pageLimit = 50;
+
+function updatePagination() {
+    pagination.hidden = workspace.hidden;
+    pageNumber.textContent = `Halaman ${currentPage + 1}`;
+    prevButton.disabled = busy || currentPage === 0;
+    nextButton.disabled = busy || !hasMore;
+}
 
 function showMessage(element, message, isError = false) {
     element.textContent = message;
@@ -153,6 +170,7 @@ function setBusy(value) {
     busy = value;
 
     newButton.disabled = value;
+    updatePagination();
     saveButton.disabled = value;
     titleInput.disabled = value;
     sqlInput.disabled = value;
@@ -277,23 +295,64 @@ function renderDrafts(drafts) {
     listTable.hidden = drafts.length === 0;
 }
 
-async function loadDrafts() {
+async function loadDrafts(index = currentPage, reset = false) {
+    if (reset) {
+        cursors = [null];
+        index = 0;
+    }
+    if (index < 0 || index >= cursors.length) return;
     listStatus.hidden = false;
     listStatus.textContent = "Memuat daftar draft...";
     listError.hidden = true;
+    prevButton.disabled = true;
+    nextButton.disabled = true;
 
     try {
-        const result = await authenticatedRequest(apiPath);
-
-        if (!Array.isArray(result?.drafts)) {
-            throw new Error("Format daftar draft dari backend tidak valid.");
+        const cursor = cursors[index];
+        const query = new URLSearchParams({ limit: String(pageLimit) });
+        if (cursor !== null) query.set("after", cursor);
+        const pageResult = parseCursorPage(
+            await authenticatedRequest(`${apiPath}?${query}`), "drafts", "next_after"
+        );
+        for (const draft of pageResult.entries) {
+            if (!draft || draft.database_id !== databaseId || !positiveInt64(draft.id)) {
+                throw new Error("Identitas draft dari backend tidak valid.");
+            }
         }
-
-        renderDrafts(result.drafts);
+        if (pageResult.hasMore && (pageResult.nextCursor === cursor || cursors.slice(0, index + 1).includes(pageResult.nextCursor))) {
+            throw new Error("Cursor draft berulang; pagination dihentikan demi keamanan.");
+        }
+        currentPage = index;
+        hasMore = pageResult.hasMore;
+        nextCursor = pageResult.nextCursor;
+        cursors = cursors.slice(0, index + 1);
+        renderDrafts(pageResult.entries);
+        updatePagination();
+    } catch (error) {
+        hasMore = false;
+        nextCursor = null;
+        if (error.status === 401 || error.status === 403) {
+            handleError(error, listError);
+        } else {
+            showMessage(listError, error.message || "Gagal memuat daftar draft.", true);
+        }
     } finally {
         listStatus.hidden = true;
+        updatePagination();
     }
 }
+
+prevButton.addEventListener("click", async () => {
+    if (busy || currentPage === 0) return;
+    setBusy(true);
+    try { await loadDrafts(currentPage - 1); } finally { setBusy(false); }
+});
+nextButton.addEventListener("click", async () => {
+    if (busy || !hasMore || !positiveInt64(nextCursor)) return;
+    cursors[currentPage + 1] = nextCursor;
+    setBusy(true);
+    try { await loadDrafts(currentPage + 1); } finally { setBusy(false); }
+});
 
 async function openDraft(draftId) {
     if (busy || !confirmDiscard()) return;
@@ -463,7 +522,7 @@ form.addEventListener("submit", async (event) => {
         showDraft(result);
 
         try {
-            await loadDrafts();
+            await loadDrafts(0, true);
 
             showMessage(
                 saveMessage,
@@ -524,7 +583,7 @@ async function initialize() {
 
         workspace.hidden = false;
 
-        await loadDrafts();
+        await loadDrafts(0, true);
 
     } catch (err) {
         if (err.status === 401) {

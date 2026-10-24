@@ -96,3 +96,18 @@ FE memanggil `POST /api/v1/databases/{id}/drafts/{draftID}/execute` dengan JSON 
 Sebelum pengujian live, gunakan **database target disposable yang bukan metadata**. Role target harus executor restricted (bukan superuser atau owner berlebih), dan admin PostgreSQL harus menjalankan `BE/sql/provision_target_history.sql` pada target sesuai petunjuk BE. Jangan menjalankan script provisioning itu melalui UI Draft. Tes SQL gagal pada target disposable untuk membuktikan rollback.
 
 `409 target_history_unprotected` berarti ledger belum aman, bukan masalah tombol FE. `409 execution_conflict`/`migration_busy` membutuhkan pemeriksaan History; `409 target_identity_conflict` membutuhkan bantuan admin target. Jika CSRF/session expired, login ulang; jangan mengirim ulang eksekusi sebelum mengetahui outcome.
+
+
+### history, reconcile, and cursor pagination
+
+- Migration History uses `limit=50` plus BE2 `next_before`/`has_more` and includes version,
+  draft ID/revision, execution ID, actor, timestamps, status, and error code. SQL is fetched
+  only when opening the version detail. `running`/`unknown` are **not** final outcomes.
+- A user with **Edit** grant can explicitly confirm **Reconcile Pending / Unknown**.
+  This calls `POST /api/v1/databases/{id}/migrations/reconcile` and shows backend results;
+  the FE never retries execution and never infers commit from HTTP status alone.
+  **View Only** can read history but cannot trigger reconcile.
+- Draft listing uses `limit=50` plus `next_after`/`has_more`; both lists support previous/next
+  pagination. Identifiers and cursors stay as JSON strings (no unsafe JS number conversions).
+- Test with `node --test` from `FE/` and `go test ./...`, `go vet ./...`;
+  confirm behavior in a browser with the live backend and a disposable PostgreSQL target.

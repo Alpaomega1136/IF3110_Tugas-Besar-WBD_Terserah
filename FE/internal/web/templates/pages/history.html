@@ -30,8 +30,9 @@
                     Hak akses efektif: <strong id="history-access"></strong>
                 </p>
                 <p class="form-help">
-                    Riwayat hanya dapat dibaca. Halaman ini tidak
-                    menjalankan atau membatalkan migration.
+                    Riwayat tidak menjalankan ulang SQL. Status running/unknown
+                    belum membuktikan COMMIT atau ROLLBACK; pengguna Edit dapat
+                    melakukan reconcile secara eksplisit.
                 </p>
                 <p id="history-drafts-link" hidden>
                     <a href="/databases/{{.DatabaseID}}/drafts">
@@ -64,6 +65,9 @@
                             <tr>
                                 <th scope="col">Versi</th>
                                 <th scope="col">Status</th>
+                                <th scope="col">Draft ID / Revisi</th>
+                                <th scope="col">Execution ID</th>
+                                <th scope="col">Error Code</th>
                                 <th scope="col">Dieksekusi oleh</th>
                                 <th scope="col">Mulai</th>
                                 <th scope="col">Selesai</th>
@@ -72,6 +76,37 @@
                         </thead>
                         <tbody id="history-list-body"></tbody>
                     </table>
+                </div>
+                <p id="history-pending-notice" class="form-help" role="status" hidden></p>
+                <nav id="history-pagination" class="cursor-pagination" aria-label="Navigasi halaman riwayat" hidden>
+                    <button type="button" id="history-prev" class="button-secondary" disabled>Halaman Sebelumnya</button>
+                    <span id="history-page-number" aria-live="polite">Halaman 1</span>
+                    <button type="button" id="history-next" class="button-secondary" disabled>Halaman Berikutnya</button>
+                </nav>
+            </section>
+
+            <section id="history-reconcile-panel" class="dashboard-panel"
+                     aria-labelledby="history-reconcile-heading" hidden>
+                <h2 id="history-reconcile-heading">Reconcile Pending / Unknown</h2>
+                <p class="form-help">Khusus pengguna dengan grant Edit. Reconcile memeriksa
+                    receipt migration dan memperbarui status yang belum final;
+                    tidak mengeksekusi ulang SQL. Gunakan setelah status running/unknown
+                    atau ketika hasil eksekusi tidak pasti.</p>
+                <button type="button" id="history-reconcile" class="button-secondary">
+                    Reconcile Pending / Unknown
+                </button>
+                <p id="history-reconcile-status" role="status" aria-live="polite" hidden></p>
+                <p id="history-reconcile-error" class="error-message" role="alert" hidden></p>
+                <div id="history-reconcile-result" hidden>
+                    <h3>Hasil Reconcile</h3>
+                    <p id="history-reconcile-summary" role="status" aria-live="polite"></p>
+                    <div id="history-reconcile-table" class="users-table-wrapper" hidden>
+                        <table class="users-table">
+                            <thead><tr><th scope="col">Versi</th><th scope="col">Execution ID</th>
+                                <th scope="col">Status</th><th scope="col">Error Code</th></tr></thead>
+                            <tbody id="history-reconcile-body"></tbody>
+                        </table>
+                    </div>
                 </div>
             </section>
 
