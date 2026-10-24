@@ -14,8 +14,9 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("default config: %v, %v", cfg, err)
 	}
 	t.Setenv("HTTP_ADDR", ":9090")
+	t.Setenv("COOKIE_SECURE", "true")
 	cfg, err = Load()
-	if err != nil || cfg.HTTPAddr != ":9090" {
-		t.Fatal("address override ignored")
+	if err != nil || cfg.HTTPAddr != ":9090" || !cfg.CookieSecure {
+		t.Fatal("address or cookie secure override ignored")
 	}
 }

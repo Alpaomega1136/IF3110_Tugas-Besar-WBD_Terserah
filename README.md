@@ -1,90 +1,81 @@
 # Terserah - Database Management Platform
 
-Fondasi repository Milestone 1 IF3110. Backend menggunakan Go dan target PostgreSQL; frontend disiapkan terpisah untuk pengembang FE.
+Repository Milestone 1 IF3110 Pengembangan Aplikasi Web. Backend menggunakan Go dan target PostgreSQL; frontend disiapkan terpisah di `FE/`.
 
 ```text
-FE/                          Project frontend (belum dipilih framework)
+FE/                          Project frontend
 BE/
   cmd/api/                   Entry point HTTP server
   cmd/migrate/               CLI migration metadata platform
+  cmd/seed/                  CLI bootstrap akun Platform Admin pertama
   internal/config/           Konfigurasi environment
   internal/database/         Pool PostgreSQL metadata
-  internal/httpapi/          Router dan health endpoints
+  internal/httpapi/          Router HTTP dan wiring endpoint
   internal/policy/           Policy akses database + unit test
-  internal/auth/             Tempat implementasi auth/session/CSRF
-  internal/admin/            Tempat implementasi user/group/grant
-  internal/connections/      Tempat implementasi koneksi target
-  internal/viewer/           Tempat implementasi schema/data viewer
-  internal/migration/        Tempat implementasi draft/history/runner target
+  internal/auth/             Autentikasi, password hashing, session, rotasi/grace, CSRF
+  internal/admin/            Manajemen user, group, membership, grant, dan daftar database
+  internal/connections/      Tempat implementasi koneksi target (BE 2)
+  internal/viewer/           Tempat implementasi schema/data viewer (BE 2)
+  internal/migration/        Draft & history API (BE 1), runner target (BE 2)
   migrations/                SQL schema metadata + runner ter-embed
-  tests/integration/         Test dengan PostgreSQL nyata
+  tests/integration/         Integration test dengan PostgreSQL nyata
   tests/fixtures/            SQL/data pengujian dan demo
-docs/                        Arsitektur, kontrak API, backlog, testing
-refs/                        Spesifikasi asli dan referensi tim
-tests/e2e/                   Tempat skenario lintas FE-BE
-.github/workflows/           CI backend
 ```
 
 ## Status
 
-Sudah tersedia: server dengan graceful shutdown, konfigurasi environment, pool metadata PostgreSQL, health endpoints, migration metadata idempotent, policy multi-group, unit/integration test fondasi, dan CI.
+Sudah tersedia:
+- Fondasi server HTTP dengan graceful shutdown, konfigurasi environment, pool metadata PostgreSQL, health endpoints, dan migration metadata idempotent.
+- **Seluruh fitur BE 1**:
+  - Bootstrap Platform Admin (`cmd/seed`) dan password hashing `PBKDF2-HMAC-SHA256`.
+  - Login, logout, informasi pengguna aktif (`/api/v1/auth/me`), dan token CSRF (`/api/v1/auth/csrf`).
+  - Opaque session cookie (`terserah_session`) dengan `HttpOnly`, `SameSite=Lax`, `Secure` (HTTPS/prod), idle timeout (30m), absolute expiration (8h), rotasi berkala (15m) & saat peningkatan privilege dengan grace period (30s), penanganan request bersamaan, serta revokasi session.
+  - Manajemen user, group, membership multi-group, grant akses database (`view` / `edit`), dan endpoint daftar database terotorisasi (`GET /api/v1/databases`).
+  - Pembuatan/pembaruan draft SQL migration dan pembacaan riwayat/detail migration (`BE/internal/migration`).
+- Unit test dan PostgreSQL integration test untuk seluruh modul BE 1.
 
-**Ini setup/fondasi, bukan seluruh implementasi fitur Milestone 1.** Auth/session/CSRF, API administrasi, pengelolaan target, viewer, draft/runner/history migration, bootstrap admin, dan seluruh UI masih perlu dikerjakan. Folder modul memiliki README tanggung jawab; endpoint fitur belum didaftarkan. Lihat [backlog](docs/backlog.md).
+Masih perlu dikerjakan oleh anggota tim lain:
+- **BE 2**: Pengelolaan koneksi target PostgreSQL & enkripsi kredensial (`internal/connections`), database schema/data viewer (`internal/viewer`), serta runner eksekusi transaksi SQL migration (`POST /api/v1/databases/{id}/drafts/{draftID}/execute`).
+- **FE**: Antarmuka pengguna (`FE/`).
 
-## Menjalankan backend secara lokal
+## Menjalankan Backend & Bootstrap Admin Secara Lokal
 
-Prasyarat: Go 1.26+ ([unduhan resmi](https://go.dev/dl/)) dan PostgreSQL 17 lokal yang sudah berjalan. Pastikan `go`, `psql`, dan `createdb` tersedia di PATH.
+Prasyarat: Go 1.26+ dan PostgreSQL lokal yang sudah berjalan.
 
-Buat user dan database metadata sekali, menggunakan akun administrator PostgreSQL lokal (contoh: `postgres`). Masukkan password administrator saat diminta:
+Buat user dan database metadata sekali menggunakan akun administrator PostgreSQL lokal (contoh: `postgres`):
 
 ```powershell
 psql -h localhost -U postgres -d postgres -c "CREATE ROLE platform LOGIN PASSWORD 'platform_dev_only';"
 createdb -h localhost -U postgres -O platform platform
 ```
 
-Jalankan dari root repository:
+Jalankan migration metadata, bootstrap akun Platform Admin pertama, lalu nyalakan server API dari root repository:
 
 ```powershell
 Copy-Item .env.example .env
 Set-Location BE
 $env:DATABASE_URL = 'postgres://platform:platform_dev_only@localhost:5432/platform?sslmode=disable'
 $env:HTTP_ADDR = ':8080'
+$env:ADMIN_USERNAME = 'admin'
+$env:ADMIN_PASSWORD = 'change_me_min_8_chars'
 go mod download
 go run ./cmd/migrate
+go run ./cmd/seed
 go run ./cmd/api
 ```
 
-Sesuaikan `DATABASE_URL` dengan user, password, port, dan nama database lokal. `.env.example` adalah acuan konfigurasi; salinan `.env` opsional sebagai catatan lokal. Aplikasi Go membaca environment proses, **tidak** otomatis memuat `.env`. Di shell POSIX gunakan `export DATABASE_URL='...'`. Kredensial contoh hanya untuk development; karakter khusus pada password di connection URL harus di-URL-encode.
-
-Periksa dari terminal lain:
-
-```powershell
-Invoke-RestMethod http://localhost:8080/health/live
-Invoke-RestMethod http://localhost:8080/health/ready
-```
-
-Di macOS/Linux gunakan `curl` untuk health check. Hentikan server dengan `Ctrl+C`. Migration metadata bersifat forward-only: tambahkan file bernomor berikutnya, jangan ubah file yang sudah diterapkan. CLI ini berbeda dari fitur migration SQL database target.
-
-## Database target demo (opsional)
-
-Buat database terpisah pada PostgreSQL lokal; jalankan perintah berikut dari root repository sekali untuk database demo baru:
+## Database Target Demo (Opsional)
 
 ```powershell
 createdb -h localhost -U postgres -O platform demo_target
 psql -h localhost -U platform -d demo_target -v ON_ERROR_STOP=1 -f BE/tests/fixtures/target.sql
 ```
 
-Fixture membuat tabel dan data contoh. Target belum otomatis terdaftar di metadata karena API koneksi belum dibuat. Jangan jalankan fixture pada database metadata atau database berisi data pribadi.
+## Pengujian
 
-## Pengujian dan panduan tim
-
-Dari `BE/`: `go test ./...`, `go vet ./...`, dan `go build ./...`.
-Integration test memerlukan database khusus: [panduan testing](docs/testing.md).
-
-- [Arsitektur dan keputusan awal](docs/architecture.md)
-- [API tersedia dan rencana kontrak FE-BE](docs/api.md)
-- [Pembagian kerja dan backlog](docs/backlog.md)
-- [Referensi tugas](refs/README.md)
-
-Jangan commit `.env`, password, connection URL pribadi, session token, atau hasil dump berisi data sensitif. Tidak ada akun admin/default login pada setup ini; buat bootstrap admin dengan password hashing saat modul auth dikerjakan.
-
+Dari `BE/`:
+```powershell
+go test ./...
+go vet ./...
+go build ./...
+```
