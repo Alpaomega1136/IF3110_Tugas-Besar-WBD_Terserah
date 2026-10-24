@@ -34,11 +34,40 @@
             </section>
 
             <section class="dashboard-panel"
-                     aria-labelledby="database-heading">
+                    aria-labelledby="database-heading">
                 <h2 id="database-heading">Database Saya</h2>
-                <p>
-                    Daftar database yang dapat diakses akan
-                    ditambahkan pada tahap Database List.
+
+                <p id="databases-status" role="status" aria-live="polite">
+                    Memuat database...
+                </p>
+
+                <p id="databases-error"
+                class="error-message"
+                role="alert"
+                hidden></p>
+
+                <p id="databases-empty" hidden>
+                    Belum ada database yang bisa diakses.
+                    Akses diberikan melalui group.
+                </p>
+
+                <div id="databases-table" class="users-table-wrapper" hidden>
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">ID</th>
+                                <th scope="col">Nama</th>
+                                <th scope="col">Database Target</th>
+                                <th scope="col">Akses Efektif</th>
+                            </tr>
+                        </thead>
+                        <tbody id="databases-body"></tbody>
+                    </table>
+                </div>
+
+                <p class="form-help">
+                    Viewer database dan eksekusi migration akan tersedia
+                    setelah BE2 diintegrasikan.
                 </p>
             </section>
 
@@ -48,6 +77,8 @@
                 <a href="/admin/users">Kelola Pengguna</a>
                 <span aria-hidden="true"> · </span>
                 <a href="/admin/groups">Kelola Group</a>
+                <span aria-hidden="true"> · </span>
+                <a href="/admin/grants">Kelola Grant Database</a>
             </section>
         </div>
     </main>

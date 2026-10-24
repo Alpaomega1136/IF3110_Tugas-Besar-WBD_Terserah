@@ -1,0 +1,145 @@
+{{define "content"}}
+<div class="app-shell">
+    <header class="app-header">
+        <a class="app-brand" href="/dashboard">Terserah</a>
+
+        <nav class="app-nav" aria-label="Navigasi utama">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/admin/users">Users</a>
+            <a href="/admin/groups">Groups</a>
+            <a href="/admin/grants" aria-current="page">Grants</a>
+        </nav>
+    </header>
+
+    <main class="app-main">
+        <h1>Database Access Grants</h1>
+
+        <p>
+            Atur izin database untuk group:
+            View Only atau View + Edit.
+        </p>
+
+        <p class="grant-note">
+            BE1 belum menyediakan daftar seluruh koneksi database
+            untuk admin. Masukkan ID koneksi database target
+            (database_connections.id) yang sudah terdaftar melalui
+            BE2 atau fixture pengujian tim.
+        </p>
+
+        <p id="grants-status"
+           role="status"
+           aria-live="polite">
+            Memeriksa akses...
+        </p>
+
+        <p id="grants-error"
+           class="error-message"
+           role="alert"
+           hidden></p>
+
+        <p id="grants-no-groups" hidden>
+            Belum ada group.
+            <a href="/admin/groups">Buat group dahulu</a>
+            untuk mengelola grant.
+        </p>
+
+        <div id="grants-panel" hidden>
+            <section class="dashboard-panel"
+                     aria-labelledby="grant-form-heading">
+                <h2 id="grant-form-heading">
+                    Tambah atau Ubah Grant
+                </h2>
+
+                <form id="grant-form"
+                      class="grant-form"
+                      novalidate>
+
+                    <div class="form-group">
+                        <label for="grant-group">
+                            Group (wajib)
+                        </label>
+
+                        <select id="grant-group" required disabled>
+                            <option value="">Pilih group...</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="grant-database-id">
+                            ID Database Target (wajib)
+                        </label>
+
+                        <input
+                            id="grant-database-id"
+                            type="text"
+                            inputmode="numeric"
+                            maxlength="19"
+                            placeholder="Contoh: 1"
+                            aria-describedby="grant-id-help"
+                            required
+                            disabled
+                        >
+
+                        <p id="grant-id-help" class="form-help">
+                            Gunakan ID koneksi database target yang
+                            benar-benar terdaftar, bukan nama database
+                            PostgreSQL.
+                        </p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="grant-access">
+                            Tingkat Akses
+                        </label>
+
+                        <select id="grant-access" required disabled>
+                            <option value="view">View Only</option>
+                            <option value="edit">View + Edit</option>
+                        </select>
+                    </div>
+
+                    <button type="submit"
+                            id="grant-submit"
+                            disabled>
+                        Simpan Grant
+                    </button>
+
+                    <p id="grant-message"
+                       role="status"
+                       aria-live="polite"
+                       hidden></p>
+                </form>
+            </section>
+
+            <section class="dashboard-panel"
+                     aria-labelledby="grant-list-heading">
+                <h2 id="grant-list-heading">
+                    Grant yang Terdaftar
+                </h2>
+
+                <p id="grants-empty" hidden>
+                    Belum ada grant pada group yang tersedia.
+                </p>
+
+                <div id="grants-table"
+                     class="users-table-wrapper"
+                     hidden>
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">Group</th>
+                                <th scope="col">ID Database</th>
+                                <th scope="col">Akses</th>
+                                <th scope="col">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="grants-body"></tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </main>
+</div>
+
+<script type="module" src="/static/js/grants.js"></script>
+{{end}}

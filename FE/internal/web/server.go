@@ -37,6 +37,11 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 		return nil, fmt.Errorf("parse groups template: %w", err)
 	}
 
+	grantsTemplate, err := parsePageTemplate("grants")
+	if err != nil {
+		return nil, fmt.Errorf("parse grants template: %w", err)
+	}
+
 	staticFiles, err := fs.Sub(assets, "static")
 	if err != nil {
 		return nil, fmt.Errorf("load static files: %w", err)
@@ -84,6 +89,12 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 	mux.HandleFunc("GET /admin/groups",
 		pageHandler(groupsTemplate, PageData{
 			Title: "Group Management - Terserah",
+		}),
+	)
+
+	mux.HandleFunc("GET /admin/grants",
+		pageHandler(grantsTemplate, PageData{
+			Title: "Database Grants - Terserah",
 		}),
 	)
 

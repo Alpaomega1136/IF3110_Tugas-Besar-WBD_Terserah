@@ -43,7 +43,7 @@ func TestRootRedirectAndStatic(t *testing.T) {
 		t.Fatalf("unexpected root response: %d %q", w.Code, w.Header().Get("Location"))
 	}
 
-	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js", "/static/js/users.js", "/static/js/groups.js"} {
+	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js", "/static/js/users.js", "/static/js/groups.js", "/static/js/grants.js"} {
 		w = httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, asset, nil))
 		if w.Code != http.StatusOK {
@@ -96,6 +96,9 @@ func TestDashboardPage(t *testing.T) {
 	for _, expected := range []string{
 		"Dashboard - Terserah",
 		`id="dashboard-content" hidden`,
+		`id="databases-table"`,
+		`id="databases-body"`,
+		`id="databases-empty"`,
 		`/static/js/dashboard.js`,
 	} {
 		if !strings.Contains(body, expected) {
@@ -341,5 +344,164 @@ func TestRemoveGroupMemberProxy(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("DELETE returned %d, want 200", w.Code)
+	}
+}
+
+func TestAdminGrantsPage(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(
+		w,
+		httptest.NewRequest(
+			http.MethodGet,
+			"/admin/grants",
+			nil,
+		),
+	)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf(
+			"GET /admin/grants returned %d",
+			w.Code,
+		)
+	}
+
+	for _, expected := range []string{
+		"Database Grants - Terserah",
+		`id="grant-form"`,
+		`id="grants-body"`,
+		`/static/js/grants.js`,
+	} {
+		if !strings.Contains(w.Body.String(), expected) {
+			t.Fatalf(
+				"grants page missing %q",
+				expected,
+			)
+		}
+	}
+
+	if strings.Contains(
+		w.Body.String(),
+		`id="login-form"`,
+	) {
+		t.Fatal("grants page accidentally rendered login form")
+	}
+
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
+}
+
+func TestDatabaseAndGrantProxy(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{
+			"list accessible databases",
+			http.MethodGet,
+			"/api/v1/databases",
+			"",
+		},
+		{
+			"set database grant",
+			http.MethodPut,
+			"/api/v1/admin/groups/2/databases/3",
+			`{"access_level":"view"}`,
+		},
+		{
+			"revoke database grant",
+			http.MethodDelete,
+			"/api/v1/admin/groups/2/databases/3",
+			"",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := httptest.NewServer(
+				http.HandlerFunc(
+					func(w http.ResponseWriter, r *http.Request) {
+						if r.Method != tc.method ||
+							r.URL.Path != tc.path {
+							t.Errorf(
+								"upstream got %s %s, want %s %s",
+								r.Method, r.URL.Path,
+								tc.method, tc.path,
+							)
+						}
+
+						if r.Host != "localhost:3000" ||
+							r.Header.Get("Origin") != "http://localhost:3000" {
+							t.Errorf(
+								"Host/Origin were not preserved: %q %q",
+								r.Host,
+								r.Header.Get("Origin"),
+							)
+						}
+
+						if r.Header.Get("Cookie") !=
+							"terserah_session=test-session" {
+							t.Error("session cookie missing")
+						}
+
+						if tc.method != http.MethodGet &&
+							r.Header.Get("X-CSRF-Token") != "test-token" {
+							t.Error("CSRF header missing")
+						}
+
+						gotBody, _ := io.ReadAll(r.Body)
+
+						if string(gotBody) != tc.body {
+							t.Errorf(
+								"body = %q, want %q",
+								gotBody, tc.body,
+							)
+						}
+
+						w.Header().Set(
+							"Content-Type",
+							"application/json",
+						)
+
+						_, _ = io.WriteString(
+							w,
+							`{"status":"ok"}`,
+						)
+					},
+				),
+			)
+			defer backend.Close()
+
+			h := testHandler(t, backend.URL)
+
+			req := httptest.NewRequest(
+				tc.method,
+				tc.path,
+				strings.NewReader(tc.body),
+			)
+
+			req.Host = "localhost:3000"
+			req.Header.Set("Origin", "http://localhost:3000")
+			req.Header.Set("Cookie", "terserah_session=test-session")
+
+			if tc.method != http.MethodGet {
+				req.Header.Set("X-CSRF-Token", "test-token")
+			}
+
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf(
+					"proxy status = %d",
+					w.Code,
+				)
+			}
+		})
 	}
 }

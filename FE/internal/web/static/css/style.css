@@ -395,3 +395,63 @@ button:focus-visible {
 .remove-member-button:hover:not(:disabled) {
     background: #fecaca;
 }
+
+/* Database Grants */
+.grant-form {
+    max-width: 460px;
+    margin-top: 16px;
+}
+
+.grant-form select {
+    width: 100%;
+    padding: 11px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: white;
+    color: #111827;
+    font: inherit;
+}
+
+.grant-form select:focus-visible {
+    outline: 3px solid #2563eb;
+    outline-offset: 2px;
+}
+
+.grant-form select:disabled {
+    background: #f3f4f6;
+}
+
+.grant-form button {
+    width: auto;
+    min-width: 145px;
+}
+
+.grant-action {
+    width: auto;
+    min-width: 72px;
+    padding: 7px 10px;
+    margin: 2px 6px 2px 0;
+}
+
+.grant-revoke {
+    background: #b91c1c;
+}
+
+.grant-revoke:hover:not(:disabled) {
+    background: #991b1b;
+}
+
+.grant-note,
+.form-help {
+    margin: 12px 0;
+    color: #4b5563;
+    line-height: 1.5;
+}
+
+.form-help {
+    font-size: 13px;
+}
+
+#grant-message {
+    margin-top: 12px;
+}
