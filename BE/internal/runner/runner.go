@@ -22,9 +22,12 @@ import (
 type Service struct {
 	db      *pgxpool.Pool
 	targets *connections.Service
+	key     []byte
 }
 
-func New(db *pgxpool.Pool, targets *connections.Service) *Service { return &Service{db, targets} }
+func New(db *pgxpool.Pool, targets *connections.Service, key []byte) *Service {
+	return &Service{db: db, targets: targets, key: append([]byte(nil), key...)}
+}
 
 type Draft struct {
 	ID         int64  `json:"id,string"`
@@ -48,6 +51,9 @@ type Result struct {
 var errConflict = errors.New("draft revision changed or an unresolved execution exists")
 
 func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
+	mux.HandleFunc("GET /api/v1/databases/{id}/migrations", sessions.Require(s.history))
+	mux.HandleFunc("GET /api/v1/databases/{id}/migrations/{version}", sessions.Require(s.history))
+	mux.HandleFunc("POST /api/v1/databases/{id}/migrations/reconcile", sessions.Require(s.reconcile))
 	base := "/api/v1/databases/{id}/drafts"
 	mux.HandleFunc("POST "+base, sessions.Require(s.draft))
 	mux.HandleFunc("GET "+base+"/{draftID}", sessions.Require(s.draft))
@@ -55,7 +61,7 @@ func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("POST "+base+"/{draftID}/execute", sessions.Require(s.execute))
 }
 
-func (s *Service) authorize(r *http.Request) (auth.Principal, int64, error) {
+func (s *Service) authorize(r *http.Request, write bool) (auth.Principal, int64, error) {
 	p, _ := auth.User(r.Context())
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id < 1 {
@@ -65,22 +71,31 @@ func (s *Service) authorize(r *http.Request) (auth.Principal, int64, error) {
 	if err != nil {
 		return p, id, err
 	}
-	if !policy.Allows(access, true) {
+	if !policy.Allows(access, write) {
 		return p, id, connections.ErrForbidden
 	}
 	return p, id, nil
 }
 
 func fail(w http.ResponseWriter, err error) {
+	var pgerr *pgconn.PgError
+	if errors.As(err, &pgerr) && pgerr.Code == "55P03" {
+		httpx.Error(w, 409, "migration_busy", "A target migration is still active; retry later")
+		return
+	}
 	switch {
 	case errors.Is(err, connections.ErrForbidden):
-		httpx.Error(w, 403, "forbidden", "Edit access required")
+		httpx.Error(w, 403, "forbidden", "Database access denied")
 	case errors.Is(err, pgx.ErrNoRows):
-		httpx.Error(w, 404, "not_found", "Draft not found in this database")
+		httpx.Error(w, 404, "not_found", "Database object not found")
 	case errors.Is(err, errConflict):
 		httpx.Error(w, 409, "execution_conflict", "Reload draft or resolve the pending execution before retrying")
 	case errors.Is(err, connections.ErrInvalid), errors.Is(err, errSQL):
 		httpx.Error(w, 400, "invalid_input", "Invalid ID, revision, title or unsupported SQL")
+	case errors.Is(err, errHistorySetup):
+		httpx.Error(w, 409, "target_history_unprotected", "Provision target history and use a restricted executor login")
+	case errors.Is(err, errTargetIdentity):
+		httpx.Error(w, 409, "target_identity_conflict", "Target identity changed or is already bound to another connection")
 	case errors.Is(err, connections.ErrMetadataTarget):
 		httpx.Error(w, 409, "metadata_target_forbidden", "Metadata database cannot be a target")
 	default:
@@ -89,7 +104,7 @@ func fail(w http.ResponseWriter, err error) {
 }
 
 func (s *Service) draft(w http.ResponseWriter, r *http.Request) {
-	p, id, err := s.authorize(r)
+	p, id, err := s.authorize(r, true)
 	if err != nil {
 		fail(w, err)
 		return
@@ -145,7 +160,7 @@ func (s *Service) draft(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) execute(w http.ResponseWriter, r *http.Request) {
-	p, id, err := s.authorize(r)
+	p, id, err := s.authorize(r, true)
 	if err != nil {
 		fail(w, err)
 		return
@@ -209,6 +224,9 @@ func (s *Service) run(ctx context.Context, p auth.Principal, id, draftID, revisi
 	if !policy.Allows(access, true) {
 		return result, connections.ErrForbidden
 	}
+	if err = protectedHistory(ctx, tx); err != nil {
+		return result, err
+	}
 	meta, err := s.db.Begin(ctx)
 	if err != nil {
 		return result, err
@@ -219,6 +237,9 @@ func (s *Service) run(ctx context.Context, p auth.Principal, id, draftID, revisi
 		return result, err
 	}
 	var sql string
+	if err = bindTarget(ctx, meta, tx, id); err != nil {
+		return result, err
+	}
 	var actual int64
 	if err = meta.QueryRow(ctx, `SELECT sql,revision FROM migration_drafts WHERE database_id=$1 AND id=$2 FOR UPDATE`, id, draftID).Scan(&sql, &actual); err != nil {
 		return result, err
@@ -250,15 +271,13 @@ func (s *Service) run(ctx context.Context, p auth.Principal, id, draftID, revisi
 	}
 	result.ExecutionID = hex.EncodeToString(token[:])
 	result.Status = "running"
-	err = meta.QueryRow(ctx, `INSERT INTO migration_history(database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id) SELECT $1,$2,$3,COALESCE(MAX(version),0)+1,$4,$5,'running',$6 FROM migration_history WHERE database_id=$1 RETURNING version`, id, draftID, revision, sql, p.ID, result.ExecutionID).Scan(&result.Version)
+	err = meta.QueryRow(ctx, `INSERT INTO migration_history(database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id,receipt_version) SELECT $1,$2,$3,COALESCE(MAX(version),0)+1,$4,$5,'running',$6,1 FROM migration_history WHERE database_id=$1 RETURNING version`, id, draftID, revision, sql, p.ID, result.ExecutionID).Scan(&result.Version)
 	if err != nil {
 		return result, err
 	}
 	if err = meta.Commit(ctx); err != nil {
 		return result, err
 	}
-	// Receipts commit with the user's DDL/DML, independently of the metadata ledger.
-	_, err = tx.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS _terserah; CREATE TABLE IF NOT EXISTS _terserah.migration_receipts(execution_id text PRIMARY KEY, version bigint NOT NULL, sql text NOT NULL, executed_by bigint NOT NULL, committed_at timestamptz NOT NULL DEFAULT clock_timestamp())`)
 	for _, part := range parts {
 		if err != nil {
 			break
@@ -268,7 +287,7 @@ func (s *Service) run(ctx context.Context, p auth.Principal, id, draftID, revisi
 		_, err = tx.Conn().PgConn().ExecParams(ctx, part, nil, nil, nil, nil).Close()
 	}
 	if err == nil {
-		_, err = tx.Exec(ctx, `INSERT INTO _terserah.migration_receipts(execution_id,version,sql,executed_by) VALUES($1,$2,$3,$4)`, result.ExecutionID, result.Version, sql, p.ID)
+		_, err = tx.Exec(ctx, `INSERT INTO _terserah.migration_receipts(execution_id,version,sql,executed_by,signature) VALUES($1,$2,$3,$4,$5)`, result.ExecutionID, result.Version, sql, p.ID, s.signature(id, result.ExecutionID, result.Version, sql, p.ID))
 	}
 	if err != nil {
 		rollback(tx)
@@ -301,7 +320,7 @@ func (s *Service) run(ctx context.Context, p auth.Principal, id, draftID, revisi
 	}
 	cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err = s.db.Exec(cleanup, `UPDATE migration_history SET status=$1,error_code=$2,finished_at=CASE WHEN $1 IN ('success','failed') THEN now() ELSE NULL END WHERE execution_id=$3`, result.Status, result.ErrorCode, result.ExecutionID)
+	_, err = s.db.Exec(cleanup, `UPDATE migration_history SET status=$1,error_code=$2,finished_at=CASE WHEN $1 IN ('success','failed') THEN now() ELSE NULL END WHERE execution_id=$3 AND status IN ('running','unknown')`, result.Status, result.ErrorCode, result.ExecutionID)
 	if err != nil {
 		result.Status = "unknown"
 		code := "ledger_unavailable"
