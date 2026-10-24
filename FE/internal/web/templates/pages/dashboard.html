@@ -1,0 +1,58 @@
+{{define "content"}}
+<div class="app-shell">
+    <header class="app-header">
+        <a class="app-brand" href="/dashboard">Terserah</a>
+
+        <nav class="app-nav" aria-label="Navigasi utama">
+            <a href="/dashboard" aria-current="page">Dashboard</a>
+            <button type="button" id="logout-button"
+                    class="button-secondary" disabled>
+                Logout
+            </button>
+        </nav>
+    </header>
+
+    <main class="app-main">
+        <h1>Dashboard</h1>
+
+        <p id="dashboard-status" role="status" aria-live="polite">
+            Memeriksa session...
+        </p>
+
+        <div id="dashboard-content" hidden>
+            <section class="dashboard-panel"
+                     aria-labelledby="welcome-heading">
+                <h2 id="welcome-heading">
+                    Selamat datang,
+                    <span id="welcome-username"></span>!
+                </h2>
+
+                <p>
+                    Role akun:
+                    <strong id="account-role"></strong>
+                </p>
+            </section>
+
+            <section class="dashboard-panel"
+                     aria-labelledby="database-heading">
+                <h2 id="database-heading">Database Saya</h2>
+                <p>
+                    Daftar database yang dapat diakses akan
+                    ditambahkan pada tahap Database List.
+                </p>
+            </section>
+
+            <section class="dashboard-panel" id="admin-panel"
+                     aria-labelledby="admin-heading" hidden>
+                <h2 id="admin-heading">Administrasi Platform</h2>
+                <p>
+                    Pengelolaan user dan group akan
+                    ditambahkan pada tahap berikutnya.
+                </p>
+            </section>
+        </div>
+    </main>
+</div>
+
+<script type="module" src="/static/js/dashboard.js"></script>
+{{end}}

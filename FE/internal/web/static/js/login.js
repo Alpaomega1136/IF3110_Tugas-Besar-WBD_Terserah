@@ -14,22 +14,23 @@ form.addEventListener("submit", async (event) => {
     message.className = "";
 
     try {
-        const data = await apiRequest("/api/v1/auth/login", {
+        await apiRequest("/api/v1/auth/login", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+                "Content-Type": "application/json",
+            },
             body: JSON.stringify({
                 username: formData.get("username"),
                 password: formData.get("password"),
             }),
         });
 
-        message.textContent = `Login berhasil! Selamat datang, ${data.user.username}`;
-        message.className = "success-message";
         form.reset();
+        window.location.replace("/dashboard");
     } catch (error) {
         message.textContent = error.message || "Tidak dapat menghubungi server";
         message.className = "error-message";
-    } finally {
+
         button.disabled = false;
         button.textContent = "Login";
     }

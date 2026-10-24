@@ -39,11 +39,11 @@ func TestRootRedirectAndStatic(t *testing.T) {
 	h := testHandler(t, "http://localhost:8080")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
-	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/login" {
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/dashboard" {
 		t.Fatalf("unexpected root response: %d %q", w.Code, w.Header().Get("Location"))
 	}
 
-	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js"} {
+	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js"} {
 		w = httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, asset, nil))
 		if w.Code != http.StatusOK {
@@ -75,5 +75,39 @@ func TestReverseProxyPreservesOriginHostAndCookies(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK || !strings.Contains(w.Header().Get("Set-Cookie"), "terserah_session=") {
 		t.Fatalf("proxy status=%d cookie=%q", w.Code, w.Header().Get("Set-Cookie"))
+	}
+}
+
+func TestDashboardPage(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(
+		w,
+		httptest.NewRequest(http.MethodGet, "/dashboard", nil),
+	)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /dashboard returned %d", w.Code)
+	}
+
+	body := w.Body.String()
+
+	for _, expected := range []string{
+		"Dashboard - Terserah",
+		`id="dashboard-content" hidden`,
+		`/static/js/dashboard.js`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("dashboard page missing %q", expected)
+		}
+	}
+
+	if strings.Contains(body, `id="login-form"`) {
+		t.Fatal("dashboard rendered login form: template content collision")
+	}
+
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}
 }
