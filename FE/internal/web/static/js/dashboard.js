@@ -1,123 +1,94 @@
-import {
-    authenticatedRequest,
-    requireAuthenticatedUser,
-    logout
-} from "./auth.js";
+import { authenticatedRequest, requireAuthenticatedUser, logout } from "./auth.js";
 
-const status = document.getElementById("dashboard-status");
-const content = document.getElementById("dashboard-content");
-const username = document.getElementById("welcome-username");
-const role = document.getElementById("account-role");
-const adminPanel = document.getElementById("admin-panel");
-const logoutButton = document.getElementById("logout-button");
+const byId = (id) => document.getElementById(id);
+const status = byId("dashboard-status");
+const content = byId("dashboard-content");
+const username = byId("welcome-username");
+const role = byId("account-role");
+const adminPanel = byId("admin-panel");
+const logoutButton = byId("logout-button");
+const databasesStatus = byId("databases-status");
+const databasesError = byId("databases-error");
+const databasesEmpty = byId("databases-empty");
+const databasesTable = byId("databases-table");
+const databasesBody = byId("databases-body");
 
-const databasesStatus = document.getElementById("databases-status");
-const databasesError = document.getElementById("databases-error");
-const databasesEmpty = document.getElementById("databases-empty");
-const databasesTable = document.getElementById("databases-table");
-const databasesBody = document.getElementById("databases-body");
+function validID(id) {
+    return typeof id === "string" && /^[1-9]\d*$/.test(id) && BigInt(id) <= 9223372036854775807n;
+}
 
-
-function addDatabaseCell(row, value) {
+function textCell(row, value) {
     const cell = document.createElement("td");
     cell.textContent = String(value);
     row.appendChild(cell);
+    return cell;
 }
 
-async function loadDatabases() {
+function actionLink(cell, id, resource, label) {
+    const link = document.createElement("a");
+    link.href = `/databases/${encodeURIComponent(id)}/${resource}`;
+    link.textContent = label;
+    cell.appendChild(link);
+}
+
+async function loadDatabases(isAdmin) {
     databasesStatus.hidden = false;
     databasesError.hidden = true;
     databasesEmpty.hidden = true;
     databasesTable.hidden = true;
+    databasesBody.replaceChildren();
     databasesStatus.textContent = "Memuat database...";
-
     try {
         const result = await authenticatedRequest("/api/v1/databases");
-
-        if (!Array.isArray(result?.databases)) {
-            throw new Error("Format daftar database dari backend tidak valid.");
+        if (!Array.isArray(result?.databases) || !result.databases.every((db) =>
+            validID(db.id) && ["view", "edit"].includes(db.access))) {
+            throw new Error("Format daftar database atau izin dari backend tidak valid.");
         }
-
-        databasesBody.replaceChildren();
-
         for (const database of result.databases) {
             const row = document.createElement("tr");
-
-            addDatabaseCell(row, database.id);
-            addDatabaseCell(row, database.name);
-            addDatabaseCell(row, database.database_name);
-
-            addDatabaseCell(
-                row,
-                database.access === "edit"
-                    ? "View + Edit"
-                    : database.access === "view"
-                        ? "View Only"
-                        : "Tidak diketahui"
-            );
- 
-            const actionCell = document.createElement("td");
-
-            if (database.access === "edit") {
-                const link = document.createElement("a");
-                link.href = `/databases/${encodeURIComponent(String(database.id))}/drafts`;
-                link.textContent = "Kelola Draft";
-                actionCell.appendChild(link);
-            } else {
-                actionCell.textContent = "Memerlukan akses Edit";
-            }
-
-            row.appendChild(actionCell);
-       
-            const historyCell = document.createElement("td");
-            const historyLink = document.createElement("a");
-
-            historyLink.href = `/databases/${encodeURIComponent(String(database.id))}/history`;
-
-            historyLink.textContent = "Lihat History";
-
-            historyCell.appendChild(historyLink);
-            row.appendChild(historyCell);
-
+            textCell(row, database.id);
+            textCell(row, database.name);
+            textCell(row, database.database_name);
+            textCell(row, database.access === "edit" ? "View + Edit" : "View Only");
+            const links = document.createElement("td");
+            links.className = "database-workspace-links";
+            actionLink(links, database.id, "viewer", "Lihat Viewer");
+            actionLink(links, database.id, "history", "Lihat History");
+            if (database.access === "edit") actionLink(links, database.id, "drafts", "Kelola Draft");
+            row.appendChild(links);
             databasesBody.appendChild(row);
         }
-
-        databasesStatus.hidden = true;
-
+        databasesEmpty.textContent = isAdmin
+            ? "Belum ada database yang bisa diakses. Platform Admin tidak otomatis memiliki grant target; tambahkan diri ke group yang diberi izin jika perlu."
+            : "Belum ada database yang bisa diakses. Hubungi Platform Admin untuk mendapatkan grant melalui group.";
         databasesEmpty.hidden = result.databases.length !== 0;
-
-        databasesTable.hidden =  result.databases.length === 0;
-
+        databasesTable.hidden = result.databases.length === 0;
     } catch (error) {
-        databasesStatus.hidden = true;
-
+        databasesBody.replaceChildren();
         if (error.status === 401) {
             window.location.replace("/login");
             return;
         }
-
         databasesError.textContent = error.status === 403
-            ? "Akses daftar database ditolak."
+            ? "Hak akses daftar database telah ditolak atau dicabut. Muat ulang setelah login kembali."
             : (error.message || "Gagal memuat daftar database.");
-
         databasesError.hidden = false;
+    } finally {
+        databasesStatus.hidden = true;
     }
 }
 
 async function loadDashboard() {
     try {
         const user = await requireAuthenticatedUser();
-
         if (!user) return;
-
         username.textContent = user.username;
         role.textContent = user.is_platform_admin ? "Platform Admin" : "Pengguna";
-
         adminPanel.hidden = !user.is_platform_admin;
         content.hidden = false;
         status.hidden = true;
         logoutButton.disabled = false;
-        await loadDatabases();
+        await loadDatabases(user.is_platform_admin);
     } catch (error) {
         status.textContent = error.message || "Gagal memuat dashboard.";
         status.className = "error-message";
@@ -129,7 +100,6 @@ logoutButton.addEventListener("click", async () => {
     status.hidden = false;
     status.className = "";
     status.textContent = "Sedang logout...";
-
     try {
         await logout();
         window.location.replace("/login");

@@ -1,0 +1,35 @@
+{{define "content"}}
+<div class="app-shell">
+    <header class="app-header">
+        <a class="app-brand" href="/dashboard">Terserah</a>
+        <nav class="app-nav" aria-label="Navigasi utama">
+            <a href="/dashboard">Dashboard</a>
+        </nav>
+    </header>
+    <main class="app-main" id="viewer-page" data-database-id="{{.DatabaseID}}">
+        <h1>Database Viewer</h1>
+        <p id="viewer-status" role="status" aria-live="polite">Memeriksa session dan hak akses...</p>
+        <p id="viewer-error" class="error-message" role="alert" hidden></p>
+        <div id="viewer-workspace" hidden>
+            <section class="dashboard-panel" aria-labelledby="viewer-target-heading">
+                <h2 id="viewer-target-heading">Database: <span id="viewer-database-name"></span></h2>
+                <p>Database target: <span id="viewer-target-name"></span></p>
+                <p>Hak akses: <strong id="viewer-access"></strong></p>
+                <nav class="database-workspace-links" aria-label="Navigasi database">
+                    <a href="/dashboard">Dashboard</a>
+                    <a id="viewer-history-link" href="/databases/{{.DatabaseID}}/history">Migration History</a>
+                    <a id="viewer-drafts-link" href="/databases/{{.DatabaseID}}/drafts" hidden>Kelola Draft</a>
+                </nav>
+            </section>
+            <section class="dashboard-panel" aria-labelledby="viewer-schemas-heading">
+                <h2 id="viewer-schemas-heading">Schema yang Dapat Dilihat</h2>
+                <p class="form-help">Ringkasan read-only. Penjelajahan tabel, kolom, index, constraint dan rows dilengkapi pada FASE 4.</p>
+                <p id="viewer-schemas-status" role="status" hidden>Memuat schema...</p>
+                <p id="viewer-schemas-empty" hidden>Tidak ada schema pengguna yang tersedia.</p>
+                <ul id="viewer-schemas-list" class="viewer-schemas-list"></ul>
+            </section>
+        </div>
+    </main>
+</div>
+<script type="module" src="/static/js/viewer.js"></script>
+{{end}}

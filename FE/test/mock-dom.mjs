@@ -4,6 +4,7 @@ export class Element {
         this.children = [];
         this.listeners = new Map();
         this.attributes = new Map();
+        this.dataset = {};
         this.hidden = false;
         this.disabled = false;
         this.value = "";
@@ -14,6 +15,9 @@ export class Element {
     get textContent() { return this._text + this.children.map((child) => child.textContent).join(""); }
     set textContent(value) { this._text = String(value); this.children = []; }
     appendChild(child) { this.children.push(child); return child; }
+    append(...children) { for (const child of children) this.appendChild(child); }
+    scrollIntoView() {}
+    removeAttribute(key) { this.attributes.delete(key); }
     replaceChildren(...children) { this._text = ""; this.children = children; }
     addEventListener(name, fn) { this.listeners.set(name, fn); }
     setAttribute(key, value) { this.attributes.set(key, value); }

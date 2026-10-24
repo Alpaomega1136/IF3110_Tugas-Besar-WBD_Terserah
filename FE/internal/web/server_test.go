@@ -101,8 +101,7 @@ func TestDashboardPage(t *testing.T) {
 		`id="databases-body"`,
 		`id="databases-empty"`,
 		`/static/js/dashboard.js`,
-		`<th scope="col">Draft Migration</th>`,
-		`<th scope="col">Migration History</th>`,
+		`<th scope="col">Workspace</th>`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("dashboard page missing %q", expected)
@@ -952,6 +951,96 @@ func TestAdminDatabaseConnectionsProxyContract(t *testing.T) {
 			h.ServeHTTP(w, r)
 			if w.Code != tc.status || strings.TrimSpace(w.Body.String()) != tc.response {
 				t.Fatalf("proxy %s %s: status=%d body=%q", tc.method, tc.path, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestPhase3GrantSelectionAndViewerRoutes(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+	for _, tc := range []struct {
+		path     string
+		status   int
+		contains []string
+	}{
+		{"/admin/grants", http.StatusOK, []string{`id="grant-database"`, `id="grants-refresh"`, `id="grants-no-databases"`, `/static/js/grants.js`}},
+		{"/dashboard", http.StatusOK, []string{`<th scope="col">Workspace</th>`, `/static/js/dashboard.js`}},
+		{"/databases/9007199254740993/viewer", http.StatusOK, []string{`data-database-id="9007199254740993"`, `id="viewer-workspace" hidden`, `id="viewer-schemas-list"`, `/static/js/viewer.js`}},
+		{"/databases/0/viewer", http.StatusBadRequest, nil},
+		{"/databases/abc/viewer", http.StatusBadRequest, nil},
+		{"/databases/9223372036854775808/viewer", http.StatusBadRequest, nil},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if w.Code != tc.status {
+				t.Fatalf("status=%d, want %d: %s", w.Code, tc.status, w.Body.String())
+			}
+			for _, part := range tc.contains {
+				if !strings.Contains(w.Body.String(), part) {
+					t.Errorf("missing %q", part)
+				}
+			}
+			if tc.status == http.StatusOK && w.Header().Get("Cache-Control") != "no-store" {
+				t.Error("page must not be cached")
+			}
+		})
+	}
+	for _, path := range []string{"/static/js/grants.js", "/static/js/dashboard.js", "/static/js/viewer.js"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s: status=%d", path, w.Code)
+		}
+	}
+}
+
+func TestPhase3GrantAndViewerProxyContract(t *testing.T) {
+	const largeID = "9007199254740993"
+	for _, tc := range []struct {
+		method, path, body, response string
+		status                       int
+	}{
+		{"GET", "/api/v1/admin/groups", "", `{"groups":[{"id":"19","name":"team","user_ids":["5"],"grants":[{"group_id":"19","database_id":"9007199254740993","access_level":"view"}]}]}`, 200},
+		{"GET", "/api/v1/admin/databases", "", `{"databases":[{"id":"9007199254740993","name":"target","database_name":"app"}]}`, 200},
+		{"PUT", "/api/v1/admin/groups/19/databases/" + largeID, `{"access_level":"edit"}`, `{"grant":{"group_id":"19","database_id":"9007199254740993","access_level":"edit"}}`, 200},
+		{"DELETE", "/api/v1/admin/groups/19/databases/" + largeID, "", `{"status":"ok"}`, 200},
+		{"GET", "/api/v1/databases", "", `{"databases":[{"id":"9007199254740993","name":"target","database_name":"app","access":"view"}]}`, 200},
+		{"GET", "/api/v1/databases/" + largeID + "/schemas", "", `{"schemas":["public"]}`, 200},
+		{"GET", "/api/v1/databases/" + largeID + "/schemas", "", `{"error":{"code":"forbidden","message":"Access revoked"}}`, 403},
+	} {
+		t.Run(tc.method+" "+tc.path+" "+strconv.Itoa(tc.status), func(t *testing.T) {
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != tc.method || r.URL.Path != tc.path {
+					t.Errorf("upstream %s %s", r.Method, r.URL.Path)
+				}
+				if r.Host != "localhost:3000" || r.Header.Get("Cookie") != "terserah_session=opaque" {
+					t.Errorf("proxy lost origin host or cookie")
+				}
+				if tc.method != http.MethodGet && (r.Header.Get("Origin") != "http://localhost:3000" || r.Header.Get("X-CSRF-Token") != "csrf-test") {
+					t.Error("proxy lost mutation origin/CSRF")
+				}
+				payload, _ := io.ReadAll(r.Body)
+				if string(payload) != tc.body {
+					t.Errorf("payload=%q, want %q", payload, tc.body)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.response)
+			}))
+			defer backend.Close()
+			h := testHandler(t, backend.URL)
+			r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			r.Host = "localhost:3000"
+			r.Header.Set("Cookie", "terserah_session=opaque")
+			if tc.method != http.MethodGet {
+				r.Header.Set("Origin", "http://localhost:3000")
+				r.Header.Set("X-CSRF-Token", "csrf-test")
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != tc.status || strings.TrimSpace(w.Body.String()) != tc.response {
+				t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
 			}
 		})
 	}

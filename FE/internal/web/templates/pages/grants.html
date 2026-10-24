@@ -21,10 +21,9 @@
         </p>
 
         <p class="grant-note">
-            BE1 belum menyediakan daftar seluruh koneksi database
-            untuk admin. Masukkan ID koneksi database target
-            (database_connections.id) yang sudah terdaftar melalui
-            BE2 atau fixture pengujian tim.
+            Pilih koneksi PostgreSQL yang telah didaftarkan di
+            <a href="/admin/databases">Connections</a>.
+            ID target diambil langsung dari backend, bukan diketik manual.
         </p>
 
         <p id="grants-status"
@@ -45,6 +44,13 @@
         </p>
 
         <div id="grants-panel" hidden>
+            <div class="grant-toolbar">
+                <button type="button" id="grants-refresh" class="button-secondary">Muat Ulang Koneksi</button>
+            </div>
+            <p id="grants-no-databases" role="status" hidden>
+                Belum ada koneksi target. <a href="/admin/databases">Daftarkan koneksi dahulu</a>
+                sebelum memberikan grant.
+            </p>
             <section class="dashboard-panel"
                      aria-labelledby="grant-form-heading">
                 <h2 id="grant-form-heading">
@@ -66,26 +72,11 @@
                     </div>
 
                     <div class="form-group">
-                        <label for="grant-database-id">
-                            ID Database Target (wajib)
-                        </label>
-
-                        <input
-                            id="grant-database-id"
-                            type="text"
-                            inputmode="numeric"
-                            maxlength="19"
-                            placeholder="Contoh: 1"
-                            aria-describedby="grant-id-help"
-                            required
-                            disabled
-                        >
-
-                        <p id="grant-id-help" class="form-help">
-                            Gunakan ID koneksi database target yang
-                            benar-benar terdaftar, bukan nama database
-                            PostgreSQL.
-                        </p>
+                        <label for="grant-database">Database Target (wajib)</label>
+                        <select id="grant-database" required disabled>
+                            <option value="">Pilih database target...</option>
+                        </select>
+                        <p class="form-help">Nama dan ID koneksi diambil dari daftar Connections.</p>
                     </div>
 
                     <div class="form-group">
@@ -129,7 +120,7 @@
                         <thead>
                             <tr>
                                 <th scope="col">Group</th>
-                                <th scope="col">ID Database</th>
+                                <th scope="col">Koneksi Database (ID)</th>
                                 <th scope="col">Akses</th>
                                 <th scope="col">Aksi</th>
                             </tr>
