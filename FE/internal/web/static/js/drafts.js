@@ -3,6 +3,7 @@ import {
     requireAuthenticatedUser,
     isCSRFError
 } from "./auth.js";
+import { executionFeedback, parseExecutionResult, executeErrorMessage } from "./execution.js";
 
 const page = document.getElementById("draft-page");
 const databaseId = page.dataset.databaseId;
@@ -36,6 +37,17 @@ const detailAuthor = document.getElementById("draft-detail-author");
 const detailCreated = document.getElementById("draft-detail-created");
 const detailUpdated = document.getElementById("draft-detail-updated");
 const detailSQL = document.getElementById("draft-detail-sql");
+const executionPanel = document.getElementById("draft-execution");
+const executeButton = document.getElementById("draft-execute");
+const reloadButton = document.getElementById("draft-reload");
+const executionRevision = document.getElementById("draft-execution-revision");
+const executionState = document.getElementById("draft-execution-state");
+const executionMessage = document.getElementById("draft-execution-message");
+const executionResult = document.getElementById("draft-execution-result");
+const resultStatus = document.getElementById("draft-result-status");
+const resultVersion = document.getElementById("draft-result-version");
+const resultID = document.getElementById("draft-result-id");
+const resultError = document.getElementById("draft-result-error");
 
 const apiPath = `/api/v1/databases/${encodeURIComponent(databaseId)}/drafts`;
 
@@ -45,6 +57,8 @@ const maxBodyBytes = 1024 * 1024;
 let selectedDraft = null;
 let busy = false;
 let allowNavigation = false;
+let executing = false;
+let lockedExecution = null; // A sent request may have an unknown outcome. Never retry it automatically.
 
 function showMessage(element, message, isError = false) {
     element.textContent = message;
@@ -105,6 +119,36 @@ function formatDate(value) {
         }).format(date);
 }
 
+function executionKey(draft) {
+    return draft ? `${draft.id}:${draft.revision}` : null;
+}
+
+function updateExecutionControls() {
+    const saved = selectedDraft !== null;
+    const modified = saved && isDirty();
+    const locked = saved && lockedExecution === executionKey(selectedDraft);
+
+    executionPanel.hidden = !saved;
+    executeButton.disabled = busy || !saved || modified || locked;
+    reloadButton.disabled = busy || !saved;
+    executeButton.textContent = executing ? "Menjalankan Migration..." : "Execute Migration";
+
+    if (!saved) return;
+    executionRevision.textContent = selectedDraft.revision;
+    executionState.textContent = locked
+        ? "Eksekusi untuk revisi ini sudah diminta. Periksa History atau buka ulang draft sebelum tindakan lain."
+        : modified
+            ? "Ada perubahan belum disimpan. Simpan perubahan sebelum Execute."
+            : "SQL tersimpan sudah siap ditinjau. Pastikan target dan revisi benar sebelum Execute.";
+}
+
+function resetExecutionFeedback() {
+    lockedExecution = null;
+    executionResult.hidden = true;
+    showMessage(executionMessage, "");
+    updateExecutionControls();
+}
+
 function setBusy(value) {
     busy = value;
 
@@ -118,10 +162,11 @@ function setBusy(value) {
     }
 
     saveButton.textContent = value
-        ? "Menyimpan..."
+        ? "Memproses..."
         : selectedDraft
             ? "Simpan Perubahan"
             : "Buat Draft";
+    updateExecutionControls();
 }
 
 function isDirty() {
@@ -170,6 +215,7 @@ function showDraft(draft) {
     setFieldError(titleInput, titleError, "");
     setFieldError(sqlInput, sqlError, "");
     showMessage(saveMessage, "");
+    resetExecutionFeedback();
 }
 
 function startNewDraft() {
@@ -182,6 +228,7 @@ function startNewDraft() {
 
     form.reset();
     detail.hidden = true;
+    resetExecutionFeedback();
 
     setFieldError(titleInput, titleError, "");
     setFieldError(sqlInput, sqlError, "");
@@ -271,6 +318,87 @@ async function openDraft(draftId) {
         setBusy(false);
     }
 }
+
+function displayExecutionResult(result) {
+    resultStatus.textContent = result.status;
+    resultStatus.className = `migration-status migration-status--${result.status}`;
+    resultVersion.textContent = result.version;
+    resultID.textContent = result.execution_id;
+    resultError.textContent = result.error_code || "-";
+    executionResult.hidden = false;
+
+    const feedback = executionFeedback(result.status);
+    showMessage(executionMessage, feedback.message, feedback.isError);
+}
+
+async function executeDraft() {
+    if (busy || !selectedDraft || isDirty() || lockedExecution === executionKey(selectedDraft)) return;
+
+    const draft = selectedDraft;
+    const revisionKey = executionKey(draft);
+    setBusy(true);
+    showMessage(executionMessage, "Memeriksa revisi terbaru dan hak akses...");
+    executionResult.hidden = true;
+
+    try {
+        // A fresh GET catches stale editor data before asking the user to confirm.
+        const latest = requireDraftShape(await authenticatedRequest(
+            `${apiPath}/${encodeURIComponent(draft.id)}`
+        ));
+        if (latest.revision !== draft.revision || latest.title !== draft.title || latest.sql !== draft.sql) {
+            lockedExecution = revisionKey;
+            showMessage(executionMessage,
+                "Draft di server sudah berubah. Buka ulang draft untuk melihat SQL dan revisi terbaru; tidak ada migration dijalankan.", true);
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `Execute migration di ${databaseName.textContent} (${targetName.textContent})?\n\n` +
+            `Draft: ${draft.title} (ID ${draft.id}, revisi ${draft.revision})\n\n` +
+            "Periksa SQL tersimpan di bagian Detail Draft. Eksekusi mengubah database target. " +
+            "SQL gagal akan di-rollback oleh backend. Lanjutkan?"
+        );
+        if (!confirmed) {
+            showMessage(executionMessage, "Eksekusi dibatalkan. Tidak ada SQL dijalankan.");
+            return;
+        }
+
+        lockedExecution = revisionKey;
+        executing = true;
+        updateExecutionControls();
+        showMessage(executionMessage, "Permintaan eksekusi dikirim. Menunggu hasil backend...");
+        const result = parseExecutionResult(await authenticatedRequest(
+            `${apiPath}/${encodeURIComponent(draft.id)}/execute`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ revision: draft.revision })
+            }
+        ));
+        displayExecutionResult(result);
+    } catch (err) {
+        if (err.status === 401) {
+            redirectToLogin();
+            return;
+        }
+        if (err.status === 403 && !isCSRFError(err)) {
+            workspace.hidden = true;
+            pageError.textContent = "Izin Edit dicabut. Akses migration tidak tersedia.";
+            pageError.hidden = false;
+            return;
+        }
+        showMessage(executionMessage, executeErrorMessage(err), true);
+    } finally {
+        executing = false;
+        setBusy(false);
+    }
+}
+
+executeButton.addEventListener("click", executeDraft);
+reloadButton.addEventListener("click", () => {
+    if (selectedDraft) openDraft(selectedDraft.id);
+});
+titleInput.addEventListener("input", updateExecutionControls);
+sqlInput.addEventListener("input", updateExecutionControls);
 
 newButton.addEventListener("click", startNewDraft);
 

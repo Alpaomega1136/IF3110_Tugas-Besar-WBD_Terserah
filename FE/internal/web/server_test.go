@@ -533,6 +533,9 @@ func TestDraftsPageAndInvalidIDs(t *testing.T) {
 				`id="draft-form"`,
 				`id="draft-list-body"`,
 				`id="draft-detail"`,
+				`id="draft-execution"`,
+				`id="draft-execute"`,
+				`id="draft-execution-result"`,
 				`href="/databases/5/history"`,
 				`/static/js/drafts.js`,
 			} {
@@ -798,6 +801,8 @@ func TestMergedAPIContractProxy(t *testing.T) {
 		"databases": {"GET", "/api/v1/databases", `{"databases":[{"id":"12","name":"target","database_name":"app","access":"edit"}]}`, 200},
 		"draft":     {"GET", "/api/v1/databases/12/drafts/9007199254740993", `{"id":"9007199254740993","database_id":"12","revision":"7","title":"New table","sql":"CREATE TABLE t(id int);"}`, 200},
 		"patch":     {"PATCH", "/api/v1/databases/12/drafts/9007199254740993", `{"id":"9007199254740993","database_id":"12","revision":"8","title":"New table","sql":"CREATE TABLE t(id int);"}`, 200},
+		"execute":   {"POST", "/api/v1/databases/12/drafts/9007199254740993/execute", `{"execution_id":"abcdef0123456789","version":"9","status":"success","error_code":null}`, 200},
+		"pending":   {"POST", "/api/v1/databases/12/drafts/9007199254740994/execute", `{"execution_id":"abcdef0123456790","version":"10","status":"unknown","error_code":null}`, 202},
 		"history":   {"GET", "/api/v1/databases/12/migrations/9007199254740993", `{"database_id":"12","version":"9007199254740993","username":"editor","execution_id":"abcd","sql":"CREATE TABLE t(id int);"}`, 200},
 		"logout":    {"POST", "/api/v1/auth/logout", "", 204},
 	}
@@ -1124,5 +1129,44 @@ func TestViewerReadOnlyProxyPreservesEncodedPathAndErrorStatus(t *testing.T) {
 	}
 	if calls != len(paths) {
 		t.Fatalf("received %d requests, want %d", calls, len(paths))
+	}
+}
+
+func TestExecuteMigrationProxyPreservesRevisionAndCSRF(t *testing.T) {
+	const payload = `{"revision":"9007199254740993"}`
+	const response = `{"execution_id":"abc123","version":"9","status":"unknown","error_code":null}`
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/databases/42/drafts/9007199254740995/execute" || r.Method != http.MethodPost {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		if r.Host != "localhost:3000" || r.Header.Get("Origin") != "http://localhost:3000" {
+			t.Error("Host or Origin changed by reverse proxy")
+		}
+		if r.Header.Get("X-CSRF-Token") != "csrf-test" || r.Header.Get("Cookie") != "terserah_session=opaque-test" {
+			t.Error("CSRF or opaque session not forwarded")
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Error("content type missing")
+		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil || string(raw) != payload {
+			t.Errorf("body=%s err=%v", raw, err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, response)
+	}))
+	defer backend.Close()
+	h := testHandler(t, backend.URL)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/databases/42/drafts/9007199254740995/execute", strings.NewReader(payload))
+	r.Host = "localhost:3000"
+	r.Header.Set("Origin", "http://localhost:3000")
+	r.Header.Set("Cookie", "terserah_session=opaque-test")
+	r.Header.Set("X-CSRF-Token", "csrf-test")
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusAccepted || strings.TrimSpace(w.Body.String()) != response {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
 	}
 }

@@ -34,7 +34,7 @@ Environment opsional:
 - `/admin/grants` — pilih koneksi PostgreSQL nyata, atur/revoke grant View atau Edit untuk group
 - `/admin/databases` — kelola koneksi PostgreSQL target (Platform Admin): daftar, tambah, edit, test, hapus
 - `/databases/{id}/viewer` — explorer PostgreSQL read-only: schemas, tables, columns, constraints, indexes, rows, pagination
-- `/databases/{id}/drafts` — editor migration draft, memerlukan akses `edit`
+- `/databases/{id}/drafts` — editor draft dan Execute Migration berkonfirmasi, memerlukan akses `edit`
 - `/databases/{id}/history` — riwayat eksekusi migration, memerlukan akses `view` atau `edit`
 
 ## Pengujian
@@ -86,3 +86,13 @@ go vet ./...
 ```
 
 Pengujian browser memerlukan PostgreSQL target terpisah dari metadata, kredensial target valid, serta grant yang sesuai. Tes otomatis mock HTTP bukan pengganti uji browser FE–BE–PostgreSQL.
+
+## Execute Migration 
+
+Login sebagai user dengan grant `edit`, buka Draft dari Dashboard, lalu simpan SQL yang ingin dijalankan. Pada Draft tersimpan, tinjau SQL, revision dan target, klik **Execute Migration**, kemudian konfirmasi. Tombol Execute dinonaktifkan jika belum tersimpan, ada perubahan lokal yang belum disimpan, sedang memproses permintaan, atau permintaan untuk revision tersebut sudah dikirim.
+
+FE memanggil `POST /api/v1/databases/{id}/drafts/{draftID}/execute` dengan JSON `{ "revision": "N" }` dan CSRF sesi. Hasil BE2 dibaca dari `status`, bukan hanya kode HTTP: `success` = commit, `failed` = rollback, sedangkan `running`/`unknown` **belum final**. Tampilkan version, execution ID dan error code, lalu periksa History; tidak ada retry otomatis pada error jaringan atau status ambigu.
+
+Sebelum pengujian live, gunakan **database target disposable yang bukan metadata**. Role target harus executor restricted (bukan superuser atau owner berlebih), dan admin PostgreSQL harus menjalankan `BE/sql/provision_target_history.sql` pada target sesuai petunjuk BE. Jangan menjalankan script provisioning itu melalui UI Draft. Tes SQL gagal pada target disposable untuk membuktikan rollback.
+
+`409 target_history_unprotected` berarti ledger belum aman, bukan masalah tombol FE. `409 execution_conflict`/`migration_busy` membutuhkan pemeriksaan History; `409 target_identity_conflict` membutuhkan bantuan admin target. Jika CSRF/session expired, login ulang; jangan mengirim ulang eksekusi sebelum mengetahui outcome.

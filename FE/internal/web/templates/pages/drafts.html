@@ -46,8 +46,8 @@
                 </p>
 
                 <p class="form-help">
-                    Draft hanya menyimpan SQL.
-                    Tidak ada SQL yang dieksekusi pada tahap ini.
+                    Draft menyimpan SQL tanpa menjalankannya. Setelah disimpan,
+                    pengguna dengan akses Edit dapat meninjau dan menjalankan migration.
                 </p>
             </section>
 
@@ -173,6 +173,38 @@
                 <h3>SQL Tersimpan</h3>
                 <pre id="draft-detail-sql"
                      class="draft-sql-preview"></pre>
+            </section>
+
+            <section id="draft-execution" class="dashboard-panel draft-execution"
+                     aria-labelledby="draft-execution-heading" hidden>
+                <h2 id="draft-execution-heading">Execute Migration</h2>
+                <p class="form-help">Hanya draft yang sudah tersimpan dan tidak memiliki perubahan
+                    lokal yang bisa dijalankan. Sebelum Execute, tinjau SQL pada Detail Draft,
+                    database target, dan revision. Eksekusi dilakukan dalam transaksi oleh backend;
+                    jika salah satu statement gagal, transaksi di-rollback.</p>
+                <dl class="draft-execution-metadata">
+                    <dt>Revision tersimpan</dt>
+                    <dd id="draft-execution-revision"></dd>
+                </dl>
+                <p id="draft-execution-state" role="status" aria-live="polite"></p>
+                <div class="draft-execution-actions">
+                    <button type="button" id="draft-execute" disabled>Execute Migration</button>
+                    <button type="button" id="draft-reload" class="button-secondary">Muat Ulang Draft</button>
+                    <a href="/databases/{{.DatabaseID}}/history">Lihat Migration History</a>
+                </div>
+                <p id="draft-execution-message" role="status" aria-live="polite" hidden></p>
+                <section id="draft-execution-result" class="draft-execution-result"
+                         aria-labelledby="draft-execution-result-heading" hidden>
+                    <h3 id="draft-execution-result-heading">Hasil Eksekusi</h3>
+                    <dl class="draft-execution-metadata">
+                        <dt>Status</dt><dd><span id="draft-result-status"></span></dd>
+                        <dt>Version</dt><dd id="draft-result-version"></dd>
+                        <dt>Execution ID</dt><dd id="draft-result-id"></dd>
+                        <dt>Error Code</dt><dd id="draft-result-error"></dd>
+                    </dl>
+                    <p class="form-help">Status running atau unknown bukan bukti commit/rollback.
+                        Periksa Migration History; jangan menjalankan ulang secara otomatis.</p>
+                </section>
             </section>
 
         </div>
