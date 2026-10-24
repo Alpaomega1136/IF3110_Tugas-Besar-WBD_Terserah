@@ -43,7 +43,7 @@ func TestRootRedirectAndStatic(t *testing.T) {
 		t.Fatalf("unexpected root response: %d %q", w.Code, w.Header().Get("Location"))
 	}
 
-	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js", "/static/js/users.js", "/static/js/groups.js", "/static/js/grants.js"} {
+	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js", "/static/js/users.js", "/static/js/groups.js", "/static/js/grants.js", "/static/js/drafts.js"} {
 		w = httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, asset, nil))
 		if w.Code != http.StatusOK {
@@ -100,6 +100,7 @@ func TestDashboardPage(t *testing.T) {
 		`id="databases-body"`,
 		`id="databases-empty"`,
 		`/static/js/dashboard.js`,
+		`<th scope="col">Draft Migration</th>`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("dashboard page missing %q", expected)
@@ -444,34 +445,23 @@ func TestDatabaseAndGrantProxy(t *testing.T) {
 							)
 						}
 
-						if r.Header.Get("Cookie") !=
-							"terserah_session=test-session" {
+						if r.Header.Get("Cookie") != "terserah_session=test-session" {
 							t.Error("session cookie missing")
 						}
 
-						if tc.method != http.MethodGet &&
-							r.Header.Get("X-CSRF-Token") != "test-token" {
+						if tc.method != http.MethodGet && r.Header.Get("X-CSRF-Token") != "test-token" {
 							t.Error("CSRF header missing")
 						}
 
 						gotBody, _ := io.ReadAll(r.Body)
 
 						if string(gotBody) != tc.body {
-							t.Errorf(
-								"body = %q, want %q",
-								gotBody, tc.body,
-							)
+							t.Errorf("body = %q, want %q", gotBody, tc.body)
 						}
 
-						w.Header().Set(
-							"Content-Type",
-							"application/json",
-						)
+						w.Header().Set("Content-Type",  "application/json")
 
-						_, _ = io.WriteString(
-							w,
-							`{"status":"ok"}`,
-						)
+						_, _ = io.WriteString(w, `{"status":"ok"}`)
 					},
 				),
 			)
@@ -499,6 +489,155 @@ func TestDatabaseAndGrantProxy(t *testing.T) {
 			if w.Code != http.StatusOK {
 				t.Fatalf(
 					"proxy status = %d",
+					w.Code,
+				)
+			}
+		})
+	}
+}
+
+func TestDraftsPageAndInvalidIDs(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+
+	cases := []struct {
+		path   string
+		status int
+	}{
+		{"/databases/5/drafts", http.StatusOK},
+		{"/databases/0/drafts", http.StatusBadRequest},
+		{"/databases/nope/drafts", http.StatusBadRequest},
+		{"/databases/9223372036854775808/drafts", http.StatusBadRequest},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+
+			h.ServeHTTP(
+				w,
+				httptest.NewRequest(http.MethodGet, tc.path, nil),
+			)
+
+			if w.Code != tc.status {
+				t.Fatalf("status=%d, want %d", w.Code, tc.status)
+			}
+
+			if tc.status != http.StatusOK {
+				return
+			}
+
+			for _, part := range []string{
+				"Migration Drafts - Terserah",
+				`data-database-id="5"`,
+				`id="draft-form"`,
+				`id="draft-list-body"`,
+				`id="draft-detail"`,
+				`/static/js/drafts.js`,
+			} {
+				if !strings.Contains(w.Body.String(), part) {
+					t.Errorf("missing %q", part)
+				}
+			}
+
+			if strings.Contains(w.Body.String(), `id="login-form"`) {
+				t.Error("rendered login content")
+			}
+
+			if w.Header().Get("Cache-Control") != "no-store" {
+				t.Error("missing no-store")
+			}
+		})
+	}
+}
+
+func TestDraftAPIProxy(t *testing.T) {
+	cases := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, "/api/v1/databases/5/drafts", ""},
+		{http.MethodGet, "/api/v1/databases/5/drafts/12", ""},
+		{http.MethodPost, "/api/v1/databases/5/drafts", `{"title":"init","sql":"SELECT 1;"}`},
+		{http.MethodPatch, "/api/v1/databases/5/drafts/12", `{"sql":"SELECT 2;"}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			backend := httptest.NewServer(
+				http.HandlerFunc(
+					func(w http.ResponseWriter, r *http.Request) {
+						if r.Method != tc.method || r.URL.Path != tc.path {
+							t.Errorf("got %s %s", r.Method, r.URL.Path)
+						}
+
+						if r.Host != "localhost:3000" || r.Header.Get("Origin") != "http://localhost:3000" {
+							t.Error("Host/Origin missing")
+						}
+
+						if r.Header.Get("Cookie") != "terserah_session=test-session" {
+							t.Error("cookie missing")
+						}
+
+						if tc.method != http.MethodGet && r.Header.Get("X-CSRF-Token") != "test-token" {
+							t.Error("csrf missing")
+						}
+
+						data, err := io.ReadAll(r.Body)
+						if err != nil {
+							t.Fatal(err)
+						}
+
+						if string(data) != tc.body {
+							t.Errorf("body=%q want=%q", data, tc.body)
+						}
+
+						w.Header().Set("Content-Type", "application/json")
+
+						_, _ = io.WriteString(
+							w,
+							`{"drafts":[]}`,
+						)
+					},
+				),
+			)
+			defer backend.Close()
+
+			h := testHandler(t, backend.URL)
+
+			req := httptest.NewRequest(
+				tc.method,
+				tc.path,
+				strings.NewReader(tc.body),
+			)
+
+			req.Host = "localhost:3000"
+			req.Header.Set(
+				"Origin",
+				"http://localhost:3000",
+			)
+			req.Header.Set(
+				"Cookie",
+				"terserah_session=test-session",
+			)
+
+			if tc.method != http.MethodGet {
+				req.Header.Set(
+					"Content-Type",
+					"application/json",
+				)
+				req.Header.Set(
+					"X-CSRF-Token",
+					"test-token",
+				)
+			}
+
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf(
+					"proxy returned %d",
 					w.Code,
 				)
 			}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 )
 
 //go:embed templates static
@@ -40,6 +41,11 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 	grantsTemplate, err := parsePageTemplate("grants")
 	if err != nil {
 		return nil, fmt.Errorf("parse grants template: %w", err)
+	}
+
+	draftsTemplate, err := parsePageTemplate("drafts")
+	if err != nil {
+		return nil, fmt.Errorf("parse drafts template: %w", err)
 	}
 
 	staticFiles, err := fs.Sub(assets, "static")
@@ -96,6 +102,23 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 		pageHandler(grantsTemplate, PageData{
 			Title: "Database Grants - Terserah",
 		}),
+	)
+
+	mux.HandleFunc("GET /databases/{id}/drafts",
+		func(w http.ResponseWriter, r *http.Request) {
+			databaseID := r.PathValue("id")
+
+			id, err := strconv.ParseInt(databaseID, 10, 64)
+			if err != nil || id <= 0 {
+				http.Error(w, "ID database tidak valid", http.StatusBadRequest)
+				return
+			}
+
+			pageHandler(draftsTemplate, PageData{
+				Title:      "Migration Drafts - Terserah",
+				DatabaseID: strconv.FormatInt(id, 10),
+			})(w, r)
+		},
 	)
 
 	return mux, nil

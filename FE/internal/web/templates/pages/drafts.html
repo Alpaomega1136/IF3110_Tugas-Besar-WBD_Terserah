@@ -1,0 +1,177 @@
+{{define "content"}}
+<div class="app-shell">
+    <header class="app-header">
+        <a class="app-brand" href="/dashboard">Terserah</a>
+
+        <nav class="app-nav" aria-label="Navigasi utama">
+            <a href="/dashboard">Dashboard</a>
+        </nav>
+    </header>
+
+    <main class="app-main" id="draft-page"
+          data-database-id="{{.DatabaseID}}">
+        <h1>Migration Drafts</h1>
+
+        <p id="draft-page-status"
+           role="status" aria-live="polite">
+            Memeriksa session dan hak akses...
+        </p>
+
+        <p id="draft-page-error"
+           class="error-message"
+           role="alert" hidden></p>
+
+        <div id="draft-workspace" hidden>
+
+            <section class="dashboard-panel"
+                     aria-labelledby="draft-database-heading">
+                <h2 id="draft-database-heading">
+                    Database: <span id="draft-database-name"></span>
+                </h2>
+
+                <p>
+                    Database target:
+                    <span id="draft-target-name"></span>
+                </p>
+
+                <p>
+                    Hak akses efektif:
+                    <strong id="draft-access"></strong>
+                </p>
+
+                <p class="form-help">
+                    Draft hanya menyimpan SQL.
+                    Tidak ada SQL yang dieksekusi pada tahap ini.
+                </p>
+            </section>
+
+            <section class="dashboard-panel"
+                     aria-labelledby="draft-list-heading">
+                <div class="draft-heading-row">
+                    <h2 id="draft-list-heading">Daftar Draft</h2>
+                    <button type="button" id="draft-new"
+                            class="button-secondary">
+                        Draft Baru
+                    </button>
+                </div>
+
+                <p id="draft-list-status"
+                   role="status" aria-live="polite">
+                    Memuat draft...
+                </p>
+
+                <p id="draft-list-error"
+                   class="error-message"
+                   role="alert" hidden></p>
+
+                <p id="draft-list-empty" hidden>
+                    Belum ada draft untuk database ini.
+                </p>
+
+                <div id="draft-list-table"
+                     class="users-table-wrapper" hidden>
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">ID</th>
+                                <th scope="col">Judul</th>
+                                <th scope="col">Pembuat</th>
+                                <th scope="col">Diperbarui</th>
+                                <th scope="col">Aksi</th>
+                            </tr>
+                        </thead>
+
+                        <tbody id="draft-list-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="dashboard-panel"
+                     aria-labelledby="draft-editor-heading">
+                <h2 id="draft-editor-heading">Buat Draft Baru</h2>
+
+                <p id="draft-current-id"
+                   class="form-help" hidden></p>
+
+                <form id="draft-form" class="draft-form" novalidate>
+                    <div class="form-group">
+                        <label for="draft-title">
+                            Judul Draft (wajib)
+                        </label>
+
+                        <input id="draft-title"
+                               name="title"
+                               type="text"
+                               maxlength="200"
+                               required
+                               aria-describedby="draft-title-error">
+
+                        <p id="draft-title-error"
+                           class="error-message" hidden></p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="draft-sql">
+                            SQL Migration (wajib)
+                        </label>
+
+                        <textarea id="draft-sql"
+                                  name="sql"
+                                  rows="14"
+                                  required
+                                  spellcheck="false"
+                                  aria-describedby="draft-sql-help draft-sql-error"></textarea>
+
+                        <p id="draft-sql-help" class="form-help">
+                            Maksimum 1 MiB SQL.
+                            Menyimpan draft tidak menjalankan SQL.
+                        </p>
+
+                        <p id="draft-sql-error"
+                           class="error-message" hidden></p>
+                    </div>
+
+                    <button id="draft-save" type="submit">
+                        Buat Draft
+                    </button>
+
+                    <p id="draft-save-message"
+                       role="status" aria-live="polite"
+                       hidden></p>
+                </form>
+            </section>
+
+            <section id="draft-detail"
+                     class="dashboard-panel"
+                     aria-labelledby="draft-detail-heading"
+                     hidden>
+                <h2 id="draft-detail-heading">
+                    Detail Draft Tersimpan
+                </h2>
+
+                <p>
+                    Pembuat:
+                    <span id="draft-detail-author"></span>
+                </p>
+
+                <p>
+                    Dibuat:
+                    <span id="draft-detail-created"></span>
+                </p>
+
+                <p>
+                    Diperbarui:
+                    <span id="draft-detail-updated"></span>
+                </p>
+
+                <h3>SQL Tersimpan</h3>
+                <pre id="draft-detail-sql"
+                     class="draft-sql-preview"></pre>
+            </section>
+
+        </div>
+    </main>
+</div>
+
+<script type="module" src="/static/js/drafts.js"></script>
+{{end}}

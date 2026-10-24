@@ -10,7 +10,8 @@ import (
 )
 
 type PageData struct {
-	Title string
+	Title      string
+	DatabaseID string
 }
 
 func parsePageTemplate(name string) (*template.Template, error) {

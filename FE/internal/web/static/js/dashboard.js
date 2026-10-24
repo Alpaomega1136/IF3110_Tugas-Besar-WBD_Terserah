@@ -55,6 +55,19 @@ async function loadDatabases() {
                         ? "View Only"
                         : "Tidak diketahui"
             );
+ 
+            const actionCell = document.createElement("td");
+
+            if (database.effective_access === "edit") {
+                const link = document.createElement("a");
+                link.href = `/databases/${encodeURIComponent(String(database.id))}/drafts`;
+                link.textContent = "Kelola Draft";
+                actionCell.appendChild(link);
+            } else {
+                actionCell.textContent = "Memerlukan akses Edit";
+            }
+
+            row.appendChild(actionCell);
 
             databasesBody.appendChild(row);
         }
