@@ -76,14 +76,8 @@ function makeStatus(status) {
 }
 
 function versionString(version) {
-    if (typeof version === "number") {
-        return Number.isSafeInteger(version) && version > 0
-            ? String(version) : null;
-    }
-
     if (typeof version === "string" && /^[1-9][0-9]*$/.test(version)) {
-        return BigInt(version) <= 9223372036854775807n
-            ? version : null;
+        return BigInt(version) <= 9223372036854775807n ? version : null;
     }
 
     return null;
@@ -146,7 +140,7 @@ function renderHistory(entries) {
         statusCell.appendChild(makeStatus(entry.status));
         row.appendChild(statusCell);
 
-        addCell(row, entry.executed_by_username || "-");
+        addCell(row, entry.username || "-");
         addCell(row, formatDate(entry.started_at));
         addCell(row, formatDate(entry.finished_at, true));
 
@@ -180,8 +174,7 @@ function renderHistory(entries) {
     if (unsafeVersion) {
         showMessage(
             listError,
-            "Ada nomor versi di luar batas integer aman JavaScript. " +
-            "Minta BE1 mengirim version sebagai string agar detail dapat dibuka."
+            "Ada versi migration yang bukan string int64 valid. Muat ulang atau periksa data backend."
         );
     }
 }
@@ -189,7 +182,7 @@ function renderHistory(entries) {
 function showHistory(entry, version) {
     if (
         !entry ||
-        String(entry.database_id) !== databaseId ||
+        entry.database_id !== databaseId ||
         versionString(entry.version) !== version ||
         typeof entry.sql !== "string"
     ) {
@@ -198,10 +191,11 @@ function showHistory(entry, version) {
 
     const fields = {
         "history-detail-version": version,
-        "history-detail-id": entry.id ?? "-",
+        "history-detail-execution-id": entry.execution_id ?? "-",
+        "history-detail-draft-revision": entry.draft_revision ?? "-",
         "history-detail-draft-id": entry.draft_id ?? "-",
         "history-detail-result": statusLabel(entry.status),
-        "history-detail-executor": entry.executed_by_username || "-",
+        "history-detail-executor": entry.username || "-",
         "history-detail-started": formatDate(entry.started_at),
         "history-detail-finished": formatDate(entry.finished_at, true),
         "history-detail-error-code": entry.error_code ?? "-"
@@ -231,7 +225,7 @@ async function openHistory(version) {
         const result = await authenticatedRequest(
             `${apiPath}/${encodeURIComponent(version)}`
         );
-        showHistory(result?.migration, version);
+        showHistory(result, version);
     } catch (error) {
         handleRequestError(error, detailError);
     } finally {
@@ -281,16 +275,16 @@ async function initialize() {
 
         const database = result.databases.find((item) => String(item.id) === databaseId);
 
-        if (!database || !["view", "edit"].includes(database.effective_access)) {
+        if (!database || !["view", "edit"].includes(database.access)) {
             throw new Error("Database tidak ditemukan atau tidak dapat diakses.");
         }
 
         databaseName.textContent = database.name;
         targetName.textContent = database.database_name;
 
-        access.textContent = database.effective_access === "edit" ? "View + Edit" : "View Only";
+        access.textContent = database.access === "edit" ? "View + Edit" : "View Only";
 
-        draftsLink.hidden = database.effective_access !== "edit";
+        draftsLink.hidden = database.access !== "edit";
         workspace.hidden = false;
 
         await loadHistory();

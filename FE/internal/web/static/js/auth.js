@@ -1,4 +1,3 @@
-
 import { apiRequest } from "./api.js";
 
 let csrfToken = null;
@@ -11,9 +10,17 @@ export function clearAuthState() {
     csrfPending = null;
 }
 
+export function isCSRFError(error) {
+    return error?.status === 403 && error.code === "csrf_rejected";
+}
+
 export async function getCurrentUser() {
-    const data = await apiRequest("/api/v1/auth/me");
-    return data.user;
+    const principal = await apiRequest("/api/v1/auth/me");
+    if (typeof principal?.id !== "string" || typeof principal.username !== "string" ||
+        typeof principal.is_platform_admin !== "boolean") {
+        throw new Error("Format principal dari backend tidak valid.");
+    }
+    return principal;
 }
 
 export async function requireAuthenticatedUser() {
@@ -29,65 +36,49 @@ export async function requireAuthenticatedUser() {
     }
 }
 
-
 export async function getCSRFToken() {
     if (csrfToken) return csrfToken;
     if (csrfPending) return csrfPending;
 
-    const requestVersion = authVersion;
-
-    const request = apiRequest("/api/v1/auth/csrf").then((data) => {
-            if (requestVersion !== authVersion) {
-                throw new Error("Sesi berubah. Silakan ulangi tindakan.");
-            }
-
-            if (typeof data?.csrf_token !== "string" || !data.csrf_token) {
-                throw new Error("Token CSRF tidak tersedia.");
-            }
-
-            csrfToken = data.csrf_token;
-            return csrfToken;
-        });
-
-    csrfPending = request;
+    const version = authVersion;
+    const pending = apiRequest("/api/v1/auth/csrf").then((data) => {
+        if (version !== authVersion) throw new Error("Sesi berubah. Silakan ulangi tindakan.");
+        if (typeof data?.csrf_token !== "string" || !data.csrf_token) {
+            throw new Error("Token CSRF tidak tersedia.");
+        }
+        csrfToken = data.csrf_token;
+        return csrfToken;
+    });
+    csrfPending = pending;
 
     try {
-        return await request;
+        return await pending;
     } finally {
-        if (csrfPending === request) {
-            csrfPending = null;
-        }
+        if (csrfPending === pending) csrfPending = null;
     }
 }
 
 export async function authenticatedRequest(path, options = {}) {
     const method = (options.method ?? "GET").toUpperCase();
     const headers = new Headers(options.headers);
-
     if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
         headers.set("X-CSRF-Token", await getCSRFToken());
     }
 
     try {
-        return await apiRequest(path, {
-            ...options,
-            headers,
-        });
+        return await apiRequest(path, { ...options, headers });
     } catch (error) {
-        if (error.status === 401 || error.code === "csrf_invalid") {
-            clearAuthState();
-        }
+        if (error.status === 401 || isCSRFError(error)) clearAuthState();
         throw error;
     }
 }
 
 export async function logout() {
     try {
-        await authenticatedRequest("/api/v1/auth/logout", {
-            method: "POST",
-        });
+        await authenticatedRequest("/api/v1/auth/logout", { method: "POST" });
     } catch (error) {
         if (error.status !== 401) throw error;
+    } finally {
+        clearAuthState();
     }
-    clearAuthState();
 }

@@ -1,6 +1,7 @@
 import {
     authenticatedRequest,
-    requireAuthenticatedUser
+    requireAuthenticatedUser,
+    isCSRFError
 } from "./auth.js";
 
 const page = document.getElementById("draft-page");
@@ -72,7 +73,7 @@ function handleError(err, target = saveMessage) {
         return;
     }
 
-    if (err.status === 403 && err.code !== "csrf_invalid") {
+    if (err.status === 403 && !isCSRFError(err)) {
         workspace.hidden = true;
         pageError.textContent = "Hak akses Edit ditolak atau telah dicabut. " + "Kembali ke Dashboard.";
         pageError.hidden = false;
@@ -80,10 +81,10 @@ function handleError(err, target = saveMessage) {
     }
 
     const message =
-        err.status === 403 && err.code === "csrf_invalid"
+        err.status === 403 && isCSRFError(err)
             ? "Token CSRF tidak valid. Silakan coba lagi."
             : err.status === 409
-                ? "Draft sudah dieksekusi/dikunci dan tidak bisa diubah."
+                ? "Revisi draft berubah atau eksekusi masih terkunci. Muat ulang draft sebelum menyimpan."
                 : err.status === 404
                     ? "Draft tidak ditemukan pada database ini."
                     : (err.message || "Operasi draft gagal.");
@@ -135,8 +136,14 @@ function confirmDiscard() {
     return !isDirty() || window.confirm("Ada perubahan draft yang belum disimpan. " + "Abaikan perubahan?");
 }
 
+function validInt64String(value) {
+    return typeof value === "string" && /^[1-9][0-9]*$/.test(value) &&
+        BigInt(value) <= 9223372036854775807n;
+}
+
 function requireDraftShape(draft) {
-    if (!draft || String(draft.database_id) !== databaseId || !/^[1-9][0-9]*$/.test(String(draft.id)) ||
+    if (!draft || draft.database_id !== databaseId ||
+        !validInt64String(draft.id) || !validInt64String(draft.revision) ||
         typeof draft.title !== "string" || typeof draft.sql !== "string") {
         throw new Error("Format detail draft dari backend tidak valid.");
     }
@@ -252,7 +259,7 @@ async function openDraft(draftId) {
             `${apiPath}/${encodeURIComponent(draftId)}`
         );
 
-        showDraft(result?.draft);
+        showDraft(result);
 
         form.scrollIntoView({
             behavior: "smooth",
@@ -295,22 +302,13 @@ form.addEventListener("submit", async (event) => {
         return;
     }
 
-    const payload = selectedDraft ? {} : { title, sql };
-
-    if (selectedDraft) {
-        if (title !== selectedDraft.title) {
-            payload.title = title;
-        }
-
-        if (sql !== selectedDraft.sql) {
-            payload.sql = sql;
-        }
-
-        if (Object.keys(payload).length === 0) {
-            showMessage(saveMessage, "Tidak ada perubahan yang perlu disimpan.");
-            return;
-        }
+    if (selectedDraft && title === selectedDraft.title && sql === selectedDraft.sql) {
+        showMessage(saveMessage, "Tidak ada perubahan yang perlu disimpan.");
+        return;
     }
+    const payload = selectedDraft
+        ? { title, sql, revision: selectedDraft.revision }
+        : { title, sql };
 
     const serialized = JSON.stringify(payload);
 
@@ -334,7 +332,7 @@ form.addEventListener("submit", async (event) => {
             body: serialized
         });
 
-        showDraft(result?.draft);
+        showDraft(result);
 
         try {
             await loadDrafts();
@@ -388,7 +386,7 @@ async function initialize() {
             throw new Error("Database tidak ditemukan atau tidak dapat diakses.");
         }
 
-        if (database.effective_access !== "edit") {
+        if (database.access !== "edit") {
             throw new Error("Akses View Only tidak diizinkan membuka migration draft.");
         }
 

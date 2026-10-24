@@ -62,7 +62,7 @@ func TestReverseProxyPreservesOriginHostAndCookies(t *testing.T) {
 		}
 		w.Header().Set("Set-Cookie", "terserah_session=opaque; Path=/; HttpOnly; SameSite=Lax")
 		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, `{"user":{"username":"admin"}}`)
+		_, _ = io.WriteString(w, `{"id":"1","username":"admin","is_platform_admin":true}`)
 	}))
 	defer backend.Close()
 
@@ -782,6 +782,69 @@ func TestHistoryPageAndInvalidIDs(t *testing.T) {
 
 			if got := w.Header().Get("Cache-Control"); got != "no-store" {
 				t.Errorf("Cache-Control=%q, want no-store", got)
+			}
+		})
+	}
+}
+
+func TestMergedAPIContractProxy(t *testing.T) {
+	fixtures := map[string]struct {
+		method, path, body string
+		status             int
+	}{
+		"csrf":      {"GET", "/api/v1/auth/csrf", `{"csrf_token":"before-login"}`, 200},
+		"login":     {"POST", "/api/v1/auth/login", `{"id":"31","username":"editor","is_platform_admin":false}`, 200},
+		"me":        {"GET", "/api/v1/auth/me", `{"id":"31","username":"editor","is_platform_admin":false}`, 200},
+		"databases": {"GET", "/api/v1/databases", `{"databases":[{"id":"12","name":"target","database_name":"app","access":"edit"}]}`, 200},
+		"draft":     {"GET", "/api/v1/databases/12/drafts/9007199254740993", `{"id":"9007199254740993","database_id":"12","revision":"7","title":"New table","sql":"CREATE TABLE t(id int);"}`, 200},
+		"patch":     {"PATCH", "/api/v1/databases/12/drafts/9007199254740993", `{"id":"9007199254740993","database_id":"12","revision":"8","title":"New table","sql":"CREATE TABLE t(id int);"}`, 200},
+		"history":   {"GET", "/api/v1/databases/12/migrations/9007199254740993", `{"database_id":"12","version":"9007199254740993","username":"editor","execution_id":"abcd","sql":"CREATE TABLE t(id int);"}`, 200},
+		"logout":    {"POST", "/api/v1/auth/logout", "", 204},
+	}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "localhost:3000" {
+			t.Errorf("backend host %q", r.Host)
+		}
+		if r.Method != http.MethodGet {
+			if r.Header.Get("Origin") != "http://localhost:3000" || r.Header.Get("X-CSRF-Token") != "client-token" {
+				t.Errorf("missing Origin/CSRF for %s %s", r.Method, r.URL.Path)
+			}
+		}
+		if r.Header.Get("Cookie") != "terserah_session=test-opaque" {
+			t.Errorf("missing cookie on %s", r.URL.Path)
+		}
+		for _, f := range fixtures {
+			if r.Method == f.method && r.URL.Path == f.path {
+				if f.path == "/api/v1/auth/csrf" {
+					w.Header().Set("Set-Cookie", "terserah_login_csrf=opaque; Path=/; HttpOnly; SameSite=Lax")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(f.status)
+				_, _ = io.WriteString(w, f.body)
+				return
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	defer backend.Close()
+
+	h := testHandler(t, backend.URL)
+	for name, f := range fixtures {
+		t.Run(name, func(t *testing.T) {
+			r := httptest.NewRequest(f.method, f.path, nil)
+			r.Host = "localhost:3000"
+			r.Header.Set("Cookie", "terserah_session=test-opaque")
+			if f.method != http.MethodGet {
+				r.Header.Set("Origin", "http://localhost:3000")
+				r.Header.Set("X-CSRF-Token", "client-token")
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != f.status || strings.TrimSpace(w.Body.String()) != f.body {
+				t.Fatalf("%s %s: status=%d body=%q", f.method, f.path, w.Code, w.Body.String())
+			}
+			if name == "csrf" && !strings.Contains(w.Header().Get("Set-Cookie"), "HttpOnly") {
+				t.Fatal("prelogin cookie missing from proxy response")
 			}
 		})
 	}

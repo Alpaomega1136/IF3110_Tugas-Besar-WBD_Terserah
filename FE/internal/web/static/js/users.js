@@ -1,6 +1,7 @@
 import {
     authenticatedRequest,
-    requireAuthenticatedUser
+    requireAuthenticatedUser,
+    isCSRFError
 } from "./auth.js";
 
 const status = document.getElementById("users-status");
@@ -218,7 +219,7 @@ createForm.addEventListener("submit", async (event) => {
             setFieldError(usernameInput, usernameError, "Username sudah digunakan.");
             usernameInput.focus();
             setCreateMessage("Gunakan username lain.", true);
-        } else if (error.status === 403 && error.code === "csrf_invalid") {
+        } else if (error.status === 403 && isCSRFError(error)) {
             setCreateMessage("Token CSRF tidak valid. Silakan klik Buat Pengguna lagi.", true);
         } else if (error.status === 403) {
             setCreateMessage("Akses ditolak. Hanya Platform Admin yang boleh membuat user.", true);
@@ -379,7 +380,7 @@ editForm.addEventListener("submit", async (event) => {
 
         if (
             error.status === 403 &&
-            error.code === "csrf_invalid"
+            isCSRFError(error)
         ) {
             setEditMessage(
                 "Token CSRF tidak valid. Silakan coba simpan lagi.",

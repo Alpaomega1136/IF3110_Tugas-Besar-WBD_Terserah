@@ -1,6 +1,7 @@
 import {
     authenticatedRequest,
-    requireAuthenticatedUser
+    requireAuthenticatedUser,
+    isCSRFError
 } from "./auth.js";
 
 const status = document.getElementById("grants-status");
@@ -170,7 +171,7 @@ function handleError(err) {
         return;
     }
 
-    if (err.status === 403 && err.code === "csrf_invalid") {
+    if (err.status === 403 && isCSRFError(err)) {
         showMessage(
             "Token CSRF tidak valid. Silakan coba lagi.",
             true

@@ -12,8 +12,6 @@ Frontend IF3110 Milestone 1 untuk Database Management Platform.
 
 ## Menjalankan
 
-Jalankan BE pada port 8080 terlebih dahulu.
-
 Dari direktori `FE/`:
 
 ```powershell

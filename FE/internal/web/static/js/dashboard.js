@@ -49,16 +49,16 @@ async function loadDatabases() {
 
             addDatabaseCell(
                 row,
-                database.effective_access === "edit"
+                database.access === "edit"
                     ? "View + Edit"
-                    : database.effective_access === "view"
+                    : database.access === "view"
                         ? "View Only"
                         : "Tidak diketahui"
             );
  
             const actionCell = document.createElement("td");
 
-            if (database.effective_access === "edit") {
+            if (database.access === "edit") {
                 const link = document.createElement("a");
                 link.href = `/databases/${encodeURIComponent(String(database.id))}/drafts`;
                 link.textContent = "Kelola Draft";

@@ -1,6 +1,7 @@
 import {
     authenticatedRequest,
-    requireAuthenticatedUser
+    requireAuthenticatedUser,
+    isCSRFError
 } from "./auth.js";
 
 const status = document.getElementById("groups-status");
@@ -280,7 +281,7 @@ async function removeMember(group, userId, label) {
 
         if (
             err.status === 403 &&
-            err.code === "csrf_invalid"
+            isCSRFError(err)
         ) {
             setMembershipMessage(
                 "Token CSRF tidak valid. Silakan coba lagi.",
@@ -434,7 +435,7 @@ createForm.addEventListener("submit", async (event) => {
             );
         } else if (
             err.status === 403 &&
-            err.code === "csrf_invalid"
+            isCSRFError(err)
         ) {
             setCreateMessage(
                 "Token CSRF tidak valid. Silakan klik Buat Group lagi.",
@@ -525,7 +526,7 @@ membershipForm.addEventListener("submit", async (event) => {
 
         if (
             err.status === 403 &&
-            err.code === "csrf_invalid"
+            isCSRFError(err)
         ) {
             setMembershipMessage(
                 "Token CSRF tidak valid. Silakan coba lagi.",
