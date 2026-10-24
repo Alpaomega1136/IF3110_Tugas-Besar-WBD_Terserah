@@ -43,7 +43,7 @@ func TestRootRedirectAndStatic(t *testing.T) {
 		t.Fatalf("unexpected root response: %d %q", w.Code, w.Header().Get("Location"))
 	}
 
-	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js", "/static/js/users.js"} {
+	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js", "/static/js/users.js", "/static/js/groups.js"} {
 		w = httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, asset, nil))
 		if w.Code != http.StatusOK {
@@ -194,5 +194,152 @@ func TestUpdateUserProxy(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("PATCH returned %d, want 200", w.Code)
+	}
+}
+
+func TestAdminGroupsPage(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(
+		w,
+		httptest.NewRequest(http.MethodGet, "/admin/groups", nil),
+	)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf(
+			"GET /admin/groups returned %d",
+			w.Code,
+		)
+	}
+
+	body := w.Body.String()
+
+	for _, expected := range []string{
+		"Group Management - Terserah",
+		`id="groups-section"`,
+		`id="groups-body"`,
+		`id="create-group-form"`,
+		`id="create-group-name"`,
+		`id="create-group-submit"`,
+		`id="membership-form"`,
+		`id="membership-group"`,
+		`id="membership-user"`,
+		`id="membership-submit"`,
+		`/static/js/groups.js`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("groups page missing %q", expected)
+		}
+	}
+
+	if strings.Contains(body, `id="login-form"`) {
+		t.Fatal("group page rendered login form")
+	}
+
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf(
+			"Cache-Control = %q, want no-store",
+			got,
+		)
+	}
+}
+
+func TestAddGroupMemberProxy(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPut {
+				t.Errorf("method = %s, want PUT", r.Method)
+			}
+
+			expected := "/api/v1/admin/groups/2/users/3"
+			if r.URL.Path != expected {
+				t.Errorf("path = %s, want %s",
+					r.URL.Path, expected)
+			}
+
+			if r.Header.Get("X-CSRF-Token") != "test-token" {
+				t.Error("missing CSRF token")
+			}
+
+			if r.Header.Get("Cookie") !=
+				"terserah_session=test-session" {
+				t.Error("missing session cookie")
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"status":"ok"}`)
+		},
+	))
+	defer backend.Close()
+
+	h := testHandler(t, backend.URL)
+
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/admin/groups/2/users/3",
+		nil,
+	)
+
+	req.Header.Set("X-CSRF-Token", "test-token")
+	req.Header.Set("Cookie", "terserah_session=test-session")
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT returned %d, want 200", w.Code)
+	}
+}
+
+func TestRemoveGroupMemberProxy(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodDelete {
+				t.Errorf("method = %s, want DELETE", r.Method)
+			}
+
+			expected := "/api/v1/admin/groups/2/users/3"
+			if r.URL.Path != expected {
+				t.Errorf("path = %s, want %s", r.URL.Path, expected)
+			}
+
+			if got := r.Header.Get("X-CSRF-Token"); got != "test-token" {
+				t.Errorf("X-CSRF-Token = %q", got)
+			}
+
+			if got := r.Header.Get("Cookie"); got != "terserah_session=test-session" {
+				t.Errorf("Cookie = %q", got)
+			}
+
+			if got := r.Header.Get("Origin"); got != "http://localhost:3000" {
+				t.Errorf("Origin = %q", got)
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"status":"ok"}`)
+		},
+	))
+	defer backend.Close()
+
+	h := testHandler(t, backend.URL)
+
+	req := httptest.NewRequest(
+		http.MethodDelete,
+		"/api/v1/admin/groups/2/users/3",
+		nil,
+	)
+
+	req.Host = "localhost:3000"
+	req.Header.Set("Origin", "http://localhost:3000")
+	req.Header.Set("X-CSRF-Token", "test-token")
+	req.Header.Set("Cookie", "terserah_session=test-session")
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE returned %d, want 200", w.Code)
 	}
 }
