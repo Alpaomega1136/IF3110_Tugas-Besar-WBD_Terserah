@@ -127,7 +127,8 @@ func (s *Service) reconcile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer pool.Close()
-	tx, err := pool.Begin(ctx)
+	// Receipt reads must see commits completed while waiting for the target lock.
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		fail(w, err)
 		return

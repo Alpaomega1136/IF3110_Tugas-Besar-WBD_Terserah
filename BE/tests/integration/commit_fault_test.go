@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"terserah/backend/internal/database"
 	"terserah/backend/internal/runner"
 )
@@ -207,6 +209,143 @@ func TestCommitResponseRecovery(t *testing.T) {
 			var replay runner.Result
 			if err := json.Unmarshal(w.Body.Bytes(), &replay); err != nil || replay.Status != want || replay.ExecutionID != attempt.ExecutionID {
 				t.Fatal("replay changed attempt")
+			}
+		})
+	}
+}
+
+func TestRecoveryAfterWaitingForCommit(t *testing.T) {
+	ctx := context.Background()
+	owner, err := database.Open(ctx, os.Getenv("TEST_TARGET_ADMIN_DATABASE_URL"))
+	if err != nil {
+		t.Fatal("cannot open target fixture admin")
+	}
+	defer owner.Close()
+	cfg, err := pgx.ParseConfig(os.Getenv("TEST_TARGET_DATABASE_URL"))
+	if err != nil {
+		t.Fatal("invalid target fixture URL")
+	}
+	var settings []string
+	if err = owner.QueryRow(ctx, `SELECT COALESCE((SELECT setconfig FROM pg_catalog.pg_db_role_setting
+ WHERE setrole=0 AND setdatabase=(SELECT oid FROM pg_catalog.pg_database WHERE datname=$1)),ARRAY[]::text[])`, cfg.Database).Scan(&settings); err != nil {
+		t.Fatal(err)
+	}
+	// Use a database setting so the CI database owner need not administer roles.
+	prefix := "ALTER DATABASE " + pgx.Identifier{cfg.Database}.Sanitize()
+	defer func() {
+		restore := prefix + " RESET default_transaction_isolation"
+		for _, setting := range settings {
+			if strings.HasPrefix(setting, "default_transaction_isolation=") {
+				value := strings.TrimPrefix(setting, "default_transaction_isolation=")
+				restore = prefix + " SET default_transaction_isolation = '" + strings.ReplaceAll(value, "'", "''") + "'"
+			}
+		}
+		if _, err := owner.Exec(ctx, restore); err != nil {
+			t.Error("cannot restore target fixture isolation", err)
+		}
+	}()
+	for _, isolation := range []string{"repeatable read", "serializable"} {
+		t.Run(isolation, func(t *testing.T) {
+			if _, err := owner.Exec(ctx, prefix+" SET default_transaction_isolation = '"+isolation+"'"); err != nil {
+				t.Fatal(err)
+			}
+			probe, err := database.Open(ctx, os.Getenv("TEST_TARGET_DATABASE_URL"))
+			if err != nil {
+				t.Fatal("cannot check target fixture isolation")
+			}
+			var actual string
+			err = probe.QueryRow(ctx, "SHOW default_transaction_isolation").Scan(&actual)
+			probe.Close()
+			if err != nil || actual != isolation {
+				t.Fatal("target fixture isolation was not applied", err)
+			}
+			a := newM1App(t)
+			admin := a.browser()
+			admin.login(t, "admin")
+			input := targetInput(t, "TEST_TARGET_DATABASE_URL", "recovery-snapshot")
+			input.Port = commitProxy(t, net.JoinHostPort(input.Host, strconv.Itoa(input.Port)), true, true)
+			target := createTarget(t, admin, input)
+			grant(t, a, "editor", target.ID, "edit")
+			editor, checker := a.browser(), a.browser()
+			editor.login(t, "editor")
+			checker.login(t, "editor")
+			base := fmt.Sprintf("/api/v1/databases/%d", target.ID)
+			w := editor.request("POST", base+"/drafts", map[string]string{"title": "recovery snapshot", "sql": "SELECT pg_catalog.pg_advisory_xact_lock(3110099)"})
+			status(t, w, 201)
+			var draft runner.Draft
+			if err := json.Unmarshal(w.Body.Bytes(), &draft); err != nil {
+				t.Fatal(err)
+			}
+			barrier, err := owner.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var executeDone, recoveryDone chan *httptest.ResponseRecorder
+			defer func() {
+				_ = barrier.Rollback(ctx)
+				for _, done := range []chan *httptest.ResponseRecorder{executeDone, recoveryDone} {
+					if done != nil {
+						select {
+						case <-done:
+						case <-time.After(10 * time.Second):
+							t.Error("recovery fixture request did not finish")
+						}
+					}
+				}
+			}()
+			if _, err = barrier.Exec(ctx, "SELECT pg_catalog.pg_advisory_xact_lock(3110099)"); err != nil {
+				t.Fatal(err)
+			}
+			waitForLock := func(key int64) {
+				t.Helper()
+				deadline := time.Now().Add(3 * time.Second)
+				for {
+					var waiting bool
+					if err := owner.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_locks
+ WHERE locktype='advisory' AND database=(SELECT oid FROM pg_catalog.pg_database WHERE datname=pg_catalog.current_database())
+ AND classid=0 AND objid=$1::oid AND objsubid=1 AND NOT granted)`, key).Scan(&waiting); err != nil {
+						t.Fatal(err)
+					}
+					if waiting {
+						return
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("request did not wait for target lock %d", key)
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}
+			executeDone = make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				defer close(executeDone)
+				executeDone <- editor.request("POST", fmt.Sprintf("%s/drafts/%d/execute", base, draft.ID), map[string]string{"revision": "1"})
+			}()
+			waitForLock(3110099)
+			recoveryDone = make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				defer close(recoveryDone)
+				recoveryDone <- checker.request("POST", base+"/migrations/reconcile", nil)
+			}()
+			waitForLock(3110003)
+			if err = barrier.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			status(t, <-executeDone, 202)
+			w = <-recoveryDone
+			status(t, w, 200)
+			var out struct {
+				Items []runner.Result `json:"reconciled"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || len(out.Items) != 1 || out.Items[0].Status != "success" || out.Items[0].ErrorCode != nil {
+				t.Fatalf("committed migration not recovered after lock wait: %s", w.Body.String())
+			}
+			var count int
+			if err := owner.QueryRow(ctx, "SELECT count(*) FROM _terserah.migration_receipts WHERE execution_id=$1", out.Items[0].ExecutionID).Scan(&count); err != nil || count != 1 {
+				t.Fatal("expected one durable commit receipt", err)
+			}
+			var state string
+			if err := a.db.QueryRow(ctx, "SELECT status FROM migration_history WHERE execution_id=$1", out.Items[0].ExecutionID).Scan(&state); err != nil || state != "success" {
+				t.Fatal("recovered status not persisted", err)
 			}
 		})
 	}
