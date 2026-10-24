@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,14 @@ import (
 type fakeClock struct {
 	mu sync.Mutex
 	t  time.Time
+}
+
+type failingSessionRevoker struct {
+	Store
+}
+
+func (f failingSessionRevoker) RevokeSessionByToken(context.Context, []byte, time.Time) error {
+	return errors.New("database unavailable")
 }
 
 func newFakeClock() *fakeClock {
@@ -61,6 +70,22 @@ func TestPasswordHashing(t *testing.T) {
 	}
 	if _, err := VerifyPassword("correct-horse-battery-staple", "plaintext_not_hashed"); err == nil {
 		t.Fatal("plaintext hash accepted")
+	}
+}
+
+func TestLoginStopsWhenExistingSessionCannotBeRevoked(t *testing.T) {
+	store := NewMemoryStore()
+	svc := NewService(failingSessionRevoker{Store: store}, Config{})
+	if _, err := svc.BootstrapAdmin(context.Background(), "admin", "supersecret123"); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(`{"username":"admin","password":"supersecret123"}`))
+	req.AddCookie(&http.Cookie{Name: CookieName, Value: "existing-session"})
+	rr := httptest.NewRecorder()
+	svc.HandleLogin(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when the existing session cannot be revoked, got %d", rr.Code)
 	}
 }
 

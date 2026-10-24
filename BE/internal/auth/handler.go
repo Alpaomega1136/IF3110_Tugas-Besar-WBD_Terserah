@@ -83,7 +83,10 @@ func (s *Service) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	now := s.cfg.Now()
 	if oldCookie, err := r.Cookie(CookieName); err == nil && oldCookie.Value != "" {
-		_ = s.store.RevokeSessionByToken(r.Context(), hashToken(oldCookie.Value), now)
+		if err := s.store.RevokeSessionByToken(r.Context(), hashToken(oldCookie.Value), now); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "Cannot replace existing session")
+			return
+		}
 	}
 
 	rawToken, tokenHash, err := generateOpaqueToken()
