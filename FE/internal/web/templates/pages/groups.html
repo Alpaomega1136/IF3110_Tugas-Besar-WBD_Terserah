@@ -1,0 +1,118 @@
+{{define "content"}}
+<div class="app-shell">
+    <header class="app-header">
+        <a class="app-brand" href="/dashboard">Terserah</a>
+
+        <nav class="app-nav" aria-label="Navigasi utama">
+            <a href="/dashboard">Dashboard</a>
+            <a href="/admin/users">Users</a>
+            <a href="/admin/groups" aria-current="page">Groups</a>
+            <a href="/admin/grants">Grants</a>
+            <a href="/admin/databases">Connections</a>
+        </nav>
+    </header>
+
+    <main class="app-main">
+        <h1>Group Management</h1>
+        <p>
+            Daftar group, keanggotaan, dan grant database
+            yang terdaftar.
+        </p>
+      
+        <section id="create-group-section" class="dashboard-panel"
+                aria-labelledby="create-group-heading" hidden>
+            <h2 id="create-group-heading">Tambah Group</h2>
+
+            <form id="create-group-form" class="group-form" novalidate>
+                <div class="form-group">
+                    <label for="create-group-name">
+                        Nama Group (wajib)
+                    </label>
+
+                    <input
+                        id="create-group-name"
+                        name="name"
+                        type="text"
+                        maxlength="100"
+                        autocomplete="off"
+                        required
+                        aria-describedby="create-group-error"
+                    >
+
+                    <p id="create-group-error"
+                    class="error-message"
+                    role="alert"
+                    hidden></p>
+                </div>
+
+                <button type="submit" id="create-group-submit">
+                    Buat Group
+                </button>
+
+                <p id="create-group-message"
+                role="status"
+                aria-live="polite"
+                hidden></p>
+            </form>
+        </section>
+        
+        <section id="membership-section" class="dashboard-panel"
+                aria-labelledby="membership-heading" hidden>
+            <h2 id="membership-heading">Tambah Anggota Group</h2>
+
+            <form id="membership-form" class="group-form" novalidate>
+                <div class="form-group">
+                    <label for="membership-group">Group (wajib)</label>
+                    <select id="membership-group" required disabled>
+                        <option value="">Pilih group...</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="membership-user">Pengguna (wajib)</label>
+                    <select id="membership-user" required disabled>
+                        <option value="">Pilih pengguna...</option>
+                    </select>
+                </div>
+
+                <button id="membership-submit" type="submit" disabled>
+                    Tambahkan Anggota
+                </button>
+
+                <p id="membership-message" role="status"
+                aria-live="polite" hidden></p>
+            </form>
+        </section>
+
+        <p id="groups-status" role="status" aria-live="polite">
+            Memeriksa akses...
+        </p>
+
+        <p id="groups-error" class="error-message"
+           role="alert" hidden></p>
+
+        <p id="groups-empty" hidden>
+            Belum ada group. Gunakan form Tambah Group di atas
+            untuk membuat group pertama.
+        </p>
+
+        <section id="groups-section" class="dashboard-panel" aria-label="Daftar group" hidden>
+            <div class="users-table-wrapper">
+                <table class="users-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">ID</th>
+                            <th scope="col">Nama group</th>
+                            <th scope="col">Anggota &amp; Aksi</th>
+                            <th scope="col">Grant database</th>
+                        </tr>
+                    </thead>
+                    <tbody id="groups-body"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+</div>
+
+<script type="module" src="/static/js/groups.js"></script>
+{{end}}

@@ -1,0 +1,123 @@
+{{define "content"}}
+<div class="app-shell">
+    <header class="app-header">
+        <a class="app-brand" href="/dashboard">Terserah</a>
+        <nav class="app-nav" aria-label="Navigasi utama">
+            <a href="/dashboard">Dashboard</a>
+        </nav>
+    </header>
+    <main class="app-main" id="viewer-page" data-database-id="{{.DatabaseID}}">
+        <h1>Database Viewer</h1>
+        <p id="viewer-status" role="status" aria-live="polite">Memeriksa session dan hak akses...</p>
+        <p id="viewer-error" class="error-message viewer-message" role="alert" hidden></p>
+        <div id="viewer-workspace" hidden>
+            <section class="dashboard-panel" aria-labelledby="viewer-target-heading">
+                <h2 id="viewer-target-heading">Database: <span id="viewer-database-name"></span></h2>
+                <p>Database target: <span id="viewer-target-name"></span></p>
+                <p>Hak akses: <strong id="viewer-access"></strong></p>
+                <nav class="database-workspace-links" aria-label="Navigasi database">
+                    <a href="/dashboard">Dashboard</a>
+                    <a href="/databases/{{.DatabaseID}}/history">Migration History</a>
+                    <a id="viewer-drafts-link" href="/databases/{{.DatabaseID}}/drafts" hidden>Kelola Draft</a>
+                </nav>
+                <p class="form-help">Viewer hanya dapat membaca struktur dan data. Semua akses diperiksa kembali oleh backend.</p>
+            </section>
+            <div class="viewer-explorer">
+                <section class="dashboard-panel" aria-labelledby="viewer-schemas-heading">
+                    <div class="viewer-heading">
+                        <h2 id="viewer-schemas-heading">Schemas</h2>
+                        <button id="viewer-refresh-schemas" type="button" class="button-secondary viewer-button">Muat ulang</button>
+                    </div>
+                    <p id="viewer-schemas-status" role="status" aria-live="polite" hidden>Memuat schema...</p>
+                    <p id="viewer-schemas-error" class="error-message viewer-message" role="alert" hidden></p>
+                    <p id="viewer-schemas-empty" hidden>Tidak ada schema pengguna yang tersedia.</p>
+                    <ul id="viewer-schemas-list" class="viewer-object-list" aria-label="Pilih schema"></ul>
+                </section>
+                <section class="dashboard-panel" id="viewer-tables-panel" aria-labelledby="viewer-tables-heading" hidden>
+                    <div class="viewer-heading">
+                        <h2 id="viewer-tables-heading">Tables — <span id="viewer-selected-schema"></span></h2>
+                        <button id="viewer-refresh-tables" type="button" class="button-secondary viewer-button">Muat ulang</button>
+                    </div>
+                    <p id="viewer-tables-status" role="status" aria-live="polite" hidden>Memuat tabel...</p>
+                    <p id="viewer-tables-error" class="error-message viewer-message" role="alert" hidden></p>
+                    <p id="viewer-tables-empty" hidden>Schema ini belum memiliki tabel yang dapat dilihat.</p>
+                    <ul id="viewer-tables-list" class="viewer-object-list" aria-label="Pilih tabel"></ul>
+                </section>
+            </div>
+            <section id="viewer-detail" class="dashboard-panel" aria-labelledby="viewer-detail-heading" hidden>
+                <div class="viewer-heading">
+                    <h2 id="viewer-detail-heading">Tabel: <span id="viewer-selected-table"></span></h2>
+                    <button id="viewer-refresh-detail" type="button" class="button-secondary viewer-button">Muat ulang metadata</button>
+                </div>
+                <p id="viewer-detail-status" role="status" aria-live="polite" hidden>Memuat metadata...</p>
+                <p id="viewer-detail-error" class="error-message viewer-message" role="alert" hidden></p>
+                <div id="viewer-metadata" hidden>
+                    <section class="viewer-subsection" aria-labelledby="viewer-columns-heading">
+                        <h3 id="viewer-columns-heading">Columns</h3>
+                        <p id="viewer-columns-empty" hidden>Tidak ada kolom.</p>
+                        <div class="users-table-wrapper viewer-scroll" tabindex="0" aria-label="Daftar kolom tabel">
+                            <table id="viewer-columns-table" class="users-table viewer-table" hidden>
+                                <thead><tr><th scope="col">Posisi</th><th scope="col">Nama</th><th scope="col">Tipe Data</th><th scope="col">Nullable</th><th scope="col">Default</th><th scope="col">Identity</th><th scope="col">Generated</th></tr></thead>
+                                <tbody id="viewer-columns-body"></tbody>
+                            </table>
+                        </div>
+                    </section>
+                    <section class="viewer-subsection" aria-labelledby="viewer-constraints-heading">
+                        <h3 id="viewer-constraints-heading">Constraints</h3>
+                        <p id="viewer-constraints-empty" hidden>Tidak ada constraint.</p>
+                        <div class="users-table-wrapper viewer-scroll" tabindex="0" aria-label="Daftar constraint tabel">
+                            <table id="viewer-constraints-table" class="users-table viewer-table" hidden>
+                                <thead><tr><th scope="col">Nama</th><th scope="col">Jenis</th><th scope="col">Definisi</th></tr></thead>
+                                <tbody id="viewer-constraints-body"></tbody>
+                            </table>
+                        </div>
+                    </section>
+                    <section class="viewer-subsection" aria-labelledby="viewer-indexes-heading">
+                        <h3 id="viewer-indexes-heading">Indexes</h3>
+                        <p id="viewer-indexes-empty" hidden>Tidak ada index.</p>
+                        <div class="users-table-wrapper viewer-scroll" tabindex="0" aria-label="Daftar index tabel">
+                            <table id="viewer-indexes-table" class="users-table viewer-table" hidden>
+                                <thead><tr><th scope="col">Nama</th><th scope="col">Unique</th><th scope="col">Primary</th><th scope="col">Definisi</th></tr></thead>
+                                <tbody id="viewer-indexes-body"></tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            </section>
+            <section id="viewer-rows-panel" class="dashboard-panel" aria-labelledby="viewer-rows-heading" hidden>
+                <div class="viewer-heading">
+                    <h2 id="viewer-rows-heading">Data Rows</h2>
+                    <div class="viewer-controls">
+                        <label for="viewer-row-limit">Baris per halaman</label>
+                        <select id="viewer-row-limit">
+                            <option value="10">10</option>
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                            <option value="200">200</option>
+                        </select>
+                        <button id="viewer-refresh-rows" type="button" class="button-secondary viewer-button">Muat ulang data</button>
+                    </div>
+                </div>
+                <p id="viewer-rows-status" role="status" aria-live="polite" hidden>Memuat data...</p>
+                <p id="viewer-rows-error" class="error-message viewer-message" role="alert" hidden></p>
+                <p id="viewer-rows-empty" hidden>Belum ada data pada halaman ini.</p>
+                <div class="users-table-wrapper viewer-scroll" tabindex="0" aria-label="Data baris tabel">
+                    <table id="viewer-rows-table" class="users-table viewer-table" hidden>
+                        <thead><tr id="viewer-rows-head"></tr></thead>
+                        <tbody id="viewer-rows-body"></tbody>
+                    </table>
+                </div>
+                <div class="viewer-pagination">
+                    <p id="viewer-rows-summary" role="status" aria-live="polite"></p>
+                    <div class="viewer-controls">
+                        <button id="viewer-rows-prev" type="button" class="button-secondary viewer-button" disabled>Sebelumnya</button>
+                        <button id="viewer-rows-next" type="button" class="button-secondary viewer-button" disabled>Berikutnya</button>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+</div>
+<script type="module" src="/static/js/viewer.js"></script>
+{{end}}

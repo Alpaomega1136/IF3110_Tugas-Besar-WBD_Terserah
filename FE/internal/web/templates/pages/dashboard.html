@@ -1,0 +1,92 @@
+{{define "content"}}
+<div class="app-shell">
+    <header class="app-header">
+        <a class="app-brand" href="/dashboard">Terserah</a>
+
+        <nav class="app-nav" aria-label="Navigasi utama">
+            <a href="/dashboard" aria-current="page">Dashboard</a>
+            <button type="button" id="logout-button"
+                    class="button-secondary" disabled>
+                Logout
+            </button>
+        </nav>
+    </header>
+
+    <main class="app-main">
+        <h1>Dashboard</h1>
+
+        <p id="dashboard-status" role="status" aria-live="polite">
+            Memeriksa session...
+        </p>
+
+        <div id="dashboard-content" hidden>
+            <section class="dashboard-panel"
+                     aria-labelledby="welcome-heading">
+                <h2 id="welcome-heading">
+                    Selamat datang,
+                    <span id="welcome-username"></span>!
+                </h2>
+
+                <p>
+                    Role akun:
+                    <strong id="account-role"></strong>
+                </p>
+            </section>
+
+            <section class="dashboard-panel"
+                    aria-labelledby="database-heading">
+                <h2 id="database-heading">Database Saya</h2>
+
+                <p id="databases-status" role="status" aria-live="polite">
+                    Memuat database...
+                </p>
+
+                <p id="databases-error"
+                class="error-message"
+                role="alert"
+                hidden></p>
+
+                <p id="databases-empty" hidden>
+                    Belum ada database yang bisa diakses.
+                    Akses diberikan melalui group.
+                </p>
+
+                <div id="databases-table" class="users-table-wrapper" hidden>
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">ID</th>
+                                <th scope="col">Nama</th>
+                                <th scope="col">Database Target</th>
+                                <th scope="col">Akses Efektif</th>
+                                <th scope="col">Workspace</th>
+                            </tr>
+                        </thead>
+                        <tbody id="databases-body"></tbody>
+                    </table>
+                </div>
+
+                <p class="form-help">
+                    Viewer dan History dapat dibuka dengan izin View Only atau Edit.
+                    Editor Draft hanya tersedia bagi pengguna dengan izin Edit.
+                    Izin diperiksa kembali oleh backend pada setiap permintaan.
+                </p>
+            </section>
+
+            <section class="dashboard-panel" id="admin-panel" aria-labelledby="admin-heading" hidden>
+                <h2 id="admin-heading">Administrasi Platform</h2>
+                <p>Kelola akun pengguna dan hak akses platform.</p>
+                <a href="/admin/users">Kelola Pengguna</a>
+                <span aria-hidden="true"> · </span>
+                <a href="/admin/groups">Kelola Group</a>
+                <span aria-hidden="true"> · </span>
+                <a href="/admin/grants">Kelola Grant Database</a>
+                <span aria-hidden="true"> · </span>
+                <a href="/admin/databases">Kelola Koneksi Database</a>
+            </section>
+        </div>
+    </main>
+</div>
+
+<script type="module" src="/static/js/dashboard.js"></script>
+{{end}}
