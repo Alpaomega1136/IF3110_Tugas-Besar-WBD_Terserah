@@ -64,6 +64,7 @@ func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("GET "+base+"/{draftID}", sessions.Require(s.draft))
 	mux.HandleFunc("PATCH "+base+"/{draftID}", sessions.Require(s.draft))
 	mux.HandleFunc("POST "+base+"/{draftID}/execute", sessions.Require(s.execute))
+	mux.HandleFunc("POST "+base+"/{draftID}/explain", sessions.Require(s.explain))
 }
 
 func (s *Service) authorize(r *http.Request, write bool) (auth.Principal, int64, error) {

@@ -12,12 +12,13 @@ async function setup() {
     const ids = [
         "users-status", "users-error", "users-empty", "users-section", "users-body", "create-user-section",
         "create-user-form", "create-username", "create-password", "create-is-admin", "create-user-submit",
-        "create-user-message", "create-username-error", "create-password-error", "edit-user-section",
-        "edit-user-form", "edit-user-name", "edit-password", "edit-password-error", "edit-is-admin",
+        "create-user-message", "create-username-error", "create-password-error", "create-password-help", "edit-user-section",
+        "edit-user-form", "edit-user-name", "edit-password", "edit-password-error", "edit-password-help", "edit-is-admin",
         "edit-is-active", "edit-user-submit", "edit-user-cancel", "edit-user-message"
     ];
     const elements = Object.fromEntries(ids.map((id) => [id, new Element()]));
     const $ = (id) => elements[id];
+    $("edit-user-section").hidden = true;
     $("create-username").value = "new-user";
     $("create-is-admin").checked = false;
     $("create-user-form").reset = () => { $("create-password").value = ""; };
@@ -42,6 +43,16 @@ async function setup() {
 
 const mutations = (ui) => ui.calls.filter((call) => ["POST", "PATCH"].includes(call.method));
 
+test("edit panel stays hidden until an account is selected and closes on cancel", async () => {
+    const ui = await setup();
+    assert.equal(ui.$("edit-user-section").hidden, true);
+    await ui.$("users-body").children[0].children[1].fire("click");
+    assert.equal(ui.$("edit-user-section").hidden, false);
+    assert.equal(ui.$("edit-user-name").textContent, "existing");
+    await ui.$("edit-user-cancel").fire("click");
+    assert.equal(ui.$("edit-user-section").hidden, true);
+});
+
 test("create user rejects passwords below 12 or above 1024 UTF-8 bytes before POST", async () => {
     for (const password of ["a".repeat(11), "€".repeat(3), "a".repeat(1025)]) {
         const ui = await setup();
@@ -49,6 +60,7 @@ test("create user rejects passwords below 12 or above 1024 UTF-8 bytes before PO
         await ui.$("create-user-form").fire("submit");
         assert.equal(mutations(ui).length, 0);
         assert.equal(ui.$("create-password-error").hidden, false);
+        assert.equal(ui.$("create-password-help").hidden, true);
         assert.match(ui.$("create-password-error").textContent, /12.*1024/);
     }
 });
@@ -68,7 +80,7 @@ test("edit user enforces the same password byte limits before PATCH", async () =
     for (const [password, valid] of [["a".repeat(11), false], ["€".repeat(3), false],
         ["a".repeat(1025), false], ["a".repeat(12), true], ["€".repeat(4), true], ["a".repeat(1024), true]]) {
         const ui = await setup();
-        await ui.$("users-body").children[0].children[6].children[0].fire("click");
+        await ui.$("users-body").children[0].children[1].fire("click");
         ui.$("edit-password").value = password;
         await ui.$("edit-user-form").fire("submit");
         assert.equal(mutations(ui).length, valid ? 1 : 0);
@@ -77,13 +89,14 @@ test("edit user enforces the same password byte limits before PATCH", async () =
             assert.equal(mutations(ui)[0].body.password, password);
         } else {
             assert.match(ui.$("edit-password-error").textContent, /12.*1024/);
+            assert.equal(ui.$("edit-password-help").hidden, true);
         }
     }
 });
 
 test("edit user can change flags without supplying a new password", async () => {
     const ui = await setup();
-    await ui.$("users-body").children[0].children[6].children[0].fire("click");
+    await ui.$("users-body").children[0].children[1].fire("click");
     ui.$("edit-is-active").checked = false;
     await ui.$("edit-user-form").fire("submit");
     assert.equal(mutations(ui).length, 1);

@@ -30,6 +30,7 @@ async function setup({ access = "edit", selected = true, confirm = true, backend
         "draft-current-id", "draft-title", "draft-sql", "draft-title-error", "draft-sql-error",
         "draft-save", "draft-save-message", "draft-detail", "draft-detail-author", "draft-detail-created",
         "draft-detail-updated", "draft-detail-sql", "draft-execution", "draft-execute", "draft-reload",
+        "draft-explain", "draft-explain-message", "draft-explain-result",
         "draft-execution-revision", "draft-execution-state", "draft-execution-message",
         "draft-execution-result", "draft-result-status", "draft-result-version", "draft-result-id", "draft-result-error"
     ];

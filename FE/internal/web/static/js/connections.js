@@ -1,3 +1,4 @@
+import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
 
 const byId = (id) => document.getElementById(id);
@@ -161,14 +162,14 @@ function readForm(form, editing) {
     const sslmode = value("sslmode");
     const payload = { name, username, sslmode };
 
-    if (!name || encoder.encode(name).length > 100) throw new Error("Nama koneksi wajib diisi (maksimal 100 byte).");
+    if (!name || encoder.encode(name).length > 100) throw new Error("Isi nama koneksi dengan maksimal 100 karakter biasa; karakter tertentu dapat dihitung lebih dari satu.");
     if (!username.trim() || encoder.encode(username).length > 63 || username.includes("\0")) {
-        throw new Error("Username PostgreSQL wajib diisi (maksimal 63 byte).");
+        throw new Error("Isi username PostgreSQL dengan maksimal 63 karakter biasa; karakter tertentu dapat dihitung lebih dari satu.");
     }
     if (!modes.has(sslmode)) throw new Error("SSL mode tidak valid.");
     if (!editing || password) {
         if (!password || encoder.encode(password).length > 4096 || password.includes("\0")) {
-            throw new Error("Password wajib diisi (maksimal 4096 byte) tanpa karakter NUL.");
+            throw new Error("Isi password dengan maksimal 4096 karakter biasa tanpa karakter NUL; karakter tertentu dapat dihitung lebih dari satu.");
         }
         payload.password = password;
     }
@@ -181,7 +182,7 @@ function readForm(form, editing) {
             throw new Error("Port harus bilangan bulat antara 1 dan 65535.");
         }
         if (!databaseName || encoder.encode(databaseName).length > 63 || databaseName.includes("\0")) {
-            throw new Error("Nama database target wajib diisi (maksimal 63 byte).");
+            throw new Error("Isi nama database target dengan maksimal 63 karakter biasa; karakter tertentu dapat dihitung lebih dari satu.");
         }
         Object.assign(payload, { host, port: Number(portValue), database_name: databaseName });
     }
@@ -292,7 +293,13 @@ async function testConnection(id) {
 async function deleteConnection(id) {
     if (busy) return;
     const item = entries.find((entry) => entry.id === id);
-    if (!item || !window.confirm(`Hapus koneksi "${item.name}" (ID ${id})? Tindakan ini tidak dapat dibatalkan.`)) return;
+    if (!item || !(await confirmAction({
+        title: "Hapus koneksi database?",
+        message: `Hapus koneksi "${item.name}" (ID ${id})? Tindakan ini tidak dapat dibatalkan.`,
+        confirmLabel: "Hapus Koneksi",
+        tone: "danger"
+    }))) return;
+    if (busy) return;
     setBusy(true);
     setMessage(actionMessage, `Menghapus koneksi ${item.name}...`);
     try {

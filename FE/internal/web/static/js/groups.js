@@ -1,3 +1,4 @@
+import { confirmAction } from "./confirmation.js";
 import {
     authenticatedRequest,
     requireAuthenticatedUser,
@@ -245,7 +246,12 @@ async function removeMember(group, userId, label) {
         ? `Keluarkan akunmu sendiri dari group ${group.name}? Session kamu akan dicabut dan kamu harus login kembali.`
         : `Keluarkan ${label} dari group ${group.name}? Session aktif pengguna tersebut akan dicabut.`;
 
-    if (!window.confirm(question)) return;
+    if (!(await confirmAction({
+        title: isSelf ? "Keluar dari group?" : "Keluarkan anggota group?",
+        message: question,
+        confirmLabel: "Keluarkan",
+        tone: "danger"
+    })) || membershipSaving) return;
 
     membershipSaving = true;
     setMembershipMessage("");
@@ -390,7 +396,7 @@ createForm.addEventListener("submit", async (event) => {
 
     if (nameLength < 1 || nameLength > 100) {
         setGroupNameError(
-            "Nama group wajib diisi dan maksimal 100 byte."
+            "Isi nama group dengan maksimal 100 karakter biasa; karakter tertentu dapat dihitung lebih dari satu."
         );
         groupName.focus();
         return;

@@ -25,7 +25,29 @@ export async function getCurrentUser() {
 
 export async function requireAuthenticatedUser() {
     try {
-        return await getCurrentUser();
+        const user = await getCurrentUser();
+        const adminNav = document.getElementById("admin-nav");
+        const logoutButton = document.getElementById("logout-button");
+        const navStatus = document.getElementById("navigation-status");
+        if (adminNav) adminNav.hidden = !user.is_platform_admin;
+        if (logoutButton) {
+            logoutButton.disabled = false;
+            logoutButton.addEventListener("click", async () => {
+                logoutButton.disabled = true;
+                if (navStatus) navStatus.hidden = true;
+                try {
+                    await logout();
+                    window.location.replace("/login");
+                } catch (error) {
+                    if (navStatus) {
+                        navStatus.textContent = error.message || "Logout gagal. Silakan coba lagi.";
+                        navStatus.hidden = false;
+                    }
+                    logoutButton.disabled = false;
+                }
+            });
+        }
+        return user;
     } catch (error) {
         if (error.status === 401) {
             clearAuthState();

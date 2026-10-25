@@ -1,3 +1,4 @@
+import { confirmAction } from "./confirmation.js";
 import {
     authenticatedRequest,
     requireAuthenticatedUser,
@@ -5,6 +6,7 @@ import {
 } from "./auth.js";
 import { executionFeedback, parseExecutionResult, executeErrorMessage } from "./execution.js";
 import { positiveInt64, parseCursorPage } from "./pagination.js";
+import { initializeSchemaDiff } from "./schema-diff.js";
 
 const page = document.getElementById("draft-page");
 const databaseId = page.dataset.databaseId;
@@ -44,6 +46,9 @@ const detailUpdated = document.getElementById("draft-detail-updated");
 const detailSQL = document.getElementById("draft-detail-sql");
 const executionPanel = document.getElementById("draft-execution");
 const executeButton = document.getElementById("draft-execute");
+const explainButton = document.getElementById("draft-explain");
+const explainMessage = document.getElementById("draft-explain-message");
+const explainResult = document.getElementById("draft-explain-result");
 const reloadButton = document.getElementById("draft-reload");
 const executionRevision = document.getElementById("draft-execution-revision");
 const executionState = document.getElementById("draft-execution-state");
@@ -148,6 +153,7 @@ function updateExecutionControls() {
 
     executionPanel.hidden = !saved;
     executeButton.disabled = busy || !saved || modified || locked;
+    explainButton.disabled = busy || !saved || modified;
     reloadButton.disabled = busy || !saved;
     executeButton.textContent = executing ? "Menjalankan Migration..." : "Execute Migration";
 
@@ -163,6 +169,9 @@ function updateExecutionControls() {
 function resetExecutionFeedback() {
     lockedExecution = null;
     executionResult.hidden = true;
+    explainResult.hidden = true;
+    explainResult.textContent = "";
+    showMessage(explainMessage, "");
     showMessage(executionMessage, "");
     updateExecutionControls();
 }
@@ -196,8 +205,13 @@ function isDirty() {
     return Boolean(titleInput.value || sqlInput.value);
 }
 
-function confirmDiscard() {
-    return !isDirty() || window.confirm("Ada perubahan draft yang belum disimpan. " + "Abaikan perubahan?");
+async function confirmDiscard() {
+    return !isDirty() || await confirmAction({
+        title: "Abaikan perubahan draft?",
+        message: "Ada perubahan draft yang belum disimpan. Abaikan perubahan?",
+        confirmLabel: "Abaikan Perubahan",
+        tone: "danger"
+    });
 }
 
 function validInt64String(value) {
@@ -237,8 +251,8 @@ function showDraft(draft) {
     resetExecutionFeedback();
 }
 
-function startNewDraft() {
-    if (busy || !confirmDiscard()) return;
+async function startNewDraft() {
+    if (busy || !(await confirmDiscard()) || busy) return;
 
     selectedDraft = null;
 
@@ -356,7 +370,7 @@ nextButton.addEventListener("click", async () => {
 });
 
 async function openDraft(draftId) {
-    if (busy || !confirmDiscard()) return;
+    if (busy || !(await confirmDiscard()) || busy) return;
 
     setBusy(true);
     showMessage(saveMessage, "");
@@ -412,12 +426,15 @@ async function executeDraft() {
             return;
         }
 
-        const confirmed = window.confirm(
-            `Execute migration di ${databaseName.textContent} (${targetName.textContent})?\n\n` +
-            `Draft: ${draft.title} (ID ${draft.id}, revisi ${draft.revision})\n\n` +
-            "Periksa SQL tersimpan di bagian Detail Draft. Eksekusi mengubah database target. " +
-            "SQL gagal akan di-rollback oleh backend. Lanjutkan?"
-        );
+        const confirmed = await confirmAction({
+            title: "Execute SQL Migration?",
+            message: `Execute migration di ${databaseName.textContent} (${targetName.textContent})?\n\n` +
+                `Draft: ${draft.title} (ID ${draft.id}, revisi ${draft.revision})\n\n` +
+                "Periksa SQL tersimpan di bagian Detail Draft. Eksekusi mengubah database target. " +
+                "SQL gagal akan di-rollback oleh backend. Lanjutkan?",
+            confirmLabel: "Execute Migration",
+            tone: "danger"
+        });
         if (!confirmed) {
             showMessage(executionMessage, "Eksekusi dibatalkan. Tidak ada SQL dijalankan.");
             return;
@@ -454,11 +471,41 @@ async function executeDraft() {
 }
 
 executeButton.addEventListener("click", executeDraft);
+explainButton.addEventListener("click", async () => {
+    if (busy || !selectedDraft || isDirty()) return;
+    const draft = selectedDraft;
+    setBusy(true);
+    explainResult.hidden = true;
+    showMessage(explainMessage, "Menganalisis query...");
+    try {
+        const result = await authenticatedRequest(`${apiPath}/${encodeURIComponent(draft.id)}/explain`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ revision: draft.revision })
+        });
+        if (result.revision !== draft.revision || !Array.isArray(result.statements)) {
+            throw new Error("Format hasil analisis tidak valid.");
+        }
+        explainResult.textContent = result.statements.map((item, index) =>
+            `Statement ${index + 1}:\n${item.sql.trim()}\n\n${item.error || JSON.stringify(item.plan, null, 2)}`
+        ).join("\n\n");
+        explainResult.hidden = false;
+        showMessage(explainMessage, "Analisis selesai. Hasil adalah perkiraan PostgreSQL.");
+    } catch (err) {
+        handleError(err, explainMessage);
+    } finally {
+        setBusy(false);
+    }
+});
 reloadButton.addEventListener("click", () => {
     if (selectedDraft) openDraft(selectedDraft.id);
 });
 titleInput.addEventListener("input", updateExecutionControls);
-sqlInput.addEventListener("input", updateExecutionControls);
+sqlInput.addEventListener("input", () => {
+    explainResult.hidden = true;
+    showMessage(explainMessage, "");
+    updateExecutionControls();
+});
 
 newButton.addEventListener("click", startNewDraft);
 
@@ -478,7 +525,7 @@ form.addEventListener("submit", async (event) => {
     const sqlBytes = encoder.encode(sql).length;
 
     if (titleBytes < 1 || titleBytes > 200) {
-        setFieldError(titleInput, titleError, "Judul harus 1-200 byte.");
+        setFieldError(titleInput, titleError, "Isi judul dengan maksimal 200 karakter biasa; karakter tertentu dapat dihitung lebih dari satu.");
     }
 
     if (sqlBytes < 1 || sqlBytes > maxSQLBytes) {
@@ -583,6 +630,23 @@ async function initialize() {
         access.textContent = "View + Edit";
 
         workspace.hidden = false;
+
+        initializeSchemaDiff(databaseId, (sql) => {
+            if (busy || !confirmDiscard()) return false;
+            selectedDraft = null;
+            heading.textContent = "Buat Draft Baru";
+            currentId.hidden = true;
+            detail.hidden = true;
+            form.reset();
+            titleInput.value = "Schema diff";
+            sqlInput.value = sql;
+            resetExecutionFeedback();
+            setFieldError(titleInput, titleError, "");
+            setFieldError(sqlInput, sqlError, "");
+            showMessage(saveMessage, "");
+            form.scrollIntoView({ behavior: "smooth", block: "start" });
+            return true;
+        });
 
         await loadDrafts(0, true);
 

@@ -9,6 +9,34 @@
 </head>
 <body>
     {{template "content" .}}
+    <dialog id="global-confirm-dialog" class="confirm-dialog" aria-labelledby="global-confirm-title" aria-describedby="global-confirm-message">
+        <h2 id="global-confirm-title">Konfirmasi tindakan</h2>
+        <p id="global-confirm-message"></p>
+        <form method="dialog" class="confirm-dialog-actions">
+            <button id="global-confirm-cancel" type="submit" value="cancel" class="button-secondary">Batal</button>
+            <button id="global-confirm-accept" type="submit" value="confirm" class="confirm-dialog-accept">Lanjutkan</button>
+        </form>
+    </dialog>
 </body>
 </html>
+{{end}}
+
+{{define "navigation"}}
+<header class="app-header">
+    <a class="app-brand" href="/dashboard">Terserah</a>
+    <nav class="app-nav" aria-label="Navigasi utama">
+        <a href="/dashboard"{{if eq .Path "/dashboard"}} aria-current="page"{{end}}>Dashboard</a>
+        <details class="admin-nav" id="admin-nav" hidden>
+            <summary>Administrasi</summary>
+            <div class="admin-nav-menu">
+                <a href="/admin/users"{{if eq .Path "/admin/users"}} aria-current="page"{{end}}>Kelola Pengguna</a>
+                <a href="/admin/groups"{{if eq .Path "/admin/groups"}} aria-current="page"{{end}}>Kelola Group</a>
+                <a href="/admin/grants"{{if eq .Path "/admin/grants"}} aria-current="page"{{end}}>Kelola Grant Database</a>
+                <a href="/admin/databases"{{if eq .Path "/admin/databases"}} aria-current="page"{{end}}>Kelola Koneksi Database</a>
+            </div>
+        </details>
+        <button type="button" id="logout-button" class="button-secondary" disabled>Logout</button>
+        <span id="navigation-status" class="error-message" role="status" aria-live="polite" hidden></span>
+    </nav>
+</header>
 {{end}}

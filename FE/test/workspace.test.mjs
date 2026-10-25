@@ -73,11 +73,11 @@ async function setupGrants({ admin = true, connections = [connection], groups = 
 async function setupDashboard({ admin = false, databases = [{ ...connection, access: "view" }], custom } = {}) {
     clearAuthState();
     const ui = installDOM([
-        "dashboard-status", "dashboard-content", "welcome-username", "account-role", "admin-panel", "logout-button",
+        "dashboard-status", "dashboard-content", "welcome-username", "account-role", "admin-nav", "logout-button", "navigation-status",
         "databases-status", "databases-error", "databases-empty", "databases-table", "databases-body"
     ]);
     const calls = [];
-    for (const id of ["dashboard-content", "admin-panel", "databases-error", "databases-empty", "databases-table"]) ui.$(id).hidden = true;
+    for (const id of ["dashboard-content", "admin-nav", "databases-error", "databases-empty", "databases-table"]) ui.$(id).hidden = true;
     globalThis.fetch = async (url, options = {}) => {
         calls.push({ url, method: options.method ?? "GET" });
         if (custom) {
@@ -99,7 +99,7 @@ async function setupViewer({ access = "view", schemas = ["public"], listed = tru
     clearAuthState();
     const ui = installDOM([
         "viewer-page", "viewer-status", "viewer-error", "viewer-workspace", "viewer-schemas-status",
-        "viewer-database-name", "viewer-target-name", "viewer-access", "viewer-drafts-link",
+        "viewer-database-name", "viewer-target-name", "viewer-access",
         "viewer-schemas-list", "viewer-schemas-empty", "viewer-schemas-error", "viewer-refresh-schemas",
         "viewer-tables-panel", "viewer-selected-schema", "viewer-refresh-tables", "viewer-tables-status",
         "viewer-tables-error", "viewer-tables-empty", "viewer-tables-list", "viewer-detail",
@@ -112,7 +112,7 @@ async function setupViewer({ access = "view", schemas = ["public"], listed = tru
     ]);
     ui.$("viewer-page").dataset.databaseId = big;
     ui.$("viewer-row-limit").value = "50";
-    for (const id of ["viewer-error", "viewer-workspace", "viewer-schemas-empty", "viewer-drafts-link"]) ui.$(id).hidden = true;
+    for (const id of ["viewer-error", "viewer-workspace", "viewer-schemas-empty"]) ui.$(id).hidden = true;
     const calls = [];
     globalThis.fetch = async (url) => {
         calls.push(url);
@@ -227,7 +227,7 @@ test("view-only dashboard offers Viewer and History but not Draft", async () => 
     assert.deepEqual(links.map((link) => link.href), [
         `/databases/${big}/viewer`, `/databases/${big}/history`
     ]);
-    assert.equal(ui.$("admin-panel").hidden, true);
+    assert.equal(ui.$("admin-nav").hidden, true);
 });
 
 test("edit dashboard offers all workspace destinations", async () => {
@@ -240,7 +240,15 @@ test("admin without group grant sees empty state rather than target bypass", asy
     const ui = await setupDashboard({ admin: true, databases: [] });
     assert.equal(ui.$("databases-empty").hidden, false);
     assert.match(ui.$("databases-empty").textContent, /tidak otomatis/);
-    assert.equal(ui.$("admin-panel").hidden, false);
+    assert.equal(ui.$("admin-nav").hidden, false);
+});
+
+test("navigation logout uses the authenticated session", async () => {
+    const ui = await setupDashboard({ admin: true });
+    assert.equal(ui.$("logout-button").disabled, false);
+    await ui.$("logout-button").fire("click");
+    assert.equal(ui.calls.some((call) => call.url === "/api/v1/auth/logout" && call.method === "POST"), true);
+    assert.deepEqual(ui.redirects, ["/login"]);
 });
 
 test("revoked session redirects and rejected database list hides previous entries", async () => {
@@ -253,7 +261,6 @@ test("revoked session redirects and rejected database list hides previous entrie
 test("viewer checks grant then reads schema list safely", async () => {
     const ui = await setupViewer({ schemas: ['<img src=x onerror="x">'] });
     assert.equal(ui.$("viewer-workspace").hidden, false);
-    assert.equal(ui.$("viewer-drafts-link").hidden, true);
     assert.equal(ui.$("viewer-schemas-list").children[0].textContent, '<img src=x onerror="x">');
     assert.equal(ui.$("viewer-schemas-list").children[0].children[0].textContent, '<img src=x onerror="x">');
 });

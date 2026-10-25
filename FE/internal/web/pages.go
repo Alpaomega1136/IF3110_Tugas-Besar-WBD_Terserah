@@ -12,6 +12,7 @@ import (
 type PageData struct {
 	Title      string
 	DatabaseID string
+	Path       string
 }
 
 func parsePageTemplate(name string) (*template.Template, error) {
@@ -24,8 +25,10 @@ func parsePageTemplate(name string) (*template.Template, error) {
 
 func pageHandler(tmpl *template.Template, data PageData) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		page := data
+		page.Path = r.URL.Path
 		var rendered bytes.Buffer
-		if err := tmpl.ExecuteTemplate(&rendered, "base", data); err != nil {
+		if err := tmpl.ExecuteTemplate(&rendered, "base", page); err != nil {
 			log.Printf("render %q page: %v", data.Title, err)
 			http.Error(w, "Gagal memuat halaman", http.StatusInternalServerError)
 			return

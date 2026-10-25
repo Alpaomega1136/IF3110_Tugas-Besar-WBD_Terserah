@@ -27,7 +27,7 @@ function reply(data, status = 200) {
 function setupDOM() {
     const ids = [
         "viewer-page", "viewer-status", "viewer-error", "viewer-workspace", "viewer-database-name",
-        "viewer-target-name", "viewer-access", "viewer-drafts-link", "viewer-schemas-status",
+        "viewer-target-name", "viewer-access", "viewer-schemas-status",
         "viewer-schemas-error", "viewer-schemas-empty", "viewer-schemas-list", "viewer-refresh-schemas",
         "viewer-tables-panel", "viewer-selected-schema", "viewer-refresh-tables", "viewer-tables-status",
         "viewer-tables-error", "viewer-tables-empty", "viewer-tables-list", "viewer-detail",
@@ -86,7 +86,6 @@ async function openTable(ui) {
 test("view-only explorer loads schemas, complex table names, metadata, and read-only rows", async () => {
     const ui = await setup();
     assert.equal(ui.$("viewer-workspace").hidden, false);
-    assert.equal(ui.$("viewer-drafts-link").hidden, true);
     await openTable(ui);
     assert.equal(ui.calls.some(({ url }) => url === path), true);
     assert.equal(ui.calls.some(({ url }) => url === `${path}/rows?limit=50&offset=0`), true);
@@ -106,7 +105,6 @@ test("view-only explorer loads schemas, complex table names, metadata, and read-
 test("pagination uses exact offset and selected limit and supports previous page", async () => {
     const ui = await setup({ access: "edit" });
     await openTable(ui);
-    assert.equal(ui.$("viewer-drafts-link").hidden, false);
     assert.equal(ui.$("viewer-rows-prev").disabled, true);
     assert.equal(ui.$("viewer-rows-next").disabled, false);
     await ui.$("viewer-rows-next").fire("click");

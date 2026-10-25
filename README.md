@@ -6,7 +6,7 @@ Terserah merupakan aplikasi web untuk pengelolaan akses database pada Tugas Besa
 
 Kelas: K2
 
-Kelompok: Terserah
+Kelompok: 06 - Terserah
 
 | Nama | NIM |
 |---|---|
@@ -20,8 +20,34 @@ Kelompok: Terserah
 
 - Go 1.26.2 atau lebih baru.
 - PostgreSQL yang berjalan dan dapat diakses dari komputer pengembang.
+- Node.js untuk menjalankan tes JavaScript frontend.
 
 Aplikasi dijalankan sebagai dua proses Go: backend pada port `8080` dan frontend pada port `3000`.
+
+### Menjalankan dengan skrip Windows
+
+Dari root repository, jalankan FE dan BE sekaligus dengan satu perintah:
+
+```powershell
+.\dev.cmd
+```
+
+`dev.cmd` menjalankan `dev.ps1`. Saat `.env` belum tersedia, skrip menawarkan setup PostgreSQL lokal dan meminta akun admin pertama. Untuk database yang sudah ada, siapkan `.env` sesuai bagian manual di bawah. Skrip memuat konfigurasi, menjalankan migration metadata, memeriksa akun admin, lalu menjalankan layanan. Buka `http://localhost:3000/login` dan tekan `Ctrl+C` pada terminal untuk menghentikan layanan yang dimulai oleh skrip.
+
+Pilihan lainnya dari root repository:
+
+```powershell
+.\dev.cmd fe      # Jalankan frontend saja; backend harus dijalankan terpisah
+.\dev.cmd be      # Jalankan backend saja
+.\dev.cmd setup   # Siapkan database lokal baru; hanya jika .env belum ada
+.\dev.cmd admin   # Siapkan admin pertama jika belum ada
+```
+
+Untuk setup otomatis, PostgreSQL harus berjalan dan `psql` harus tersedia di PATH. Setup membuat database metadata dan dua database target lokal; kredensial target disimpan di `tmp/dev/database-credentials.txt`. Jika nama database atau role yang diperlukan sudah digunakan, setup berhenti tanpa menimpanya. Log layanan berada di `tmp/dev/`.
+
+### Menjalankan secara manual
+
+Langkah berikut menyediakan alternatif untuk menyiapkan database, menjalankan migration, dan menjalankan FE serta BE secara terpisah.
 
 ### 1. Siapkan database metadata
 
@@ -42,6 +68,14 @@ CREATE DATABASE platform OWNER platform;
 ```
 
 Perintah `\password` akan meminta password untuk role `platform`. Jika role/database sudah ada, jangan dibuat ulang; gunakan database yang sudah digunakan sebelumnya. Keluar dengan `\q`.
+
+Untuk menjalankan migration pada database target yang disiapkan secara manual, administrator PostgreSQL perlu menjalankan `BE/sql/provision_target_history.sql` pada setiap target menggunakan `psql` dan role executor terbatas yang sudah ada:
+
+```powershell
+psql -h localhost -U <admin_target> -d <database_target> -v executor_role=<role_executor> -f BE/sql/provision_target_history.sql
+```
+
+Ganti nilai di dalam tanda `<...>` dengan nama yang sesuai. Role executor harus terpisah dari pemilik database dan memiliki izin yang diperlukan untuk migration. Petunjuk lengkapnya berada pada komentar di awal skrip SQL. Jangan jalankan skrip provisioning melalui draft aplikasi. Setup otomatis `dev.cmd` menyiapkan bagian ini untuk target lokal yang dibuatnya.
 
 ### 2. Siapkan environment
 
@@ -68,7 +102,7 @@ Atur nilai berikut pada `.env`:
 | `FE_HTTP_ADDR` | Opsional, default `:3000` (dibaca proses FE) |
 | `FE_BACKEND_URL` | Opsional, default `http://localhost:8080` (dibaca proses FE) |
 
-Penting: `.env.example` masih mencantumkan `APP_ORIGIN=http://localhost:8080`. Ubah menjadi `http://localhost:3000` jika browser mengakses FE pada port `3000`. Go tidak otomatis membaca file `.env`; environment harus dimuat ke proses.
+`APP_ORIGIN` harus sama persis dengan alamat frontend yang dibuka di browser. Misalnya, `http://localhost:3000` berbeda dari `http://127.0.0.1:3000`. Go tidak otomatis membaca file `.env`; environment harus dimuat ke proses saat menjalankan secara manual.
 
 Jika belum memiliki `TARGET_CREDENTIAL_KEY`, generate satu kali melalui PowerShell:
 
@@ -197,7 +231,7 @@ Frontend merender kerangka halaman menggunakan `html/template`; JavaScript ES Mo
 
 ### Go Templates dan JavaScript ES Modules
 
-Frontend menggunakan Go `html/template` untuk penyajian HTML, vanilla JavaScript ES Modules untuk interaksi, serta CSS untuk tampilan. Asset disematkan ke binary FE melalui `//go:embed templates static`.
+Frontend menggunakan Go `html/template` untuk penyajian HTML, vanilla JavaScript ES Modules untuk interaksi, serta CSS untuk tampilan. Asset disematkan ke binary FE melalui `//go:embed templates static`, sehingga perubahan template, CSS, atau JavaScript memerlukan build dan restart FE.
 
 ### Same-Origin Reverse Proxy
 
@@ -293,6 +327,7 @@ Semua endpoint API diakses oleh browser melalui `http://localhost:3000/api/v1/..
 | GET / POST | `/api/v1/databases/{id}/drafts` | Daftar / tambah draft |
 | GET / PATCH | `/api/v1/databases/{id}/drafts/{draftID}` | Detail / ubah draft |
 | POST | `/api/v1/databases/{id}/drafts/{draftID}/execute` | Execute migration |
+| POST | `/api/v1/databases/{id}/drafts/{draftID}/explain` | Analisis query draft tersimpan |
 | GET | `/api/v1/databases/{id}/migrations` | Daftar history |
 | GET | `/api/v1/databases/{id}/migrations/{version}` | Detail history |
 | POST | `/api/v1/databases/{id}/migrations/reconcile` | Reconcile status ambigu |
@@ -315,4 +350,15 @@ node --test
 ```
 
 ## Bonus dan Batasan
-??
+
+### Schema Diff dan Migration Generation
+
+Pada halaman Draft, pengguna dengan grant `edit` dapat membandingkan dua schema dalam database target yang sama. Aplikasi menampilkan perbedaan dan kandidat SQL yang dapat dimasukkan ke draft baru; proses perbandingan tidak menjalankan SQL.
+
+Generator mendukung pembuatan tabel biasa dengan tipe kolom sederhana dan penambahan kolom nullable tanpa default. Penghapusan, perubahan kolom yang sudah ada, constraint, index, dan atribut atau tipe tertentu tidak dibuat otomatis. Perbandingan dibatasi hingga 100 tabel per schema. Tinjau peringatan dan SQL sebelum menjalankan migration.
+
+### Query Execution Plan Analysis
+
+Pengguna dengan grant `edit` dapat memilih **Analisis Query** pada draft yang sudah disimpan. Backend mengirim `EXPLAIN (FORMAT JSON)` ke PostgreSQL dan menampilkan rencana untuk setiap statement.
+
+Hasilnya merupakan perkiraan PostgreSQL, bukan waktu eksekusi aktual: fitur ini tidak menggunakan `EXPLAIN ANALYZE`. Setiap statement diperiksa secara terpisah dalam transaksi read-only, sehingga perubahan dari statement sebelumnya tidak tersedia untuk statement berikutnya. PostgreSQL juga dapat menolak statement yang tidak mendukung `EXPLAIN`.

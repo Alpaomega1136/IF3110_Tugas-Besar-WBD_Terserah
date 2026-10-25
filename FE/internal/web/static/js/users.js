@@ -1,3 +1,4 @@
+import { confirmAction } from "./confirmation.js";
 import {
     authenticatedRequest,
     requireAuthenticatedUser,
@@ -18,12 +19,14 @@ const createButton = document.getElementById("create-user-submit");
 const createMessage = document.getElementById("create-user-message");
 const usernameError = document.getElementById("create-username-error");
 const passwordError = document.getElementById("create-password-error");
+const passwordHelp = document.getElementById("create-password-help");
 
 const editSection = document.getElementById("edit-user-section");
 const editForm = document.getElementById("edit-user-form");
 const editUserName = document.getElementById("edit-user-name");
 const editPassword = document.getElementById("edit-password");
 const editPasswordError = document.getElementById("edit-password-error");
+const editPasswordHelp = document.getElementById("edit-password-help");
 const editAdmin = document.getElementById("edit-is-admin");
 const editActive = document.getElementById("edit-is-active");
 const editSubmit = document.getElementById("edit-user-submit");
@@ -33,12 +36,6 @@ const editMessage = document.getElementById("edit-user-message");
 let currentUserId = null;
 let selectedUser = null;
 let editSaving = false;
-
-function addCell(row, value) {
-    const cell = document.createElement("td");
-    cell.textContent = String(value);
-    row.appendChild(cell);
-}
 
 function formatDate(value) {
     if (!value) return "-";
@@ -74,17 +71,19 @@ async function refreshUsers() {
         body.replaceChildren();
 
         for (const item of result.users) {
-            const row = document.createElement("tr");
-
-            addCell(row, item.id);
-            addCell(row, item.username);
-            addCell(row, item.is_platform_admin ? "Platform Admin" : "User");
-            addCell(row, item.is_active ? "Aktif" : "Nonaktif");
-            addCell(row, Array.isArray(item.group_ids) ? item.group_ids.length : "-");
-            
-            addCell(row, formatDate(item.created_at));
-
-            const actionCell = document.createElement("td");
+            const row = document.createElement("li");
+            row.className = "users-list-item";
+            const details = document.createElement("div");
+            details.className = "users-list-details";
+            const name = document.createElement("strong");
+            name.textContent = item.username;
+            const role = document.createElement("p");
+            role.textContent = `${item.is_platform_admin ? "Platform Admin" : "User"} · ${item.is_active ? "Aktif" : "Nonaktif"}`;
+            const meta = document.createElement("p");
+            meta.textContent = `ID ${item.id} · Group: ${Array.isArray(item.group_ids) ? item.group_ids.length : "-"} · Dibuat: ${formatDate(item.created_at)}`;
+            details.appendChild(name);
+            details.appendChild(role);
+            details.appendChild(meta);
             const editButton = document.createElement("button");
 
             editButton.type = "button";
@@ -96,8 +95,8 @@ async function refreshUsers() {
                 openEditUser(item);
             });
 
-            actionCell.appendChild(editButton);
-            row.appendChild(actionCell);
+            row.appendChild(details);
+            row.appendChild(editButton);
 
             body.appendChild(row);
         }
@@ -126,6 +125,8 @@ async function refreshUsers() {
 function setFieldError(input, target, message) {
     target.textContent = message;
     target.hidden = !message;
+    if (input === passwordInput) passwordHelp.hidden = !!message;
+    if (input === editPassword) editPasswordHelp.hidden = !!message;
 
     if (message) {
         input.setAttribute("aria-invalid", "true");
@@ -152,7 +153,7 @@ function validateCreateInput() {
         setFieldError(
             usernameInput,
             usernameError,
-            "Username harus 1-100 byte dan tidak boleh mengandung spasi."
+            "Isi username tanpa spasi, maksimal 100 huruf atau angka biasa. Karakter tertentu dapat dihitung lebih dari satu."
         );
     }
 
@@ -162,7 +163,7 @@ function validateCreateInput() {
         setFieldError(
             passwordInput,
             passwordError,
-            "Password harus terdiri dari 12–1024 byte."
+            "Panjang password tidak sesuai. Gunakan 12–1024 huruf, angka, atau simbol biasa; karakter tertentu dapat dihitung lebih dari satu."
         );
     }
 
@@ -304,7 +305,7 @@ editForm.addEventListener("submit", async (event) => {
             setFieldError(
                 editPassword,
                 editPasswordError,
-                "Password harus terdiri dari 12–1024 byte."
+                "Panjang password tidak sesuai. Gunakan 12–1024 huruf, angka, atau simbol biasa; karakter tertentu dapat dihitung lebih dari satu."
             );
             editPassword.focus();
             return;
@@ -329,14 +330,18 @@ editForm.addEventListener("submit", async (event) => {
         );
 
     if (selfSessionRevoked) {
-        const confirmed = window.confirm(
-            "Perubahan ini akan mengakhiri session akunmu. " +
-            "Kamu perlu login kembali. Lanjutkan?"
-        );
+        const confirmed = await confirmAction({
+            title: "Ubah akun sendiri?",
+            message: "Perubahan ini akan mengakhiri session akunmu. " +
+                "Kamu perlu login kembali. Lanjutkan?",
+            confirmLabel: "Simpan Perubahan",
+            tone: "danger"
+        });
 
         if (!confirmed) return;
     }
 
+    if (editSaving) return;
     editSaving = true;
     editSubmit.disabled = true;
     editCancel.disabled = true;

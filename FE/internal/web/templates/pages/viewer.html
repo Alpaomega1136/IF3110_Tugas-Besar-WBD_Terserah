@@ -1,11 +1,6 @@
 {{define "content"}}
 <div class="app-shell">
-    <header class="app-header">
-        <a class="app-brand" href="/dashboard">Terserah</a>
-        <nav class="app-nav" aria-label="Navigasi utama">
-            <a href="/dashboard">Dashboard</a>
-        </nav>
-    </header>
+    {{template "navigation" .}}
     <main class="app-main" id="viewer-page" data-database-id="{{.DatabaseID}}">
         <h1>Database Viewer</h1>
         <p id="viewer-status" role="status" aria-live="polite">Memeriksa session dan hak akses...</p>
@@ -15,12 +10,6 @@
                 <h2 id="viewer-target-heading">Database: <span id="viewer-database-name"></span></h2>
                 <p>Database target: <span id="viewer-target-name"></span></p>
                 <p>Hak akses: <strong id="viewer-access"></strong></p>
-                <nav class="database-workspace-links" aria-label="Navigasi database">
-                    <a href="/dashboard">Dashboard</a>
-                    <a href="/databases/{{.DatabaseID}}/history">Migration History</a>
-                    <a id="viewer-drafts-link" href="/databases/{{.DatabaseID}}/drafts" hidden>Kelola Draft</a>
-                </nav>
-                <p class="form-help">Viewer hanya dapat membaca struktur dan data. Semua akses diperiksa kembali oleh backend.</p>
             </section>
             <div class="viewer-explorer">
                 <section class="dashboard-panel" aria-labelledby="viewer-schemas-heading">

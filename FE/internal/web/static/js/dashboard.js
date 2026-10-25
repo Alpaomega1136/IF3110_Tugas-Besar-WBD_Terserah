@@ -1,12 +1,10 @@
-import { authenticatedRequest, requireAuthenticatedUser, logout } from "./auth.js";
+import { authenticatedRequest, requireAuthenticatedUser } from "./auth.js";
 
 const byId = (id) => document.getElementById(id);
 const status = byId("dashboard-status");
 const content = byId("dashboard-content");
 const username = byId("welcome-username");
 const role = byId("account-role");
-const adminPanel = byId("admin-panel");
-const logoutButton = byId("logout-button");
 const databasesStatus = byId("databases-status");
 const databasesError = byId("databases-error");
 const databasesEmpty = byId("databases-empty");
@@ -26,6 +24,7 @@ function textCell(row, value) {
 
 function actionLink(cell, id, resource, label) {
     const link = document.createElement("a");
+    link.className = "workspace-button";
     link.href = `/databases/${encodeURIComponent(id)}/${resource}`;
     link.textContent = label;
     cell.appendChild(link);
@@ -84,30 +83,13 @@ async function loadDashboard() {
         if (!user) return;
         username.textContent = user.username;
         role.textContent = user.is_platform_admin ? "Platform Admin" : "Pengguna";
-        adminPanel.hidden = !user.is_platform_admin;
         content.hidden = false;
         status.hidden = true;
-        logoutButton.disabled = false;
         await loadDatabases(user.is_platform_admin);
     } catch (error) {
         status.textContent = error.message || "Gagal memuat dashboard.";
         status.className = "error-message";
     }
 }
-
-logoutButton.addEventListener("click", async () => {
-    logoutButton.disabled = true;
-    status.hidden = false;
-    status.className = "";
-    status.textContent = "Sedang logout...";
-    try {
-        await logout();
-        window.location.replace("/login");
-    } catch (error) {
-        status.className = "error-message";
-        status.textContent = error.message || "Logout gagal. Silakan coba lagi.";
-        logoutButton.disabled = false;
-    }
-});
 
 loadDashboard();

@@ -1,16 +1,6 @@
 {{define "content"}}
 <div class="app-shell">
-    <header class="app-header">
-        <a class="app-brand" href="/dashboard">Terserah</a>
-
-        <nav class="app-nav" aria-label="Navigasi utama">
-            <a href="/dashboard" aria-current="page">Dashboard</a>
-            <button type="button" id="logout-button"
-                    class="button-secondary" disabled>
-                Logout
-            </button>
-        </nav>
-    </header>
+    {{template "navigation" .}}
 
     <main class="app-main">
         <h1>Dashboard</h1>
@@ -73,17 +63,6 @@
                 </p>
             </section>
 
-            <section class="dashboard-panel" id="admin-panel" aria-labelledby="admin-heading" hidden>
-                <h2 id="admin-heading">Administrasi Platform</h2>
-                <p>Kelola akun pengguna dan hak akses platform.</p>
-                <a href="/admin/users">Kelola Pengguna</a>
-                <span aria-hidden="true"> · </span>
-                <a href="/admin/groups">Kelola Group</a>
-                <span aria-hidden="true"> · </span>
-                <a href="/admin/grants">Kelola Grant Database</a>
-                <span aria-hidden="true"> · </span>
-                <a href="/admin/databases">Kelola Koneksi Database</a>
-            </section>
         </div>
     </main>
 </div>
