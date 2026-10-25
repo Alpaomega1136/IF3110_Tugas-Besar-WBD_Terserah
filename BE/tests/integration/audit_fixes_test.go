@@ -83,14 +83,15 @@ func TestRecoveryIgnoresTargetSearchPath(t *testing.T) {
 	grant(t, a, "editor", target.ID, "edit")
 	editor := a.browser()
 	editor.login(t, "editor")
-	owner, err := database.Open(ctx, os.Getenv("TEST_TARGET_ADMIN_DATABASE_URL"))
+	// The executor owns the application schema and can restore its own role settings.
+	executor, err := database.Open(ctx, os.Getenv("TEST_TARGET_DATABASE_URL"))
 	if err != nil {
-		t.Fatal("cannot open fixture admin")
+		t.Fatal("cannot open fixture executor")
 	}
-	defer owner.Close()
+	defer executor.Close()
 	role := pgx.Identifier{input.Username}.Sanitize()
 	var settings []string
-	if err = owner.QueryRow(ctx, `SELECT COALESCE((SELECT setconfig FROM pg_catalog.pg_db_role_setting WHERE setrole=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=$1) AND setdatabase=0),ARRAY[]::text[])`, input.Username).Scan(&settings); err != nil {
+	if err = executor.QueryRow(ctx, `SELECT COALESCE((SELECT setconfig FROM pg_catalog.pg_db_role_setting WHERE setrole=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=$1) AND setdatabase=0),ARRAY[]::text[])`, input.Username).Scan(&settings); err != nil {
 		t.Fatal(err)
 	}
 	var original *string
@@ -104,18 +105,18 @@ func TestRecoveryIgnoresTargetSearchPath(t *testing.T) {
 	q := pgx.Identifier{schema}.Sanitize()
 	defer func() {
 		if original == nil {
-			_, err = owner.Exec(ctx, "ALTER ROLE "+role+" RESET search_path")
+			_, err = executor.Exec(ctx, "ALTER ROLE "+role+" RESET search_path")
 		} else {
 			var command string
-			err = owner.QueryRow(ctx, `SELECT pg_catalog.format('ALTER ROLE %I SET search_path = %L',$1::text,$2::text)`, input.Username, *original).Scan(&command)
+			err = executor.QueryRow(ctx, `SELECT pg_catalog.format('ALTER ROLE %I SET search_path = %L',$1::text,$2::text)`, input.Username, *original).Scan(&command)
 			if err == nil {
-				_, err = owner.Exec(ctx, command)
+				_, err = executor.Exec(ctx, command)
 			}
 		}
 		if err != nil {
 			t.Error("cannot restore fixture search_path", err)
 		}
-		if _, err = owner.Exec(ctx, "DROP SCHEMA IF EXISTS "+q+" CASCADE"); err != nil {
+		if _, err = executor.Exec(ctx, "DROP SCHEMA IF EXISTS "+q+" CASCADE"); err != nil {
 			t.Error(err)
 		}
 	}()
@@ -149,11 +150,11 @@ func TestRecoveryIgnoresTargetSearchPath(t *testing.T) {
 		t.Fatal("version sequence changed")
 	}
 	var count int
-	if err = owner.QueryRow(ctx, "SELECT count(*) FROM "+q+".unqualified").Scan(&count); err != nil || count != 1 {
+	if err = executor.QueryRow(ctx, "SELECT count(*) FROM "+q+".unqualified").Scan(&count); err != nil || count != 1 {
 		t.Fatal("application search_path was not restored", err)
 	}
 	status(t, editor.request("GET", base+"/schemas/"+schema+"/tables/items/rows", nil), 200)
-	if err = owner.QueryRow(ctx, "SELECT count(*) FROM _terserah.migration_receipts WHERE execution_id=$1", first.ExecutionID).Scan(&count); err != nil || count != 1 {
+	if err = executor.QueryRow(ctx, "SELECT count(*) FROM _terserah.migration_receipts WHERE execution_id=$1", first.ExecutionID).Scan(&count); err != nil || count != 1 {
 		t.Fatal("missing real receipt", err)
 	}
 	if _, err = a.db.Exec(ctx, "UPDATE migration_history SET status='unknown',finished_at=NULL WHERE execution_id=$1", first.ExecutionID); err != nil {
