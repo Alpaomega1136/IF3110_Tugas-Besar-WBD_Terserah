@@ -1,3 +1,4 @@
+import { confirmAction } from "./confirmation.js";
 import {
     authenticatedRequest,
     requireAuthenticatedUser,
@@ -329,14 +330,18 @@ editForm.addEventListener("submit", async (event) => {
         );
 
     if (selfSessionRevoked) {
-        const confirmed = window.confirm(
-            "Perubahan ini akan mengakhiri session akunmu. " +
-            "Kamu perlu login kembali. Lanjutkan?"
-        );
+        const confirmed = await confirmAction({
+            title: "Ubah akun sendiri?",
+            message: "Perubahan ini akan mengakhiri session akunmu. " +
+                "Kamu perlu login kembali. Lanjutkan?",
+            confirmLabel: "Simpan Perubahan",
+            tone: "danger"
+        });
 
         if (!confirmed) return;
     }
 
+    if (editSaving) return;
     editSaving = true;
     editSubmit.disabled = true;
     editCancel.disabled = true;

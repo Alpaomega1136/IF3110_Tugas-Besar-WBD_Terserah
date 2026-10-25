@@ -36,6 +36,22 @@ func TestLoginPage(t *testing.T) {
 	}
 }
 
+func TestSharedConfirmationModal(t *testing.T) {
+    h := testHandler(t, "http://localhost:8080")
+    for _, route := range []string{"/login", "/admin/databases", "/admin/grants", "/databases/1/drafts", "/databases/1/history"} {
+        w := httptest.NewRecorder()
+        h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, route, nil))
+        if w.Code != http.StatusOK {
+            t.Fatalf("GET %s returned %d", route, w.Code)
+        }
+        for _, expected := range []string{`id="global-confirm-dialog"`, `id="global-confirm-accept"`, `id="global-confirm-cancel"`, `aria-labelledby="global-confirm-title"`} {
+            if !strings.Contains(w.Body.String(), expected) {
+                t.Fatalf("GET %s is missing %s", route, expected)
+            }
+        }
+    }
+}
+
 func TestRootRedirectAndStatic(t *testing.T) {
 	h := testHandler(t, "http://localhost:8080")
 	w := httptest.NewRecorder()
@@ -44,7 +60,7 @@ func TestRootRedirectAndStatic(t *testing.T) {
 		t.Fatalf("unexpected root response: %d %q", w.Code, w.Header().Get("Location"))
 	}
 
-	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js", "/static/js/users.js", "/static/js/groups.js", "/static/js/grants.js", "/static/js/drafts.js", "/static/js/history.js"} {
+	for _, asset := range []string{"/static/css/style.css", "/static/js/login.js", "/static/js/api.js", "/static/js/auth.js", "/static/js/dashboard.js", "/static/js/users.js", "/static/js/groups.js", "/static/js/grants.js", "/static/js/drafts.js", "/static/js/history.js", "/static/js/confirmation.js"} {
 		w = httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, asset, nil))
 		if w.Code != http.StatusOK {

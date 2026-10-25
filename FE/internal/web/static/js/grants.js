@@ -1,3 +1,4 @@
+import { confirmAction } from "./confirmation.js";
 import {
     authenticatedRequest,
     requireAuthenticatedUser,
@@ -240,13 +241,17 @@ form.addEventListener("submit", async (event) => {
         level === "view";
 
     if (downgrade &&
-        !window.confirm(
-            "Penurunan izin akan mencabut session anggota group. Lanjutkan?"
-        )
+        !(await confirmAction({
+            title: "Turunkan akses group?",
+            message: "Penurunan izin akan mencabut session anggota group. Lanjutkan?",
+            confirmLabel: "Turunkan Izin",
+            tone: "danger"
+        }))
     ) {
         return;
     }
 
+    if (saving) return;
     showMessage("");
     setSaving(true);
 
@@ -294,11 +299,14 @@ form.addEventListener("submit", async (event) => {
 async function revokeGrant(group, grant) {
     if (saving) return;
 
-    const confirmed = window.confirm(
-        `Cabut akses ${connectionName(grant.database_id)} dari group ${group.name}? Session anggota group akan dicabut.`
-    );
+    const confirmed = await confirmAction({
+        title: "Cabut akses database?",
+        message: `Cabut akses ${connectionName(grant.database_id)} dari group ${group.name}? Session anggota group akan dicabut.`,
+        confirmLabel: "Cabut Grant",
+        tone: "danger"
+    });
 
-    if (!confirmed) return;
+    if (!confirmed || saving) return;
 
     showMessage("");
     setSaving(true);

@@ -1,3 +1,4 @@
+import { confirmAction } from "./confirmation.js";
 import {
     authenticatedRequest,
     requireAuthenticatedUser,
@@ -204,8 +205,13 @@ function isDirty() {
     return Boolean(titleInput.value || sqlInput.value);
 }
 
-function confirmDiscard() {
-    return !isDirty() || window.confirm("Ada perubahan draft yang belum disimpan. " + "Abaikan perubahan?");
+async function confirmDiscard() {
+    return !isDirty() || await confirmAction({
+        title: "Abaikan perubahan draft?",
+        message: "Ada perubahan draft yang belum disimpan. Abaikan perubahan?",
+        confirmLabel: "Abaikan Perubahan",
+        tone: "danger"
+    });
 }
 
 function validInt64String(value) {
@@ -245,8 +251,8 @@ function showDraft(draft) {
     resetExecutionFeedback();
 }
 
-function startNewDraft() {
-    if (busy || !confirmDiscard()) return;
+async function startNewDraft() {
+    if (busy || !(await confirmDiscard()) || busy) return;
 
     selectedDraft = null;
 
@@ -364,7 +370,7 @@ nextButton.addEventListener("click", async () => {
 });
 
 async function openDraft(draftId) {
-    if (busy || !confirmDiscard()) return;
+    if (busy || !(await confirmDiscard()) || busy) return;
 
     setBusy(true);
     showMessage(saveMessage, "");
@@ -420,12 +426,15 @@ async function executeDraft() {
             return;
         }
 
-        const confirmed = window.confirm(
-            `Execute migration di ${databaseName.textContent} (${targetName.textContent})?\n\n` +
-            `Draft: ${draft.title} (ID ${draft.id}, revisi ${draft.revision})\n\n` +
-            "Periksa SQL tersimpan di bagian Detail Draft. Eksekusi mengubah database target. " +
-            "SQL gagal akan di-rollback oleh backend. Lanjutkan?"
-        );
+        const confirmed = await confirmAction({
+            title: "Execute SQL Migration?",
+            message: `Execute migration di ${databaseName.textContent} (${targetName.textContent})?\n\n` +
+                `Draft: ${draft.title} (ID ${draft.id}, revisi ${draft.revision})\n\n` +
+                "Periksa SQL tersimpan di bagian Detail Draft. Eksekusi mengubah database target. " +
+                "SQL gagal akan di-rollback oleh backend. Lanjutkan?",
+            confirmLabel: "Execute Migration",
+            tone: "danger"
+        });
         if (!confirmed) {
             showMessage(executionMessage, "Eksekusi dibatalkan. Tidak ada SQL dijalankan.");
             return;

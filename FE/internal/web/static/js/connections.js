@@ -1,3 +1,4 @@
+import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
 
 const byId = (id) => document.getElementById(id);
@@ -292,7 +293,13 @@ async function testConnection(id) {
 async function deleteConnection(id) {
     if (busy) return;
     const item = entries.find((entry) => entry.id === id);
-    if (!item || !window.confirm(`Hapus koneksi "${item.name}" (ID ${id})? Tindakan ini tidak dapat dibatalkan.`)) return;
+    if (!item || !(await confirmAction({
+        title: "Hapus koneksi database?",
+        message: `Hapus koneksi "${item.name}" (ID ${id})? Tindakan ini tidak dapat dibatalkan.`,
+        confirmLabel: "Hapus Koneksi",
+        tone: "danger"
+    }))) return;
+    if (busy) return;
     setBusy(true);
     setMessage(actionMessage, `Menghapus koneksi ${item.name}...`);
     try {

@@ -1,3 +1,4 @@
+import { confirmAction } from "./confirmation.js";
 import {
     authenticatedRequest,
     requireAuthenticatedUser,
@@ -355,7 +356,11 @@ function renderReconciled(items) {
 
 async function reconcileHistory() {
     if (busy || !canEdit) return;
-    if (!window.confirm("Periksa dan perbarui status migration yang belum pasti? SQL tidak dijalankan ulang.")) return;
+    if (!(await confirmAction({
+        title: "Reconcile migration?",
+        message: "Periksa dan perbarui status migration yang belum pasti? SQL tidak dijalankan ulang.",
+        confirmLabel: "Reconcile"
+    })) || busy || !canEdit) return;
     setBusy(true);
     showMessage(reconcileError, "");
     showMessage(reconcileStatus, "Memeriksa izin Edit dan receipt migration...");

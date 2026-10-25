@@ -9,6 +9,14 @@
 </head>
 <body>
     {{template "content" .}}
+    <dialog id="global-confirm-dialog" class="confirm-dialog" aria-labelledby="global-confirm-title" aria-describedby="global-confirm-message">
+        <h2 id="global-confirm-title">Konfirmasi tindakan</h2>
+        <p id="global-confirm-message"></p>
+        <form method="dialog" class="confirm-dialog-actions">
+            <button id="global-confirm-cancel" type="submit" value="cancel" class="button-secondary">Batal</button>
+            <button id="global-confirm-accept" type="submit" value="confirm" class="confirm-dialog-accept">Lanjutkan</button>
+        </form>
+    </dialog>
 </body>
 </html>
 {{end}}
