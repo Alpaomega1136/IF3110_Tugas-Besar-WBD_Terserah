@@ -1,6 +1,8 @@
 -- Run with psql as a trusted target administrator, NEVER through the runner.
 -- Supply an EXISTING restricted login: psql ... -v executor_role=app_executor -f this_file
 -- The login must not own the database, this schema/table, or inherit their owners.
+-- Use a dedicated executor per target; no ownership/grants in other databases.
+-- Do not grant pg_read_all_stats or pg_signal_backend to this executor.
 -- No login/password/role memberships are created or changed by this script.
 \set ON_ERROR_STOP on
 BEGIN;

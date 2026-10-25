@@ -186,11 +186,35 @@ func startAPI(t *testing.T, firstAdminCommand string) (string, string) {
 		setupCommands = []string{"seed", "migrate", "migrate"}
 	}
 	for _, name := range setupCommands {
+		if name == "bootstrap" {
+			check := exec.CommandContext(cliCtx, filepath.Join(bin, "bootstrap"+suffix), "-check")
+			check.Env = env
+			output, e := check.Output()
+			if e != nil || strings.TrimSpace(string(output)) != "false" {
+				t.Fatal("bootstrap check must report missing admin before first creation")
+			}
+			invalid := exec.CommandContext(cliCtx, filepath.Join(bin, "bootstrap"+suffix))
+			invalid.Env = append(append([]string(nil), env...), "BOOTSTRAP_PASSWORD=too-short")
+			if invalid.Run() == nil {
+				t.Fatal("short bootstrap password accepted")
+			}
+			check = exec.CommandContext(cliCtx, filepath.Join(bin, "bootstrap"+suffix), "-check")
+			check.Env = env
+			output, e = check.Output()
+			if e != nil || strings.TrimSpace(string(output)) != "false" {
+				t.Fatal("failed bootstrap must remain recoverable")
+			}
+		}
 		cmd := exec.CommandContext(cliCtx, filepath.Join(bin, name+suffix))
 		cmd.Env = env
 		if err = cmd.Run(); err != nil {
 			t.Fatalf("production %s CLI failed", name)
 		}
+	}
+	check := exec.CommandContext(cliCtx, filepath.Join(bin, "bootstrap"+suffix), "-check")
+	check.Env = env
+	if output, e := check.Output(); e != nil || strings.TrimSpace(string(output)) != "true" {
+		t.Fatal("bootstrap check must recognize the existing admin")
 	}
 	for _, name := range []string{"bootstrap", "seed"} {
 		cmd := exec.CommandContext(cliCtx, filepath.Join(bin, name+suffix))

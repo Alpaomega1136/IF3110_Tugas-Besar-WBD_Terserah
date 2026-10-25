@@ -1,13 +1,13 @@
-# Windows development: .\dev.cmd [all|fe|be|setup|admin]
+# Windows development: .\dev.cmd [all|fe|be|setup|admin|upgrade]
 [CmdletBinding()]
-param([ValidateSet('all', 'fe', 'be', 'setup', 'admin')][string]$Mode = 'all')
+param([ValidateSet('all', 'fe', 'be', 'setup', 'admin', 'upgrade')][string]$Mode = 'all')
 
 $ErrorActionPreference = 'Stop'
 
 function Import-DevEnvironment([string]$Path) {
     $allowed = @('DATABASE_URL', 'HTTP_ADDR', 'APP_ORIGIN', 'TARGET_CREDENTIAL_KEY', 'FE_HTTP_ADDR', 'FE_BACKEND_URL')
     $values = @{}
-    foreach ($line in Get-Content -LiteralPath $Path) {
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
         if ($line -match '^\s*(#|$)') { continue }
         if ($line -notmatch '^\s*([A-Z_]+)\s*=(.*)$' -or $allowed -notcontains $Matches[1]) {
             throw 'Format .env tidak valid. Gunakan KEY=value sesuai .env.example.'
@@ -29,6 +29,25 @@ function Invoke-DevGo([string]$Go, [string]$Directory, [string[]]$GoArgs) {
         & $Go @GoArgs
         if ($LASTEXITCODE -ne 0) { throw "Go gagal ($($GoArgs[0])). Periksa output di atas." }
     } finally { Pop-Location }
+}
+
+function Ensure-DevAdmin([string]$Go, [string]$Directory) {
+    $status = Invoke-DevGo $Go $Directory @('run', './cmd/bootstrap', '-check')
+    if ($status -eq 'true') { Write-Host 'Admin aplikasi sudah tersedia.'; return }
+    if ($status -ne 'false') { throw 'Status admin tidak dapat diperiksa; server tidak dijalankan.' }
+    do {
+        $username = (Read-Host 'Username admin pertama').Trim()
+        $password = Read-Host 'Password admin baru (12-1024 byte UTF-8)' -AsSecureString
+        $plain = (New-Object System.Net.NetworkCredential('', $password)).Password
+        $length = [System.Text.Encoding]::UTF8.GetByteCount($plain)
+        $nameLength = [System.Text.Encoding]::UTF8.GetByteCount($username)
+        $valid = $nameLength -ge 1 -and $nameLength -le 100 -and $username -notmatch '[ \t\r\n\x00]' -and $length -ge 12 -and $length -le 1024
+        if (-not $valid) { Write-Warning 'Username harus 1-100 byte tanpa spasi/NUL; password harus 12-1024 byte. Ulangi input.' }
+    } until ($valid)
+    $env:BOOTSTRAP_USERNAME = $username
+    $env:BOOTSTRAP_PASSWORD = $plain
+    try { Invoke-DevGo $Go $Directory @('run', './cmd/bootstrap') }
+    finally { Remove-Item Env:\BOOTSTRAP_PASSWORD -ErrorAction SilentlyContinue; $plain = $null }
 }
 
 function Get-DevURL([string]$Address) {
@@ -84,10 +103,11 @@ function Invoke-DevMain {
         $go = if ($goCommand) { $goCommand.Source } else { Join-Path $env:ProgramFiles 'Go/bin/go.exe' }
         if (-not (Test-Path -LiteralPath $go)) { throw 'Go sistem tidak ditemukan. Pasang Go atau tambahkan Go yang sudah terpasang ke PATH.' }
         $env:GOTOOLCHAIN = 'local'
-        $bootstrap = $Mode -eq 'admin'
+        if ($Mode -eq 'upgrade' -and -not (Test-Path -LiteralPath $configPath) -and -not $env:DATABASE_URL) {
+            throw 'Upgrade memerlukan konfigurasi .env lama; tidak membuat database baru.'
+        }
         if ($Mode -eq 'setup' -or ($Mode -ne 'fe' -and -not (Test-Path -LiteralPath $configPath) -and -not $env:DATABASE_URL)) {
             & (Join-Path $root 'scripts/dev-setup.ps1') -Root $root
-            $bootstrap = $true
         }
         $env:HTTP_ADDR = '127.0.0.1:8080'
         $env:APP_ORIGIN = 'http://127.0.0.1:3000'
@@ -98,13 +118,16 @@ function Invoke-DevMain {
             if (-not $env:DATABASE_URL -or -not $env:TARGET_CREDENTIAL_KEY) { throw 'DATABASE_URL dan TARGET_CREDENTIAL_KEY wajib diisi pada .env.' }
             Invoke-DevGo $go (Join-Path $root 'BE') @('run', './cmd/migrate')
         }
-        if ($bootstrap) {
-            $env:BOOTSTRAP_USERNAME = Read-Host 'Username admin pertama'
-            $password = Read-Host 'Password admin baru (12-1024 byte UTF-8)' -AsSecureString
-            $env:BOOTSTRAP_PASSWORD = (New-Object System.Net.NetworkCredential('', $password)).Password
-            try { Invoke-DevGo $go (Join-Path $root 'BE') @('run', './cmd/bootstrap') }
-            finally { Remove-Item Env:\BOOTSTRAP_PASSWORD -ErrorAction SilentlyContinue }
+        if ($Mode -eq 'upgrade') {
+            $secret = Read-Host 'Password PostgreSQL postgres (hentikan FE/BE dahulu)' -AsSecureString
+            $oldPassword = $env:DEV_PG_ADMIN_PASSWORD
+            try {
+                $env:DEV_PG_ADMIN_PASSWORD = (New-Object System.Net.NetworkCredential('', $secret)).Password
+                Invoke-DevGo $go (Join-Path $root 'BE') @('run', './cmd/dev-upgrade', '-root', $root)
+            } finally { $env:DEV_PG_ADMIN_PASSWORD = $oldPassword }
+            return
         }
+        if ($Mode -ne 'fe') { Ensure-DevAdmin $go (Join-Path $root 'BE') }
         if ($Mode -in @('setup', 'admin')) { Write-Host 'Setup selesai. Jalankan .\dev.cmd'; return }
 
         $selected = if ($Mode -eq 'all') { @('be', 'fe') } else { @($Mode) }

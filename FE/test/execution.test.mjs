@@ -293,6 +293,7 @@ test("prevent double POST while first execution is outstanding", async () => {
 
 test("specific error guidance does not promise success on 409/503", () => {
     assert.match(executeErrorMessage({ status: 409, code: "target_history_unprotected" }), /restricted/);
+    assert.match(executeErrorMessage({ status: 409, code: "target_history_unprotected" }), /khusus database ini/);
     assert.match(executeErrorMessage({ status: 503, code: "migration_unavailable" }), /belum pasti/);
     assert.match(executeErrorMessage({ status: 403, code: "csrf_rejected" }), /CSRF/);
 });

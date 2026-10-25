@@ -27,20 +27,21 @@ function Invoke-DevSQL([string]$SQL, [string]$UserName, [string]$DatabaseName) {
 }
 
 Write-Host "Setup development lokal: PostgreSQL 127.0.0.1:$Port, admin PostgreSQL $AdminUser."
-Write-Host 'Membuat database wbd_dev_platform, wbd_dev_target_a/b dan role wbd_dev_meta/owner/exec.'
+Write-Host 'Membuat database wbd_dev_platform, wbd_dev_target_a/b dan executor terpisah per target.'
 Write-Host 'Objek lama dengan nama tersebut tidak akan ditimpa. Password admin PostgreSQL tidak disimpan.'
 $adminPassword = Read-Host "Password PostgreSQL user $AdminUser" -AsSecureString
 $previousPassword = $env:PGPASSWORD
 try {
     $env:PGPASSWORD = (New-Object System.Net.NetworkCredential('', $adminPassword)).Password
     $existing = Invoke-DevSQL @'
-SELECT rolname FROM pg_roles WHERE rolname IN ('wbd_dev_meta','wbd_dev_owner','wbd_dev_exec')
+SELECT rolname FROM pg_roles WHERE rolname IN ('wbd_dev_meta','wbd_dev_owner','wbd_dev_exec','wbd_dev_exec_a','wbd_dev_exec_b')
 UNION ALL SELECT datname FROM pg_database WHERE datname IN ('wbd_dev_platform','wbd_dev_target_a','wbd_dev_target_b');
 '@ $AdminUser 'postgres'
     if ($existing) { throw 'Nama role/database development sudah digunakan. Setup dihentikan tanpa mengubah objek yang ada; gunakan konfigurasi .env milik setup sebelumnya.' }
     $metaPassword = New-DevSecret
     $ownerPassword = New-DevSecret
-    $executorPassword = New-DevSecret
+    $passwordA = New-DevSecret
+    $passwordB = New-DevSecret
     $key = New-DevSecret
     # Persist credentials before DDL so a partial setup never loses generated passwords.
     $config = @"
@@ -65,27 +66,35 @@ Owner password: $ownerPassword
 Add these two targets through the application's Connections page:
 Host: 127.0.0.1
 Port: $Port
-Databases: wbd_dev_target_a and wbd_dev_target_b
-Username: wbd_dev_exec
-Password: $executorPassword
+Database: wbd_dev_target_a
+Username: wbd_dev_exec_a
+Password: $passwordA
+SSL mode: disable (local development)
+
+Database: wbd_dev_target_b
+Username: wbd_dev_exec_b
+Password: $passwordB
 SSL mode: disable (local development)
 "@)
     Invoke-DevSQL @"
 BEGIN;
 CREATE ROLE wbd_dev_meta LOGIN PASSWORD '$metaPassword';
 CREATE ROLE wbd_dev_owner LOGIN PASSWORD '$ownerPassword';
-CREATE ROLE wbd_dev_exec LOGIN PASSWORD '$executorPassword';
+CREATE ROLE wbd_dev_exec_a LOGIN PASSWORD '$passwordA';
+CREATE ROLE wbd_dev_exec_b LOGIN PASSWORD '$passwordB';
 COMMIT;
 CREATE DATABASE wbd_dev_platform OWNER wbd_dev_meta;
 CREATE DATABASE wbd_dev_target_a OWNER wbd_dev_owner;
 CREATE DATABASE wbd_dev_target_b OWNER wbd_dev_owner;
-GRANT CONNECT, CREATE ON DATABASE wbd_dev_target_a, wbd_dev_target_b TO wbd_dev_exec;
+GRANT CONNECT, CREATE ON DATABASE wbd_dev_target_a TO wbd_dev_exec_a;
+GRANT CONNECT, CREATE ON DATABASE wbd_dev_target_b TO wbd_dev_exec_b;
 "@ $AdminUser 'postgres' | Out-Null
     $env:PGPASSWORD = $ownerPassword
     foreach ($databaseName in @('wbd_dev_target_a', 'wbd_dev_target_b')) {
-        & $psql -X -w -h 127.0.0.1 -p $Port -U wbd_dev_owner -d $databaseName -v ON_ERROR_STOP=1 -v executor_role=wbd_dev_exec -f (Join-Path $Root 'BE/sql/provision_target_history.sql') | Out-Null
+        $executor = if ($databaseName -eq 'wbd_dev_target_a') { 'wbd_dev_exec_a' } else { 'wbd_dev_exec_b' }
+        & $psql -X -w -h 127.0.0.1 -p $Port -U wbd_dev_owner -d $databaseName -v ON_ERROR_STOP=1 -v "executor_role=$executor" -f (Join-Path $Root 'BE/sql/provision_target_history.sql') | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Provisioning $databaseName gagal. Credential tetap tersimpan; jangan hapus database." }
-        Invoke-DevSQL 'GRANT USAGE, CREATE ON SCHEMA public TO wbd_dev_exec;' 'wbd_dev_owner' $databaseName | Out-Null
+        Invoke-DevSQL "GRANT USAGE, CREATE ON SCHEMA public TO $executor;" 'wbd_dev_owner' $databaseName | Out-Null
     }
     Write-Host 'Database siap. Detail koneksi target tersimpan privat di tmp/dev/database-credentials.txt.'
 } finally { $env:PGPASSWORD = $previousPassword }

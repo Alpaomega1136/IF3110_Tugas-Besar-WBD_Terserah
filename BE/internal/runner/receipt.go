@@ -42,7 +42,10 @@ func protectedHistory(ctx context.Context, tx pgx.Tx) error {
  AND NOT pg_catalog.pg_has_role(current_user,c.relowner,'MEMBER')
  AND NOT pg_catalog.pg_has_role(current_user,n.nspowner,'MEMBER')
  AND NOT pg_catalog.pg_has_role(current_user,d.datdba,'MEMBER')
- AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles r WHERE (r.rolsuper OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls OR r.rolname IN ('pg_read_server_files','pg_write_server_files','pg_execute_server_program')) AND pg_catalog.pg_has_role(current_user,r.oid,'MEMBER'))
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles r WHERE (r.rolsuper OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls OR r.rolname IN ('pg_read_server_files','pg_write_server_files','pg_execute_server_program','pg_read_all_stats','pg_signal_backend')) AND pg_catalog.pg_has_role(current_user,r.oid,'MEMBER'))
+ AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_shdepend dep JOIN pg_catalog.pg_roles r ON r.oid=dep.refobjid
+ WHERE dep.refclassid='pg_catalog.pg_authid'::pg_catalog.regclass AND pg_catalog.pg_has_role(current_user,r.oid,'MEMBER')
+ AND ((dep.dbid<>0 AND dep.dbid<>d.oid) OR (dep.classid='pg_catalog.pg_database'::pg_catalog.regclass AND dep.objid<>d.oid)))
  AND NOT pg_catalog.has_schema_privilege(current_user,n.oid,'CREATE')
  AND pg_catalog.has_schema_privilege(current_user,n.oid,'USAGE')
  AND pg_catalog.has_table_privilege(current_user,c.oid,'SELECT')

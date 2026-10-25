@@ -24,13 +24,16 @@ jobs:
           sudo -u postgres psql --set ON_ERROR_STOP=1 -c "CREATE ROLE test LOGIN PASSWORD 'test_only';"
           sudo -u postgres psql --set ON_ERROR_STOP=1 -c "CREATE DATABASE platform_test OWNER test;"
           sudo -u postgres psql --set ON_ERROR_STOP=1 -c "CREATE ROLE history_owner LOGIN PASSWORD 'history_owner_only';"
+          sudo -u postgres psql --set ON_ERROR_STOP=1 -c "CREATE ROLE target_one_executor LOGIN PASSWORD 'target_one_only';"
+          sudo -u postgres psql --set ON_ERROR_STOP=1 -c "CREATE ROLE target_two_executor LOGIN PASSWORD 'target_two_only';"
           sudo -u postgres psql --set ON_ERROR_STOP=1 -c "CREATE DATABASE m1_target_one OWNER history_owner;"
           sudo -u postgres psql --set ON_ERROR_STOP=1 -c "CREATE DATABASE m1_target_two OWNER history_owner;"
-          sudo -u postgres psql --set ON_ERROR_STOP=1 -c "GRANT CONNECT, CREATE ON DATABASE m1_target_one TO test;"
-          sudo -u postgres psql --set ON_ERROR_STOP=1 -c "GRANT CONNECT, CREATE ON DATABASE m1_target_two TO test;"
+          sudo -u postgres psql --set ON_ERROR_STOP=1 -c "GRANT CONNECT, CREATE ON DATABASE m1_target_one TO target_one_executor;"
+          sudo -u postgres psql --set ON_ERROR_STOP=1 -c "GRANT CONNECT, CREATE ON DATABASE m1_target_two TO target_two_executor;"
           for target in m1_target_one m1_target_two; do
-            PGPASSWORD=history_owner_only psql -X -h localhost -U history_owner -d "$target" -v executor_role=test -f sql/provision_target_history.sql
-            PGPASSWORD=history_owner_only psql -X -h localhost -U history_owner -d "$target" -v ON_ERROR_STOP=1 -c "GRANT USAGE, CREATE ON SCHEMA public TO test;"
+            if [ "$target" = m1_target_one ]; then executor=target_one_executor; else executor=target_two_executor; fi
+            PGPASSWORD=history_owner_only psql -X -h localhost -U history_owner -d "$target" -v executor_role="$executor" -f sql/provision_target_history.sql
+            PGPASSWORD=history_owner_only psql -X -h localhost -U history_owner -d "$target" -v ON_ERROR_STOP=1 -c "GRANT USAGE, CREATE ON SCHEMA public TO $executor;"
           done
       - run: go mod download
       - name: Formatting
@@ -41,8 +44,8 @@ jobs:
       - run: go test -p 1 -race -tags=integration ./tests/... -count=1 -timeout=240s
         env:
           TEST_DATABASE_URL: postgres://test:test_only@localhost:5432/platform_test?sslmode=disable
-          TEST_TARGET_DATABASE_URL: postgres://test:test_only@localhost:5432/m1_target_one?sslmode=disable
-          TEST_SECOND_TARGET_DATABASE_URL: postgres://test:test_only@localhost:5432/m1_target_two?sslmode=disable
+          TEST_TARGET_DATABASE_URL: postgres://target_one_executor:target_one_only@localhost:5432/m1_target_one?sslmode=disable
+          TEST_SECOND_TARGET_DATABASE_URL: postgres://target_two_executor:target_two_only@localhost:5432/m1_target_two?sslmode=disable
           TEST_TARGET_ADMIN_DATABASE_URL: postgres://history_owner:history_owner_only@localhost:5432/m1_target_one?sslmode=disable
       - run: go build ./...
 

@@ -98,7 +98,7 @@ func fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, connections.ErrInvalid), errors.Is(err, errSQL):
 		httpx.Error(w, 400, "invalid_input", "Invalid ID, revision, title or unsupported SQL")
 	case errors.Is(err, errHistorySetup):
-		httpx.Error(w, 409, "target_history_unprotected", "Provision target history and use a restricted executor login")
+		httpx.Error(w, 409, "target_history_unprotected", "Provision target history and use a dedicated restricted executor per database")
 	case errors.Is(err, errTargetIdentity):
 		httpx.Error(w, 409, "target_identity_conflict", "Target identity changed or is already bound to another connection")
 	case errors.Is(err, connections.ErrMetadataTarget):

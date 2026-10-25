@@ -30,7 +30,7 @@ export function executeErrorMessage(error) {
         switch (error.code) {
             case "execution_conflict": return "Revisi berubah atau ada eksekusi pending. Buka ulang draft dan periksa History sebelum tindakan berikutnya.";
             case "migration_busy": return "Database target sedang menjalankan migration lain. Periksa History sebelum mencoba lagi secara manual.";
-            case "target_history_unprotected": return "Target history belum diproteksi. Minta admin PostgreSQL menjalankan BE/sql/provision_target_history.sql dan gunakan executor restricted, lalu buka ulang draft.";
+            case "target_history_unprotected": return "History target atau isolasi executor belum aman. Minta admin PostgreSQL menjalankan BE/sql/provision_target_history.sql dan gunakan executor restricted khusus database ini, lalu buka ulang draft.";
             case "target_identity_conflict": return "Identitas database target berubah atau sudah terhubung ke koneksi lain. Hubungi Platform Admin; tidak ada bypass dari frontend.";
             case "metadata_target_forbidden": return "Database metadata platform tidak boleh dijadikan target migration.";
             default: return "Konflik eksekusi migration. Periksa History dan muat ulang draft sebelum mencoba lagi.";

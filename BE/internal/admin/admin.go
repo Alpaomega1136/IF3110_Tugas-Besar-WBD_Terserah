@@ -179,8 +179,8 @@ func (s *Service) HandleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
-	if len(name) < 1 || len(name) > 100 {
-		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Group name must be 1..100 characters")
+	if len(name) < 1 || len(name) > 100 || strings.ContainsRune(name, 0) {
+		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Group name must be 1..100 bytes without NUL")
 		return
 	}
 	g, err := s.store.CreateGroup(r.Context(), name)

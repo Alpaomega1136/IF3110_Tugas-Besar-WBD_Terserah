@@ -159,7 +159,7 @@ function handleRequestError(error, target) {
     const messages = {
         migration_busy: "Migration lain masih berjalan. Periksa History dan coba reconcile secara manual nanti.",
         execution_conflict: "Status eksekusi berkonflik. Muat ulang History sebelum melanjutkan.",
-        target_history_unprotected: "Ledger target belum diproteksi. Minta administrator PostgreSQL menjalankan BE/sql/provision_target_history.sql.",
+        target_history_unprotected: "History target atau isolasi executor belum aman. Minta administrator PostgreSQL menjalankan BE/sql/provision_target_history.sql dan menyiapkan executor khusus database ini.",
         target_identity_conflict: "Identitas target berubah atau bentrok. Periksa konfigurasi koneksi.",
         target_unavailable: "Database target tidak dapat dijangkau. Pulihkan koneksi, lalu coba kembali secara manual.",
         migration_unavailable: "Layanan migration belum tersedia. Periksa backend/target dan coba kembali secara manual."
