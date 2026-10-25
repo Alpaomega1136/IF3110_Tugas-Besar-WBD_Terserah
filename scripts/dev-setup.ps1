@@ -21,12 +21,12 @@ function New-DevSecret {
 }
 
 function Invoke-DevSQL([string]$SQL, [string]$UserName, [string]$DatabaseName) {
-    $result = $SQL | & $psql -X -w -h 127.0.0.1 -p $Port -U $UserName -d $DatabaseName -v ON_ERROR_STOP=1 -At
+    $result = $SQL | & $psql -X -w -h localhost -p $Port -U $UserName -d $DatabaseName -v ON_ERROR_STOP=1 -At
     if ($LASTEXITCODE -ne 0) { throw 'Setup PostgreSQL gagal; konfigurasi yang sudah dibuat tidak dihapus atau di-reset.' }
     return $result
 }
 
-Write-Host "Setup development lokal: PostgreSQL 127.0.0.1:$Port, admin PostgreSQL $AdminUser."
+Write-Host "Setup development lokal: PostgreSQL localhost:$Port, admin PostgreSQL $AdminUser."
 Write-Host 'Membuat database wbd_dev_platform, wbd_dev_target_a/b dan executor terpisah per target.'
 Write-Host 'Objek lama dengan nama tersebut tidak akan ditimpa. Password admin PostgreSQL tidak disimpan.'
 $adminPassword = Read-Host "Password PostgreSQL user $AdminUser" -AsSecureString
@@ -46,12 +46,12 @@ UNION ALL SELECT datname FROM pg_database WHERE datname IN ('wbd_dev_platform','
     # Persist credentials before DDL so a partial setup never loses generated passwords.
     $config = @"
 # Development only. Keep this file private; Git ignores it.
-DATABASE_URL=postgres://wbd_dev_meta:$([uri]::EscapeDataString($metaPassword))@127.0.0.1:$Port/wbd_dev_platform?sslmode=disable
-HTTP_ADDR=127.0.0.1:8080
-APP_ORIGIN=http://127.0.0.1:3000
+DATABASE_URL=postgres://wbd_dev_meta:$([uri]::EscapeDataString($metaPassword))@localhost:$Port/wbd_dev_platform?sslmode=disable
+HTTP_ADDR=:8080
+APP_ORIGIN=http://localhost:3000
 TARGET_CREDENTIAL_KEY=$key
-FE_HTTP_ADDR=127.0.0.1:3000
-FE_BACKEND_URL=http://127.0.0.1:8080
+FE_HTTP_ADDR=:3000
+FE_BACKEND_URL=http://localhost:8080
 "@
     [System.IO.File]::WriteAllText($configPath, $config)
     $localDirectory = Join-Path $Root 'tmp/dev'
@@ -64,7 +64,7 @@ Owner role: wbd_dev_owner
 Owner password: $ownerPassword
 
 Add these two targets through the application's Connections page:
-Host: 127.0.0.1
+Host: localhost
 Port: $Port
 Database: wbd_dev_target_a
 Username: wbd_dev_exec_a
@@ -92,7 +92,7 @@ GRANT CONNECT, CREATE ON DATABASE wbd_dev_target_b TO wbd_dev_exec_b;
     $env:PGPASSWORD = $ownerPassword
     foreach ($databaseName in @('wbd_dev_target_a', 'wbd_dev_target_b')) {
         $executor = if ($databaseName -eq 'wbd_dev_target_a') { 'wbd_dev_exec_a' } else { 'wbd_dev_exec_b' }
-        & $psql -X -w -h 127.0.0.1 -p $Port -U wbd_dev_owner -d $databaseName -v ON_ERROR_STOP=1 -v "executor_role=$executor" -f (Join-Path $Root 'BE/sql/provision_target_history.sql') | Out-Null
+        & $psql -X -w -h localhost -p $Port -U wbd_dev_owner -d $databaseName -v ON_ERROR_STOP=1 -v "executor_role=$executor" -f (Join-Path $Root 'BE/sql/provision_target_history.sql') | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Provisioning $databaseName gagal. Credential tetap tersimpan; jangan hapus database." }
         Invoke-DevSQL "GRANT USAGE, CREATE ON SCHEMA public TO $executor;" 'wbd_dev_owner' $databaseName | Out-Null
     }

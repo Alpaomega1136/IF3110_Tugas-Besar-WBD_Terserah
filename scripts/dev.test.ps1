@@ -21,32 +21,32 @@ try {
     $envFile = Join-Path $testDirectory '.env'
     @'
 # Quotes are supported; values are literal, never evaluated.
-HTTP_ADDR="127.0.0.1:19371"
-APP_ORIGIN='http://127.0.0.1:3000'
+HTTP_ADDR="localhost:19371"
+APP_ORIGIN='http://localhost:3000'
 DATABASE_URL=$(throw 'must not execute')
 '@ | Set-Content -LiteralPath $envFile -Encoding ascii
     Import-DevEnvironment $envFile
-    if ($env:HTTP_ADDR -ne '127.0.0.1:19371' -or $env:APP_ORIGIN -ne 'http://127.0.0.1:3000' -or $env:DATABASE_URL -ne '$(throw ''must not execute'')') { throw 'Incorrect literal .env loading' }
+    if ($env:HTTP_ADDR -ne 'localhost:19371' -or $env:APP_ORIGIN -ne 'http://localhost:3000' -or $env:DATABASE_URL -ne '$(throw ''must not execute'')') { throw 'Incorrect literal .env loading' }
     Write-Host 'PASS: .env quotes and literal secret values'
 
     foreach ($invalid in @("HTTP_ADDR=changed`nPATH=untrusted", "HTTP_ADDR=changed`nHTTP_ADDR=duplicate", 'not an assignment')) {
         $invalid | Set-Content -LiteralPath $envFile -Encoding ascii
         $rejected = $false
         try { Import-DevEnvironment $envFile } catch { $rejected = $true }
-        if (-not $rejected -or $env:HTTP_ADDR -ne '127.0.0.1:19371') { throw 'Invalid .env accepted or partially applied' }
+        if (-not $rejected -or $env:HTTP_ADDR -ne 'localhost:19371') { throw 'Invalid .env accepted or partially applied' }
     }
     Write-Host 'PASS: invalid/duplicate/unsupported configuration rejected atomically'
 
     $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Any, 0)
     $listener.Server.ExclusiveAddressUse = $true
     $listener.Start()
-    $url = [uri]"http://127.0.0.1:$($listener.LocalEndpoint.Port)"
+    $url = [uri]"http://localhost:$($listener.LocalEndpoint.Port)"
     $rejected = $false
     try { Assert-DevPort $url } catch { $rejected = $true }
     if (-not $rejected) { throw 'Occupied port was accepted' }
     $listener.Stop()
     Assert-DevPort $url
-    if ((Get-DevURL ':8080').Host -ne '127.0.0.1') { throw 'Wildcard HTTP address failed' }
+    if ((Get-DevURL ':8080').Host -ne 'localhost') { throw 'Wildcard HTTP address failed' }
     Write-Host 'PASS: occupied port rejected; free port and wildcard address accepted'
 
     $rejected = $false

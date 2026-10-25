@@ -1,6 +1,6 @@
-# Windows development: .\dev.cmd [all|fe|be|setup|admin|upgrade]
+# Windows development: .\dev.cmd [all|fe|be|setup|admin]
 [CmdletBinding()]
-param([ValidateSet('all', 'fe', 'be', 'setup', 'admin', 'upgrade')][string]$Mode = 'all')
+param([ValidateSet('all', 'fe', 'be', 'setup', 'admin')][string]$Mode = 'all')
 
 $ErrorActionPreference = 'Stop'
 
@@ -51,7 +51,7 @@ function Ensure-DevAdmin([string]$Go, [string]$Directory) {
 }
 
 function Get-DevURL([string]$Address) {
-    if ($Address.StartsWith(':')) { $Address = "127.0.0.1$Address" }
+    if ($Address.StartsWith(':')) { $Address = "localhost$Address" }
     return [uri]"http://$Address"
 }
 
@@ -103,29 +103,17 @@ function Invoke-DevMain {
         $go = if ($goCommand) { $goCommand.Source } else { Join-Path $env:ProgramFiles 'Go/bin/go.exe' }
         if (-not (Test-Path -LiteralPath $go)) { throw 'Go sistem tidak ditemukan. Pasang Go atau tambahkan Go yang sudah terpasang ke PATH.' }
         $env:GOTOOLCHAIN = 'local'
-        if ($Mode -eq 'upgrade' -and -not (Test-Path -LiteralPath $configPath) -and -not $env:DATABASE_URL) {
-            throw 'Upgrade memerlukan konfigurasi .env lama; tidak membuat database baru.'
-        }
         if ($Mode -eq 'setup' -or ($Mode -ne 'fe' -and -not (Test-Path -LiteralPath $configPath) -and -not $env:DATABASE_URL)) {
             & (Join-Path $root 'scripts/dev-setup.ps1') -Root $root
         }
-        $env:HTTP_ADDR = '127.0.0.1:8080'
-        $env:APP_ORIGIN = 'http://127.0.0.1:3000'
-        $env:FE_HTTP_ADDR = '127.0.0.1:3000'
-        $env:FE_BACKEND_URL = 'http://127.0.0.1:8080'
+        $env:HTTP_ADDR = ':8080'
+        $env:APP_ORIGIN = 'http://localhost:3000'
+        $env:FE_HTTP_ADDR = ':3000'
+        $env:FE_BACKEND_URL = 'http://localhost:8080'
         if (Test-Path -LiteralPath $configPath) { Import-DevEnvironment $configPath }
         if ($Mode -ne 'fe') {
             if (-not $env:DATABASE_URL -or -not $env:TARGET_CREDENTIAL_KEY) { throw 'DATABASE_URL dan TARGET_CREDENTIAL_KEY wajib diisi pada .env.' }
             Invoke-DevGo $go (Join-Path $root 'BE') @('run', './cmd/migrate')
-        }
-        if ($Mode -eq 'upgrade') {
-            $secret = Read-Host 'Password PostgreSQL postgres (hentikan FE/BE dahulu)' -AsSecureString
-            $oldPassword = $env:DEV_PG_ADMIN_PASSWORD
-            try {
-                $env:DEV_PG_ADMIN_PASSWORD = (New-Object System.Net.NetworkCredential('', $secret)).Password
-                Invoke-DevGo $go (Join-Path $root 'BE') @('run', './cmd/dev-upgrade', '-root', $root)
-            } finally { $env:DEV_PG_ADMIN_PASSWORD = $oldPassword }
-            return
         }
         if ($Mode -ne 'fe') { Ensure-DevAdmin $go (Join-Path $root 'BE') }
         if ($Mode -in @('setup', 'admin')) { Write-Host 'Setup selesai. Jalankan .\dev.cmd'; return }
@@ -149,6 +137,7 @@ function Invoke-DevMain {
             Wait-DevReady $service "$((Get-DevURL $address).GetLeftPart([UriPartial]::Authority))$path"
             Write-Host "$($name.ToUpperInvariant()) siap: $(Get-DevURL $address)"
         }
+        if ($Mode -ne 'be') { Write-Host "Buka aplikasi di browser: $env:APP_ORIGIN/login (alamat harus sesuai APP_ORIGIN)." }
         Write-Host 'Log: tmp/dev/*.log. Ctrl+C untuk menghentikan server yang dijalankan entrypoint ini.'
         if ($Mode -eq 'fe') { Write-Host "FE memakai backend: $env:FE_BACKEND_URL (jalankan BE terpisah untuk login/data)." }
         while ($true) {
