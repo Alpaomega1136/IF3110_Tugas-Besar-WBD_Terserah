@@ -45,6 +45,34 @@ func TestRunnerAPI(t *testing.T) {
 		}
 	}()
 	base := fmt.Sprintf("/api/v1/databases/%d/drafts", target.ID)
+	if _, err = db.Exec(ctx, "CREATE TABLE "+q+".plan_items(id integer); INSERT INTO "+q+".plan_items VALUES(1)"); err != nil {
+		t.Fatal(err)
+	}
+	wPlan := editor.request("POST", base, map[string]string{"title": "plan", "sql": "UPDATE " + q + ".plan_items SET id=2; CREATE TABLE " + q + ".unsupported(id int)"})
+	status(t, wPlan, 201)
+	var planDraft runner.Draft
+	if err = json.Unmarshal(wPlan.Body.Bytes(), &planDraft); err != nil {
+		t.Fatal(err)
+	}
+	planPath := fmt.Sprintf("%s/%d/explain", base, planDraft.ID)
+	status(t, a.browser().request("POST", planPath, map[string]string{"revision": "1"}), 401)
+	status(t, view.request("POST", planPath, map[string]string{"revision": "1"}), 403)
+	status(t, editor.request("POST", planPath, map[string]string{"revision": "2"}), 409)
+	wPlan = editor.request("POST", planPath, map[string]string{"revision": "1"})
+	status(t, wPlan, 200)
+	var plans struct {
+		Statements []struct {
+			Plan  json.RawMessage `json:"plan"`
+			Error string          `json:"error"`
+		} `json:"statements"`
+	}
+	if err = json.Unmarshal(wPlan.Body.Bytes(), &plans); err != nil || len(plans.Statements) != 2 || len(plans.Statements[0].Plan) == 0 || plans.Statements[1].Error == "" {
+		t.Fatalf("unexpected plan response: %s", wPlan.Body.String())
+	}
+	var unchanged int
+	if err = db.QueryRow(ctx, "SELECT id FROM "+q+".plan_items").Scan(&unchanged); err != nil || unchanged != 1 {
+		t.Fatalf("EXPLAIN changed data: %d, %v", unchanged, err)
+	}
 	input := map[string]string{"title": "create table", "sql": "CREATE TABLE " + q + ".items(id int PRIMARY KEY, note text); INSERT INTO " + q + ".items VALUES(1,'semi;colon')"}
 	status(t, a.browser().request("POST", base, input), 401)
 	status(t, view.request("POST", base, input), 403)

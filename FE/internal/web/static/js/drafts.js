@@ -45,6 +45,9 @@ const detailUpdated = document.getElementById("draft-detail-updated");
 const detailSQL = document.getElementById("draft-detail-sql");
 const executionPanel = document.getElementById("draft-execution");
 const executeButton = document.getElementById("draft-execute");
+const explainButton = document.getElementById("draft-explain");
+const explainMessage = document.getElementById("draft-explain-message");
+const explainResult = document.getElementById("draft-explain-result");
 const reloadButton = document.getElementById("draft-reload");
 const executionRevision = document.getElementById("draft-execution-revision");
 const executionState = document.getElementById("draft-execution-state");
@@ -149,6 +152,7 @@ function updateExecutionControls() {
 
     executionPanel.hidden = !saved;
     executeButton.disabled = busy || !saved || modified || locked;
+    explainButton.disabled = busy || !saved || modified;
     reloadButton.disabled = busy || !saved;
     executeButton.textContent = executing ? "Menjalankan Migration..." : "Execute Migration";
 
@@ -164,6 +168,9 @@ function updateExecutionControls() {
 function resetExecutionFeedback() {
     lockedExecution = null;
     executionResult.hidden = true;
+    explainResult.hidden = true;
+    explainResult.textContent = "";
+    showMessage(explainMessage, "");
     showMessage(executionMessage, "");
     updateExecutionControls();
 }
@@ -455,11 +462,41 @@ async function executeDraft() {
 }
 
 executeButton.addEventListener("click", executeDraft);
+explainButton.addEventListener("click", async () => {
+    if (busy || !selectedDraft || isDirty()) return;
+    const draft = selectedDraft;
+    setBusy(true);
+    explainResult.hidden = true;
+    showMessage(explainMessage, "Menganalisis query...");
+    try {
+        const result = await authenticatedRequest(`${apiPath}/${encodeURIComponent(draft.id)}/explain`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ revision: draft.revision })
+        });
+        if (result.revision !== draft.revision || !Array.isArray(result.statements)) {
+            throw new Error("Format hasil analisis tidak valid.");
+        }
+        explainResult.textContent = result.statements.map((item, index) =>
+            `Statement ${index + 1}:\n${item.sql.trim()}\n\n${item.error || JSON.stringify(item.plan, null, 2)}`
+        ).join("\n\n");
+        explainResult.hidden = false;
+        showMessage(explainMessage, "Analisis selesai. Hasil adalah perkiraan PostgreSQL.");
+    } catch (err) {
+        handleError(err, explainMessage);
+    } finally {
+        setBusy(false);
+    }
+});
 reloadButton.addEventListener("click", () => {
     if (selectedDraft) openDraft(selectedDraft.id);
 });
 titleInput.addEventListener("input", updateExecutionControls);
-sqlInput.addEventListener("input", updateExecutionControls);
+sqlInput.addEventListener("input", () => {
+    explainResult.hidden = true;
+    showMessage(explainMessage, "");
+    updateExecutionControls();
+});
 
 newButton.addEventListener("click", startNewDraft);
 
