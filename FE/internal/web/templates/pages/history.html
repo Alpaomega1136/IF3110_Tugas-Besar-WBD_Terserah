@@ -1,0 +1,130 @@
+{{define "content"}}
+<div class="app-shell">
+    {{template "navigation" .}}
+
+    <main class="app-main" id="history-page"
+          data-database-id="{{.DatabaseID}}">
+        <h1>Migration History</h1>
+
+        <p id="history-page-status" role="status" aria-live="polite">
+            Memeriksa session dan hak akses...
+        </p>
+        <p id="history-page-error" class="error-message"
+           role="alert" hidden></p>
+
+        <div id="history-workspace" class="migration-layout" hidden>
+            <div class="migration-column">
+            <section class="dashboard-panel"
+                     aria-labelledby="history-database-heading">
+                <h2 id="history-database-heading">
+                    Database: <span id="history-database-name"></span>
+                </h2>
+                <p>
+                    Database target: <span id="history-target-name"></span>
+                </p>
+                <p>
+                    Hak akses efektif: <strong id="history-access"></strong>
+                </p>
+                <p id="history-drafts-link" hidden>
+                    <a class="workspace-button" href="/databases/{{.DatabaseID}}/drafts">
+                        Kelola Draft Migration
+                    </a>
+                </p>
+            </section>
+
+            <section class="dashboard-panel"
+                     aria-labelledby="history-list-heading">
+                <div class="draft-heading-row">
+                    <h2 id="history-list-heading">Daftar Eksekusi Migration</h2>
+                    <button type="button" id="history-refresh"
+                            class="button-secondary">Muat Ulang</button>
+                </div>
+
+                <p id="history-list-status" role="status"
+                   aria-live="polite" hidden></p>
+                <p id="history-list-error" class="error-message"
+                   role="alert" hidden></p>
+                <p id="history-list-empty" hidden>
+                    Belum ada riwayat eksekusi migration.
+                </p>
+
+                <div id="history-list-table" class="users-table-wrapper"
+                     hidden>
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">Versi</th>
+                                <th scope="col">Status</th>
+                                <th scope="col">Draft ID / Revisi</th>
+                                <th scope="col">Execution ID</th>
+                                <th scope="col">Error Code</th>
+                                <th scope="col">Dieksekusi oleh</th>
+                                <th scope="col">Mulai</th>
+                                <th scope="col">Selesai</th>
+                                <th scope="col">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-list-body"></tbody>
+                    </table>
+                </div>
+                <p id="history-pending-notice" class="form-help" role="status" hidden></p>
+                <nav id="history-pagination" class="cursor-pagination" aria-label="Navigasi halaman riwayat" hidden>
+                    <button type="button" id="history-prev" class="button-secondary" disabled>Halaman Sebelumnya</button>
+                    <span id="history-page-number" aria-live="polite">Halaman 1</span>
+                    <button type="button" id="history-next" class="button-secondary" disabled>Halaman Berikutnya</button>
+                </nav>
+                <div id="history-reconcile-panel" hidden>
+                <div class="history-reconcile-actions">
+                    <button type="button" id="history-reconcile" class="button-secondary">Reconcile Pending / Unknown</button>
+                </div>
+                <p id="history-reconcile-status" role="status" aria-live="polite" hidden></p>
+                <p id="history-reconcile-error" class="error-message" role="alert" hidden></p>
+                <div id="history-reconcile-result" hidden>
+                    <h3>Hasil Reconcile</h3>
+                    <p id="history-reconcile-summary" role="status" aria-live="polite"></p>
+                    <div id="history-reconcile-table" class="users-table-wrapper" hidden>
+                        <table class="users-table">
+                            <thead><tr><th scope="col">Versi</th><th scope="col">Execution ID</th>
+                                <th scope="col">Status</th><th scope="col">Error Code</th></tr></thead>
+                            <tbody id="history-reconcile-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                </div>
+            </section>
+
+            </div>
+            <div class="dashboard-panel history-detail-space">
+            <section id="history-detail"
+                     aria-labelledby="history-detail-heading" hidden>
+                <h2 id="history-detail-heading">Detail Eksekusi</h2>
+                <p id="history-detail-status" role="status"
+                   aria-live="polite" hidden></p>
+                <p id="history-detail-error" class="error-message"
+                   role="alert" hidden></p>
+
+                <dl class="history-metadata" id="history-detail-content" hidden>
+                    <dt>Versi</dt><dd id="history-detail-version"></dd>
+                    <dt>Execution ID</dt><dd id="history-detail-execution-id"></dd>
+                    <dt>Revisi Draft</dt><dd id="history-detail-draft-revision"></dd>
+                    <dt>ID Draft</dt><dd id="history-detail-draft-id"></dd>
+                    <dt>Status</dt><dd id="history-detail-result"></dd>
+                    <dt>Dieksekusi oleh</dt><dd id="history-detail-executor"></dd>
+                    <dt>Mulai</dt><dd id="history-detail-started"></dd>
+                    <dt>Selesai</dt><dd id="history-detail-finished"></dd>
+                    <dt>Error Code</dt><dd id="history-detail-error-code"></dd>
+                </dl>
+
+                <div id="history-detail-sql-section" hidden>
+                    <h3>SQL yang Dieksekusi</h3>
+                    <pre id="history-detail-sql" class="draft-sql-preview"></pre>
+                </div>
+            </section>
+            <div class="history-detail-placeholder"><h2>Detail Eksekusi</h2><p>Pilih Detail pada daftar untuk melihat hasil.</p></div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<script type="module" src="/static/js/history.js"></script>
+{{end}}

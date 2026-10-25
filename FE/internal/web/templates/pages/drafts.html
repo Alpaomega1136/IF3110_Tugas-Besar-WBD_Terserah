@@ -1,0 +1,239 @@
+{{define "content"}}
+<div class="app-shell">
+    {{template "navigation" .}}
+
+    <main class="app-main" id="draft-page"
+          data-database-id="{{.DatabaseID}}">
+        <h1>Migration Drafts</h1>
+
+        <p id="draft-page-status"
+           role="status" aria-live="polite">
+            Memeriksa session dan hak akses...
+        </p>
+
+        <p id="draft-page-error"
+           class="error-message"
+           role="alert" hidden></p>
+
+        <div id="draft-workspace" hidden>
+
+            <section class="dashboard-panel"
+                     aria-labelledby="draft-database-heading">
+                <h2 id="draft-database-heading">
+                    Database: <span id="draft-database-name"></span>
+                </h2>
+
+                <p>
+                    Database target:
+                    <span id="draft-target-name"></span>
+                </p>
+
+                <p>
+                    Hak akses efektif:
+                    <strong id="draft-access"></strong>
+                </p>
+
+                <p>
+                    <a class="workspace-button" href="/databases/{{.DatabaseID}}/history">
+                        Lihat Migration History
+                    </a>
+                </p>
+
+            </section>
+
+            <div class="migration-layout">
+                <div class="migration-column">
+            <section class="dashboard-panel"
+                     aria-labelledby="draft-list-heading">
+                <div class="draft-heading-row">
+                    <h2 id="draft-list-heading">Daftar Draft</h2>
+                    <button type="button" id="draft-new"
+                            class="button-secondary">
+                        Draft Baru
+                    </button>
+                </div>
+
+                <p id="draft-list-status"
+                   role="status" aria-live="polite">
+                    Memuat draft...
+                </p>
+
+                <p id="draft-list-error"
+                   class="error-message"
+                   role="alert" hidden></p>
+
+                <p id="draft-list-empty" hidden>
+                    Belum ada draft untuk database ini.
+                </p>
+
+                <div id="draft-list-table"
+                     class="users-table-wrapper" hidden>
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">ID</th>
+                                <th scope="col">Judul</th>
+                                <th scope="col">Pembuat</th>
+                                <th scope="col">Diperbarui</th>
+                                <th scope="col">Aksi</th>
+                            </tr>
+                        </thead>
+
+                        <tbody id="draft-list-body"></tbody>
+                    </table>
+                </div>
+                <nav id="draft-pagination" class="cursor-pagination" aria-label="Navigasi halaman draft" hidden>
+                    <button type="button" id="draft-prev" class="button-secondary" disabled>Halaman Sebelumnya</button>
+                    <span id="draft-page-number" aria-live="polite">Halaman 1</span>
+                    <button type="button" id="draft-next" class="button-secondary" disabled>Halaman Berikutnya</button>
+                </nav>
+            </section>
+
+            <section class="dashboard-panel"
+                     aria-labelledby="draft-editor-heading">
+                <h2 id="draft-editor-heading">Buat Draft Baru</h2>
+
+                <p id="draft-current-id"
+                   class="form-help" hidden></p>
+
+                <form id="draft-form" class="draft-form" novalidate>
+                    <div class="form-group">
+                        <label for="draft-title">
+                            Judul Draft (wajib)
+                        </label>
+
+                        <input id="draft-title"
+                               name="title"
+                               type="text"
+                               maxlength="200"
+                               required
+                               aria-describedby="draft-title-error">
+
+                        <p id="draft-title-error"
+                           class="error-message" hidden></p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="draft-sql">
+                            SQL Migration (wajib)
+                        </label>
+
+                        <textarea id="draft-sql"
+                                  name="sql"
+                                  rows="14"
+                                  required
+                                  spellcheck="false"
+                                  aria-describedby="draft-sql-help draft-sql-error"></textarea>
+
+                        <p id="draft-sql-help" class="form-help">
+                            Maksimum 48 KiB SQL dan total JSON permintaan 64 KiB.
+                            Menyimpan draft tidak menjalankan SQL.
+                        </p>
+
+                        <p id="draft-sql-error"
+                           class="error-message" hidden></p>
+                    </div>
+
+                    <button id="draft-save" type="submit">
+                        Buat Draft
+                    </button>
+
+                    <p id="draft-save-message"
+                       role="status" aria-live="polite"
+                       hidden></p>
+                </form>
+            </section>
+
+                </div>
+                <div class="migration-column">
+            <div class="grant-toolbar">
+                <button type="button" id="draft-reload" class="button-secondary" disabled>Muat Ulang Draft</button>
+            </div>
+            <section class="dashboard-panel bonus-diff" aria-labelledby="schema-diff-heading">
+                <div class="bonus-heading">
+                    <span class="bonus-label">SCHEMA TOOLS</span>
+                    <h2 id="schema-diff-heading">Schema Diff</h2>
+                    <p>Bandingkan dua schema pada database ini. SQL kandidat hanya menambahkan tabel dan kolom sederhana; tinjau peringatan sebelum digunakan.</p>
+                </div>
+                <div class="bonus-schema-fields">
+                    <div>
+                        <label for="diff-current">Schema yang akan diubah</label>
+                        <select id="diff-current"></select>
+                    </div>
+                    <div>
+                        <label for="diff-desired">Schema acuan</label>
+                        <select id="diff-desired"></select>
+                    </div>
+                </div>
+                <div class="bonus-actions">
+                    <button id="diff-compare" type="button">Bandingkan Schema</button>
+                    <button id="diff-use" type="button" disabled>Gunakan SQL sebagai Draft Baru</button>
+                </div>
+                <p id="diff-status" role="status" aria-live="polite"></p>
+                <pre id="diff-result" class="draft-sql-preview"></pre>
+            </section>
+
+            <section id="draft-detail"
+                     class="dashboard-panel"
+                     aria-labelledby="draft-detail-heading"
+                     hidden>
+                <h2 id="draft-detail-heading">
+                    Detail Draft Tersimpan
+                </h2>
+
+                <p>
+                    Pembuat:
+                    <span id="draft-detail-author"></span>
+                </p>
+
+                <p>
+                    Dibuat:
+                    <span id="draft-detail-created"></span>
+                </p>
+
+                <p>
+                    Diperbarui:
+                    <span id="draft-detail-updated"></span>
+                </p>
+
+                <h3>SQL Tersimpan</h3>
+                <pre id="draft-detail-sql"
+                     class="draft-sql-preview"></pre>
+            </section>
+
+            <section id="draft-execution" class="dashboard-panel draft-execution"
+                     aria-labelledby="draft-execution-heading" hidden>
+                <h2 id="draft-execution-heading">Execute Migration</h2>
+                <p class="form-help">Tinjau SQL dan database target sebelum menjalankan migrasi.</p>
+                <dl class="draft-execution-metadata">
+                    <dt>Revision tersimpan</dt>
+                    <dd id="draft-execution-revision"></dd>
+                </dl>
+                <p id="draft-execution-state" role="status" aria-live="polite"></p>
+                <div class="draft-execution-actions">
+                    <button type="button" id="draft-explain" disabled>Analisis Query</button>
+                    <button type="button" id="draft-execute" disabled>Execute Migration</button>
+                </div>
+                <p id="draft-explain-message" role="status" aria-live="polite" hidden></p>
+                <pre id="draft-explain-result" class="draft-sql-preview" hidden></pre>
+                <p id="draft-execution-message" role="status" aria-live="polite" hidden></p>
+                <section id="draft-execution-result" class="draft-execution-result"
+                         aria-labelledby="draft-execution-result-heading" hidden>
+                    <h3 id="draft-execution-result-heading">Hasil Eksekusi</h3>
+                    <dl class="draft-execution-metadata">
+                        <dt>Status</dt><dd><span id="draft-result-status"></span></dd>
+                        <dt>Version</dt><dd id="draft-result-version"></dd>
+                        <dt>Execution ID</dt><dd id="draft-result-id"></dd>
+                        <dt>Error Code</dt><dd id="draft-result-error"></dd>
+                    </dl>
+                </section>
+            </section>
+                </div>
+            </div>
+
+        </div>
+    </main>
+</div>
+
+<script type="module" src="/static/js/drafts.js"></script>
+{{end}}

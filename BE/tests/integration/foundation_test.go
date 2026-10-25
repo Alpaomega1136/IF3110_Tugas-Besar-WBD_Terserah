@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"errors"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"terserah/backend/internal/database"
 	"terserah/backend/internal/httpapi"
@@ -52,20 +54,36 @@ func TestFoundation(t *testing.T) {
 		t.Fatal("cannot open test pool")
 	}
 	defer pool.Close()
-	for range 2 {
+	var firstCount int
+	for attempt := 0; attempt < 2; attempt++ {
 		if err := migrations.Apply(ctx, pool); err != nil {
 			t.Fatal(err)
 		}
+		if attempt == 0 {
+			if err := pool.QueryRow(ctx, "SELECT count(*) FROM platform_schema_migrations").Scan(&firstCount); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	var count int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM platform_schema_migrations").Scan(&count); err != nil || count != 1 {
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM platform_schema_migrations").Scan(&count); err != nil || count < 1 || count != firstCount {
 		t.Fatalf("migration idempotency: count=%d err=%v", count, err)
 	}
 	if _, err := pool.Exec(ctx, "INSERT INTO groups(name) VALUES ('developers')"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, "INSERT INTO group_database_permissions(group_id,database_id,access_level) VALUES (1,999,'owner')"); err == nil {
-		t.Fatal("invalid grant accepted")
+	var targetID int64
+	if err := pool.QueryRow(ctx, "INSERT INTO database_connections(name,host,database_name,username,password_encrypted) VALUES('fixture','localhost','fixture','test',$1) RETURNING id", []byte("fixture-only")).Scan(&targetID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = pool.Exec(ctx, "INSERT INTO group_database_permissions(group_id,database_id,access_level) VALUES(1,$1,'owner')", targetID)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Fatal("invalid access level was not rejected by its check constraint")
+	}
+	_, err = pool.Exec(ctx, "INSERT INTO group_database_permissions(group_id,database_id,access_level) VALUES(1,999,'view')")
+	if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
+		t.Fatal("invalid target was not rejected by its foreign key")
 	}
 	rr := httptest.NewRecorder()
 	httpapi.New(pool).ServeHTTP(rr, httptest.NewRequest("GET", "/health/ready", nil))
