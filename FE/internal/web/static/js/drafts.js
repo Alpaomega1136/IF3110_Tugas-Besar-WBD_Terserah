@@ -5,6 +5,7 @@ import {
 } from "./auth.js";
 import { executionFeedback, parseExecutionResult, executeErrorMessage } from "./execution.js";
 import { positiveInt64, parseCursorPage } from "./pagination.js";
+import { initializeSchemaDiff } from "./schema-diff.js";
 
 const page = document.getElementById("draft-page");
 const databaseId = page.dataset.databaseId;
@@ -583,6 +584,23 @@ async function initialize() {
         access.textContent = "View + Edit";
 
         workspace.hidden = false;
+
+        initializeSchemaDiff(databaseId, (sql) => {
+            if (busy || !confirmDiscard()) return false;
+            selectedDraft = null;
+            heading.textContent = "Buat Draft Baru";
+            currentId.hidden = true;
+            detail.hidden = true;
+            form.reset();
+            titleInput.value = "Schema diff";
+            sqlInput.value = sql;
+            resetExecutionFeedback();
+            setFieldError(titleInput, titleError, "");
+            setFieldError(sqlInput, sqlError, "");
+            showMessage(saveMessage, "");
+            form.scrollIntoView({ behavior: "smooth", block: "start" });
+            return true;
+        });
 
         await loadDrafts(0, true);
 

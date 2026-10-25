@@ -97,6 +97,19 @@
                 </nav>
             </section>
 
+            <section class="dashboard-panel" aria-labelledby="schema-diff-heading">
+                <h2 id="schema-diff-heading">Schema Diff</h2>
+                <p>Bandingkan dua schema pada database ini. SQL kandidat hanya menambahkan tabel dan kolom sederhana; tinjau peringatan sebelum digunakan.</p>
+                <label for="diff-current">Schema yang akan diubah</label>
+                <select id="diff-current"></select>
+                <label for="diff-desired">Schema acuan</label>
+                <select id="diff-desired"></select>
+                <button id="diff-compare" type="button">Bandingkan Schema</button>
+                <p id="diff-status" role="status" aria-live="polite"></p>
+                <pre id="diff-result" class="draft-sql-preview"></pre>
+                <button id="diff-use" type="button" disabled>Gunakan SQL sebagai Draft Baru</button>
+            </section>
+
             <section class="dashboard-panel"
                      aria-labelledby="draft-editor-heading">
                 <h2 id="draft-editor-heading">Buat Draft Baru</h2>
