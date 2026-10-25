@@ -1,15 +1,6 @@
 {{define "content"}}
 <div class="app-shell">
-    <header class="app-header">
-        <a class="app-brand" href="/dashboard">Terserah</a>
-        <nav class="app-nav" aria-label="Navigasi utama">
-            <a href="/dashboard">Dashboard</a>
-            <a href="/admin/users">Users</a>
-            <a href="/admin/groups">Groups</a>
-            <a href="/admin/grants">Grants</a>
-            <a href="/admin/databases" aria-current="page">Connections</a>
-        </nav>
-    </header>
+    {{template "navigation" .}}
 
     <main class="app-main">
         <h1>Koneksi Database Target</h1>
@@ -19,32 +10,8 @@
         <p id="connections-forbidden" class="error-message" role="alert" hidden>Hanya Platform Admin yang dapat mengelola koneksi database.</p>
 
         <div id="connections-content" hidden>
-            <section class="dashboard-panel" aria-labelledby="connections-list-heading">
-                <div class="connection-heading">
-                    <h2 id="connections-list-heading">Daftar Koneksi</h2>
-                    <button id="connections-refresh" type="button" class="button-secondary">Muat Ulang</button>
-                </div>
-                <p id="connections-empty" hidden>Belum ada koneksi. Tambahkan target PostgreSQL melalui form di bawah.</p>
-                <div id="connections-table" class="users-table-wrapper" hidden>
-                    <table class="users-table connection-table">
-                        <thead>
-                            <tr>
-                                <th scope="col">ID</th>
-                                <th scope="col">Nama</th>
-                                <th scope="col">Host:Port</th>
-                                <th scope="col">Database</th>
-                                <th scope="col">Username</th>
-                                <th scope="col">SSL</th>
-                                <th scope="col">Dibuat</th>
-                                <th scope="col">Aksi</th>
-                            </tr>
-                        </thead>
-                        <tbody id="connections-body"></tbody>
-                    </table>
-                </div>
-                <p id="connection-action-message" role="status" aria-live="polite" hidden></p>
-            </section>
-
+            <div class="users-layout">
+                <div>
             <section class="dashboard-panel" aria-labelledby="connection-create-heading">
                 <h2 id="connection-create-heading">Tambah Koneksi</h2>
                 <p class="form-help">Semua field wajib. Password disimpan terenkripsi oleh backend dan tidak dapat ditampilkan kembali. Gunakan database target, bukan database metadata platform.</p>
@@ -127,7 +94,35 @@
                         <button id="connection-edit-cancel" type="button" class="button-secondary">Batal</button>
                     </div>
                 </form>
+            </section>                </div>
+            <section class="dashboard-panel admin-directory" aria-labelledby="connections-list-heading">
+                <div class="connection-heading">
+                    <h2 id="connections-list-heading">Daftar Koneksi</h2>
+                    <button id="connections-refresh" type="button" class="button-secondary">Muat Ulang</button>
+                </div>
+                <p id="connections-empty" hidden>Belum ada koneksi. Tambahkan target PostgreSQL melalui form di samping.</p>
+                <div id="connections-table" class="users-table-wrapper admin-list-scroll" hidden>
+                    <table class="users-table connection-table">
+                        <thead>
+                            <tr>
+                                <th scope="col">ID</th>
+                                <th scope="col">Nama</th>
+                                <th scope="col">Host:Port</th>
+                                <th scope="col">Database</th>
+                                <th scope="col">Username</th>
+                                <th scope="col">SSL</th>
+                                <th scope="col">Dibuat</th>
+                                <th scope="col">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="connections-body"></tbody>
+                    </table>
+                </div>
+                <p id="connection-action-message" role="status" aria-live="polite" hidden></p>
             </section>
+
+            </div>
+
         </div>
     </main>
 </div>

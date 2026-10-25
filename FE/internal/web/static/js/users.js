@@ -34,12 +34,6 @@ let currentUserId = null;
 let selectedUser = null;
 let editSaving = false;
 
-function addCell(row, value) {
-    const cell = document.createElement("td");
-    cell.textContent = String(value);
-    row.appendChild(cell);
-}
-
 function formatDate(value) {
     if (!value) return "-";
 
@@ -74,17 +68,19 @@ async function refreshUsers() {
         body.replaceChildren();
 
         for (const item of result.users) {
-            const row = document.createElement("tr");
-
-            addCell(row, item.id);
-            addCell(row, item.username);
-            addCell(row, item.is_platform_admin ? "Platform Admin" : "User");
-            addCell(row, item.is_active ? "Aktif" : "Nonaktif");
-            addCell(row, Array.isArray(item.group_ids) ? item.group_ids.length : "-");
-            
-            addCell(row, formatDate(item.created_at));
-
-            const actionCell = document.createElement("td");
+            const row = document.createElement("li");
+            row.className = "users-list-item";
+            const details = document.createElement("div");
+            details.className = "users-list-details";
+            const name = document.createElement("strong");
+            name.textContent = item.username;
+            const role = document.createElement("p");
+            role.textContent = `${item.is_platform_admin ? "Platform Admin" : "User"} · ${item.is_active ? "Aktif" : "Nonaktif"}`;
+            const meta = document.createElement("p");
+            meta.textContent = `ID ${item.id} · Group: ${Array.isArray(item.group_ids) ? item.group_ids.length : "-"} · Dibuat: ${formatDate(item.created_at)}`;
+            details.appendChild(name);
+            details.appendChild(role);
+            details.appendChild(meta);
             const editButton = document.createElement("button");
 
             editButton.type = "button";
@@ -96,8 +92,8 @@ async function refreshUsers() {
                 openEditUser(item);
             });
 
-            actionCell.appendChild(editButton);
-            row.appendChild(actionCell);
+            row.appendChild(details);
+            row.appendChild(editButton);
 
             body.appendChild(row);
         }

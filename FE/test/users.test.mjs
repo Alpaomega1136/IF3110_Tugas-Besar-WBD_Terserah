@@ -18,6 +18,7 @@ async function setup() {
     ];
     const elements = Object.fromEntries(ids.map((id) => [id, new Element()]));
     const $ = (id) => elements[id];
+    $("edit-user-section").hidden = true;
     $("create-username").value = "new-user";
     $("create-is-admin").checked = false;
     $("create-user-form").reset = () => { $("create-password").value = ""; };
@@ -41,6 +42,16 @@ async function setup() {
 }
 
 const mutations = (ui) => ui.calls.filter((call) => ["POST", "PATCH"].includes(call.method));
+
+test("edit panel stays hidden until an account is selected and closes on cancel", async () => {
+    const ui = await setup();
+    assert.equal(ui.$("edit-user-section").hidden, true);
+    await ui.$("users-body").children[0].children[1].fire("click");
+    assert.equal(ui.$("edit-user-section").hidden, false);
+    assert.equal(ui.$("edit-user-name").textContent, "existing");
+    await ui.$("edit-user-cancel").fire("click");
+    assert.equal(ui.$("edit-user-section").hidden, true);
+});
 
 test("create user rejects passwords below 12 or above 1024 UTF-8 bytes before POST", async () => {
     for (const password of ["a".repeat(11), "€".repeat(3), "a".repeat(1025)]) {
@@ -68,7 +79,7 @@ test("edit user enforces the same password byte limits before PATCH", async () =
     for (const [password, valid] of [["a".repeat(11), false], ["€".repeat(3), false],
         ["a".repeat(1025), false], ["a".repeat(12), true], ["€".repeat(4), true], ["a".repeat(1024), true]]) {
         const ui = await setup();
-        await ui.$("users-body").children[0].children[6].children[0].fire("click");
+        await ui.$("users-body").children[0].children[1].fire("click");
         ui.$("edit-password").value = password;
         await ui.$("edit-user-form").fire("submit");
         assert.equal(mutations(ui).length, valid ? 1 : 0);
@@ -83,7 +94,7 @@ test("edit user enforces the same password byte limits before PATCH", async () =
 
 test("edit user can change flags without supplying a new password", async () => {
     const ui = await setup();
-    await ui.$("users-body").children[0].children[6].children[0].fire("click");
+    await ui.$("users-body").children[0].children[1].fire("click");
     ui.$("edit-is-active").checked = false;
     await ui.$("edit-user-form").fire("submit");
     assert.equal(mutations(ui).length, 1);

@@ -1,16 +1,6 @@
 {{define "content"}}
 <div class="app-shell">
-    <header class="app-header">
-        <a class="app-brand" href="/dashboard">Terserah</a>
-
-        <nav class="app-nav" aria-label="Navigasi utama">
-            <a href="/dashboard">Dashboard</a>
-            <a href="/admin/users">Users</a>
-            <a href="/admin/groups">Groups</a>
-            <a href="/admin/grants" aria-current="page">Grants</a>
-            <a href="/admin/databases">Connections</a>
-        </nav>
-    </header>
+    {{template "navigation" .}}
 
     <main class="app-main">
         <h1>Database Access Grants</h1>
@@ -51,6 +41,7 @@
                 Belum ada koneksi target. <a href="/admin/databases">Daftarkan koneksi dahulu</a>
                 sebelum memberikan grant.
             </p>
+            <div class="users-layout">
             <section class="dashboard-panel"
                      aria-labelledby="grant-form-heading">
                 <h2 id="grant-form-heading">
@@ -103,7 +94,7 @@
                 </form>
             </section>
 
-            <section class="dashboard-panel"
+            <section class="dashboard-panel admin-directory"
                      aria-labelledby="grant-list-heading">
                 <h2 id="grant-list-heading">
                     Grant yang Terdaftar
@@ -114,7 +105,7 @@
                 </p>
 
                 <div id="grants-table"
-                     class="users-table-wrapper"
+                     class="users-table-wrapper admin-list-scroll"
                      hidden>
                     <table class="users-table">
                         <thead>
@@ -129,6 +120,7 @@
                     </table>
                 </div>
             </section>
+            </div>
         </div>
     </main>
 </div>

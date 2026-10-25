@@ -1,16 +1,6 @@
 {{define "content"}}
 <div class="app-shell">
-    <header class="app-header">
-        <a class="app-brand" href="/dashboard">Terserah</a>
-
-        <nav class="app-nav" aria-label="Navigasi utama">
-            <a href="/dashboard">Dashboard</a>
-            <a href="/admin/users">Users</a>
-            <a href="/admin/groups" aria-current="page">Groups</a>
-            <a href="/admin/grants">Grants</a>
-            <a href="/admin/databases">Connections</a>
-        </nav>
-    </header>
+    {{template "navigation" .}}
 
     <main class="app-main">
         <h1>Group Management</h1>
@@ -19,6 +9,8 @@
             yang terdaftar.
         </p>
       
+        <div class="users-layout">
+            <div>
         <section id="create-group-section" class="dashboard-panel"
                 aria-labelledby="create-group-heading" hidden>
             <h2 id="create-group-heading">Tambah Group</h2>
@@ -84,6 +76,8 @@
             </form>
         </section>
 
+            </div>
+            <div>
         <p id="groups-status" role="status" aria-live="polite">
             Memeriksa akses...
         </p>
@@ -96,8 +90,9 @@
             untuk membuat group pertama.
         </p>
 
-        <section id="groups-section" class="dashboard-panel" aria-label="Daftar group" hidden>
-            <div class="users-table-wrapper">
+        <section id="groups-section" class="dashboard-panel admin-directory" aria-label="Daftar group" hidden>
+            <h2>Daftar Group</h2>
+            <div class="users-table-wrapper admin-list-scroll">
                 <table class="users-table">
                     <thead>
                         <tr>
@@ -110,7 +105,9 @@
                     <tbody id="groups-body"></tbody>
                 </table>
             </div>
-        </section>
+        </section>            </div>
+        </div>
+
     </main>
 </div>
 
