@@ -12,8 +12,8 @@ async function setup() {
     const ids = [
         "users-status", "users-error", "users-empty", "users-section", "users-body", "create-user-section",
         "create-user-form", "create-username", "create-password", "create-is-admin", "create-user-submit",
-        "create-user-message", "create-username-error", "create-password-error", "edit-user-section",
-        "edit-user-form", "edit-user-name", "edit-password", "edit-password-error", "edit-is-admin",
+        "create-user-message", "create-username-error", "create-password-error", "create-password-help", "edit-user-section",
+        "edit-user-form", "edit-user-name", "edit-password", "edit-password-error", "edit-password-help", "edit-is-admin",
         "edit-is-active", "edit-user-submit", "edit-user-cancel", "edit-user-message"
     ];
     const elements = Object.fromEntries(ids.map((id) => [id, new Element()]));
@@ -60,6 +60,7 @@ test("create user rejects passwords below 12 or above 1024 UTF-8 bytes before PO
         await ui.$("create-user-form").fire("submit");
         assert.equal(mutations(ui).length, 0);
         assert.equal(ui.$("create-password-error").hidden, false);
+        assert.equal(ui.$("create-password-help").hidden, true);
         assert.match(ui.$("create-password-error").textContent, /12.*1024/);
     }
 });
@@ -88,6 +89,7 @@ test("edit user enforces the same password byte limits before PATCH", async () =
             assert.equal(mutations(ui)[0].body.password, password);
         } else {
             assert.match(ui.$("edit-password-error").textContent, /12.*1024/);
+            assert.equal(ui.$("edit-password-help").hidden, true);
         }
     }
 });

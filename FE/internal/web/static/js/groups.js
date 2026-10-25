@@ -390,7 +390,7 @@ createForm.addEventListener("submit", async (event) => {
 
     if (nameLength < 1 || nameLength > 100) {
         setGroupNameError(
-            "Nama group wajib diisi dan maksimal 100 byte."
+            "Isi nama group dengan maksimal 100 karakter biasa; karakter tertentu dapat dihitung lebih dari satu."
         );
         groupName.focus();
         return;

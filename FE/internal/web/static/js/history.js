@@ -355,8 +355,7 @@ function renderReconciled(items) {
 
 async function reconcileHistory() {
     if (busy || !canEdit) return;
-    if (!window.confirm("Periksa status migration running/unknown pada database ini? " +
-        "Reconcile membaca receipt dan memperbarui ledger; TIDAK menjalankan ulang SQL.")) return;
+    if (!window.confirm("Periksa dan perbarui status migration yang belum pasti? SQL tidak dijalankan ulang.")) return;
     setBusy(true);
     showMessage(reconcileError, "");
     showMessage(reconcileStatus, "Memeriksa izin Edit dan receipt migration...");

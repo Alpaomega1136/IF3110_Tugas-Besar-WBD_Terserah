@@ -99,7 +99,7 @@ async function setupViewer({ access = "view", schemas = ["public"], listed = tru
     clearAuthState();
     const ui = installDOM([
         "viewer-page", "viewer-status", "viewer-error", "viewer-workspace", "viewer-schemas-status",
-        "viewer-database-name", "viewer-target-name", "viewer-access", "viewer-drafts-link",
+        "viewer-database-name", "viewer-target-name", "viewer-access",
         "viewer-schemas-list", "viewer-schemas-empty", "viewer-schemas-error", "viewer-refresh-schemas",
         "viewer-tables-panel", "viewer-selected-schema", "viewer-refresh-tables", "viewer-tables-status",
         "viewer-tables-error", "viewer-tables-empty", "viewer-tables-list", "viewer-detail",
@@ -112,7 +112,7 @@ async function setupViewer({ access = "view", schemas = ["public"], listed = tru
     ]);
     ui.$("viewer-page").dataset.databaseId = big;
     ui.$("viewer-row-limit").value = "50";
-    for (const id of ["viewer-error", "viewer-workspace", "viewer-schemas-empty", "viewer-drafts-link"]) ui.$(id).hidden = true;
+    for (const id of ["viewer-error", "viewer-workspace", "viewer-schemas-empty"]) ui.$(id).hidden = true;
     const calls = [];
     globalThis.fetch = async (url) => {
         calls.push(url);
@@ -261,7 +261,6 @@ test("revoked session redirects and rejected database list hides previous entrie
 test("viewer checks grant then reads schema list safely", async () => {
     const ui = await setupViewer({ schemas: ['<img src=x onerror="x">'] });
     assert.equal(ui.$("viewer-workspace").hidden, false);
-    assert.equal(ui.$("viewer-drafts-link").hidden, true);
     assert.equal(ui.$("viewer-schemas-list").children[0].textContent, '<img src=x onerror="x">');
     assert.equal(ui.$("viewer-schemas-list").children[0].children[0].textContent, '<img src=x onerror="x">');
 });

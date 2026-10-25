@@ -138,7 +138,7 @@ func TestAdminUsersPage(t *testing.T) {
 		`id="create-password"`,
 		`aria-describedby="create-password-help create-password-error"`,
 		`aria-describedby="edit-password-help edit-password-error"`,
-		"12–1024 byte",
+		"Gunakan 12–1024 huruf",
 		`id="users-section"`,
 		`/static/js/users.js`,
 		`id="edit-user-form"`,
@@ -1067,7 +1067,7 @@ func TestViewerCompletePageAndEmbeddedModule(t *testing.T) {
 		`id="viewer-columns-body"`, `id="viewer-constraints-body"`, `id="viewer-indexes-body"`,
 		`id="viewer-rows-head"`, `id="viewer-rows-body"`, `id="viewer-row-limit"`,
 		`id="viewer-rows-prev"`, `id="viewer-rows-next"`, `id="viewer-rows-error"`,
-		`id="viewer-workspace" hidden`, `/static/js/viewer.js`, `Migration History`,
+		`id="viewer-workspace" hidden`, `/static/js/viewer.js`,
 	} {
 		if !strings.Contains(w.Body.String(), expected) {
 			t.Errorf("viewer page missing %s", expected)

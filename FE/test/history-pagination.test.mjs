@@ -129,7 +129,7 @@ test("reconcile requires confirmation and POST with CSRF; refreshes history; nev
     const ui = await setupHistory({ more: false });
     await ui.$("history-reconcile").fire("click");
     assert.equal(ui.confirms.length, 1);
-    assert.match(ui.confirms[0], /TIDAK menjalankan ulang SQL/);
+    assert.match(ui.confirms[0], /SQL tidak dijalankan ulang/);
     const post = ui.calls.filter((c) => c.method === "POST");
     assert.equal(post.length, 1);
     assert.equal(post[0].url, `${api}/reconcile`);

@@ -516,7 +516,7 @@ form.addEventListener("submit", async (event) => {
     const sqlBytes = encoder.encode(sql).length;
 
     if (titleBytes < 1 || titleBytes > 200) {
-        setFieldError(titleInput, titleError, "Judul harus 1-200 byte.");
+        setFieldError(titleInput, titleError, "Isi judul dengan maksimal 200 karakter biasa; karakter tertentu dapat dihitung lebih dari satu.");
     }
 
     if (sqlBytes < 1 || sqlBytes > maxSQLBytes) {

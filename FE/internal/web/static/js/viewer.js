@@ -366,7 +366,6 @@ async function initialize() {
         byId("viewer-database-name").textContent = database.name;
         byId("viewer-target-name").textContent = database.database_name;
         byId("viewer-access").textContent = database.access === "edit" ? "View + Edit" : "View Only";
-        byId("viewer-drafts-link").hidden = database.access !== "edit";
         await loadSchemas(true);
     } catch (error) {
         handleError(error, "viewer-error", "Gagal membuka database viewer.");

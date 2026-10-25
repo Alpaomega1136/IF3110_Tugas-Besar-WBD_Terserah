@@ -24,6 +24,7 @@ function textCell(row, value) {
 
 function actionLink(cell, id, resource, label) {
     const link = document.createElement("a");
+    link.className = "workspace-button";
     link.href = `/databases/${encodeURIComponent(id)}/${resource}`;
     link.textContent = label;
     cell.appendChild(link);

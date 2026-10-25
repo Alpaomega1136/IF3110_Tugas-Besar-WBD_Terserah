@@ -18,12 +18,14 @@ const createButton = document.getElementById("create-user-submit");
 const createMessage = document.getElementById("create-user-message");
 const usernameError = document.getElementById("create-username-error");
 const passwordError = document.getElementById("create-password-error");
+const passwordHelp = document.getElementById("create-password-help");
 
 const editSection = document.getElementById("edit-user-section");
 const editForm = document.getElementById("edit-user-form");
 const editUserName = document.getElementById("edit-user-name");
 const editPassword = document.getElementById("edit-password");
 const editPasswordError = document.getElementById("edit-password-error");
+const editPasswordHelp = document.getElementById("edit-password-help");
 const editAdmin = document.getElementById("edit-is-admin");
 const editActive = document.getElementById("edit-is-active");
 const editSubmit = document.getElementById("edit-user-submit");
@@ -122,6 +124,8 @@ async function refreshUsers() {
 function setFieldError(input, target, message) {
     target.textContent = message;
     target.hidden = !message;
+    if (input === passwordInput) passwordHelp.hidden = !!message;
+    if (input === editPassword) editPasswordHelp.hidden = !!message;
 
     if (message) {
         input.setAttribute("aria-invalid", "true");
@@ -148,7 +152,7 @@ function validateCreateInput() {
         setFieldError(
             usernameInput,
             usernameError,
-            "Username harus 1-100 byte dan tidak boleh mengandung spasi."
+            "Isi username tanpa spasi, maksimal 100 huruf atau angka biasa. Karakter tertentu dapat dihitung lebih dari satu."
         );
     }
 
@@ -158,7 +162,7 @@ function validateCreateInput() {
         setFieldError(
             passwordInput,
             passwordError,
-            "Password harus terdiri dari 12–1024 byte."
+            "Panjang password tidak sesuai. Gunakan 12–1024 huruf, angka, atau simbol biasa; karakter tertentu dapat dihitung lebih dari satu."
         );
     }
 
@@ -300,7 +304,7 @@ editForm.addEventListener("submit", async (event) => {
             setFieldError(
                 editPassword,
                 editPasswordError,
-                "Password harus terdiri dari 12–1024 byte."
+                "Panjang password tidak sesuai. Gunakan 12–1024 huruf, angka, atau simbol biasa; karakter tertentu dapat dihitung lebih dari satu."
             );
             editPassword.focus();
             return;

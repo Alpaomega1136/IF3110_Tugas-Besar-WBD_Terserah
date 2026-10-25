@@ -34,17 +34,15 @@
                 </p>
 
                 <p>
-                    <a href="/databases/{{.DatabaseID}}/history">
+                    <a class="workspace-button" href="/databases/{{.DatabaseID}}/history">
                         Lihat Migration History
                     </a>
                 </p>
 
-                <p class="form-help">
-                    Draft menyimpan SQL tanpa menjalankannya. Setelah disimpan,
-                    pengguna dengan akses Edit dapat meninjau dan menjalankan migration.
-                </p>
             </section>
 
+            <div class="migration-layout">
+                <div class="migration-column">
             <section class="dashboard-panel"
                      aria-labelledby="draft-list-heading">
                 <div class="draft-heading-row">
@@ -89,30 +87,6 @@
                     <span id="draft-page-number" aria-live="polite">Halaman 1</span>
                     <button type="button" id="draft-next" class="button-secondary" disabled>Halaman Berikutnya</button>
                 </nav>
-            </section>
-
-            <section class="dashboard-panel bonus-diff" aria-labelledby="schema-diff-heading">
-                <div class="bonus-heading">
-                    <span class="bonus-label">SCHEMA TOOLS</span>
-                    <h2 id="schema-diff-heading">Schema Diff</h2>
-                    <p>Bandingkan dua schema pada database ini. SQL kandidat hanya menambahkan tabel dan kolom sederhana; tinjau peringatan sebelum digunakan.</p>
-                </div>
-                <div class="bonus-schema-fields">
-                    <div>
-                        <label for="diff-current">Schema yang akan diubah</label>
-                        <select id="diff-current"></select>
-                    </div>
-                    <div>
-                        <label for="diff-desired">Schema acuan</label>
-                        <select id="diff-desired"></select>
-                    </div>
-                </div>
-                <div class="bonus-actions">
-                    <button id="diff-compare" type="button">Bandingkan Schema</button>
-                    <button id="diff-use" type="button" disabled>Gunakan SQL sebagai Draft Baru</button>
-                </div>
-                <p id="diff-status" role="status" aria-live="polite"></p>
-                <pre id="diff-result" class="draft-sql-preview"></pre>
             </section>
 
             <section class="dashboard-panel"
@@ -170,6 +144,35 @@
                 </form>
             </section>
 
+                </div>
+                <div class="migration-column">
+            <div class="grant-toolbar">
+                <button type="button" id="draft-reload" class="button-secondary" disabled>Muat Ulang Draft</button>
+            </div>
+            <section class="dashboard-panel bonus-diff" aria-labelledby="schema-diff-heading">
+                <div class="bonus-heading">
+                    <span class="bonus-label">SCHEMA TOOLS</span>
+                    <h2 id="schema-diff-heading">Schema Diff</h2>
+                    <p>Bandingkan dua schema pada database ini. SQL kandidat hanya menambahkan tabel dan kolom sederhana; tinjau peringatan sebelum digunakan.</p>
+                </div>
+                <div class="bonus-schema-fields">
+                    <div>
+                        <label for="diff-current">Schema yang akan diubah</label>
+                        <select id="diff-current"></select>
+                    </div>
+                    <div>
+                        <label for="diff-desired">Schema acuan</label>
+                        <select id="diff-desired"></select>
+                    </div>
+                </div>
+                <div class="bonus-actions">
+                    <button id="diff-compare" type="button">Bandingkan Schema</button>
+                    <button id="diff-use" type="button" disabled>Gunakan SQL sebagai Draft Baru</button>
+                </div>
+                <p id="diff-status" role="status" aria-live="polite"></p>
+                <pre id="diff-result" class="draft-sql-preview"></pre>
+            </section>
+
             <section id="draft-detail"
                      class="dashboard-panel"
                      aria-labelledby="draft-detail-heading"
@@ -201,28 +204,18 @@
             <section id="draft-execution" class="dashboard-panel draft-execution"
                      aria-labelledby="draft-execution-heading" hidden>
                 <h2 id="draft-execution-heading">Execute Migration</h2>
-                <section class="bonus-explain" aria-labelledby="draft-explain-heading">
-                    <span class="bonus-label">QUERY TOOLS</span>
-                    <h3 id="draft-explain-heading">Analisis Query</h3>
-                    <p class="form-help">Analisis menggunakan EXPLAIN untuk draft tersimpan. Setiap statement diperiksa secara terpisah; perubahan dari statement sebelumnya tidak diterapkan. Hasil berupa perkiraan, bukan waktu eksekusi aktual.</p>
-                    <button type="button" id="draft-explain" disabled>Analisis Query</button>
-                    <p id="draft-explain-message" role="status" aria-live="polite" hidden></p>
-                    <pre id="draft-explain-result" class="draft-sql-preview" hidden></pre>
-                </section>
-                <p class="form-help">Hanya draft yang sudah tersimpan dan tidak memiliki perubahan
-                    lokal yang bisa dijalankan. Sebelum Execute, tinjau SQL pada Detail Draft,
-                    database target, dan revision. Eksekusi dilakukan dalam transaksi oleh backend;
-                    jika salah satu statement gagal, transaksi di-rollback.</p>
+                <p class="form-help">Tinjau SQL dan database target sebelum menjalankan migrasi.</p>
                 <dl class="draft-execution-metadata">
                     <dt>Revision tersimpan</dt>
                     <dd id="draft-execution-revision"></dd>
                 </dl>
                 <p id="draft-execution-state" role="status" aria-live="polite"></p>
                 <div class="draft-execution-actions">
+                    <button type="button" id="draft-explain" disabled>Analisis Query</button>
                     <button type="button" id="draft-execute" disabled>Execute Migration</button>
-                    <button type="button" id="draft-reload" class="button-secondary">Muat Ulang Draft</button>
-                    <a href="/databases/{{.DatabaseID}}/history">Lihat Migration History</a>
                 </div>
+                <p id="draft-explain-message" role="status" aria-live="polite" hidden></p>
+                <pre id="draft-explain-result" class="draft-sql-preview" hidden></pre>
                 <p id="draft-execution-message" role="status" aria-live="polite" hidden></p>
                 <section id="draft-execution-result" class="draft-execution-result"
                          aria-labelledby="draft-execution-result-heading" hidden>
@@ -233,10 +226,10 @@
                         <dt>Execution ID</dt><dd id="draft-result-id"></dd>
                         <dt>Error Code</dt><dd id="draft-result-error"></dd>
                     </dl>
-                    <p class="form-help">Status running atau unknown bukan bukti commit/rollback.
-                        Periksa Migration History; jangan menjalankan ulang secara otomatis.</p>
                 </section>
             </section>
+                </div>
+            </div>
 
         </div>
     </main>

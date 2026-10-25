@@ -10,12 +10,6 @@
                 <h2 id="viewer-target-heading">Database: <span id="viewer-database-name"></span></h2>
                 <p>Database target: <span id="viewer-target-name"></span></p>
                 <p>Hak akses: <strong id="viewer-access"></strong></p>
-                <nav class="database-workspace-links" aria-label="Navigasi database">
-                    <a href="/dashboard">Dashboard</a>
-                    <a href="/databases/{{.DatabaseID}}/history">Migration History</a>
-                    <a id="viewer-drafts-link" href="/databases/{{.DatabaseID}}/drafts" hidden>Kelola Draft</a>
-                </nav>
-                <p class="form-help">Viewer hanya dapat membaca struktur dan data. Semua akses diperiksa kembali oleh backend.</p>
             </section>
             <div class="viewer-explorer">
                 <section class="dashboard-panel" aria-labelledby="viewer-schemas-heading">
