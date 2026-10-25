@@ -30,8 +30,9 @@
                 <div class="form-group">
                     <label for="create-password">Password (wajib)</label>
                     <input id="create-password" name="password" type="password"
-                        autocomplete="new-password" required minlength="8"
-                        aria-describedby="create-password-error">
+                        autocomplete="new-password" required
+                        aria-describedby="create-password-help create-password-error">
+                    <p id="create-password-help" class="form-help">Password harus terdiri dari 12–1024 byte.</p>
                     <p id="create-password-error" class="error-message" hidden></p>
                 </div>
 
@@ -96,7 +97,8 @@
                     </label>
                     <input id="edit-password" type="password"
                         autocomplete="new-password"
-                        aria-describedby="edit-password-error">
+                        aria-describedby="edit-password-help edit-password-error">
+                    <p id="edit-password-help" class="form-help">Password baru harus terdiri dari 12–1024 byte.</p>
                     <p id="edit-password-error" class="error-message" hidden></p>
                 </div>
 

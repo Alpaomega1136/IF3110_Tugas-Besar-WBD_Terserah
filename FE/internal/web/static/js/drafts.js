@@ -57,7 +57,8 @@ const resultError = document.getElementById("draft-result-error");
 const apiPath = `/api/v1/databases/${encodeURIComponent(databaseId)}/drafts`;
 
 const encoder = new TextEncoder();
-const maxBodyBytes = 1024 * 1024;
+const maxSQLBytes = 48 * 1024;
+const maxBodyBytes = 64 * 1024;
 
 let selectedDraft = null;
 let busy = false;
@@ -480,8 +481,8 @@ form.addEventListener("submit", async (event) => {
         setFieldError(titleInput, titleError, "Judul harus 1-200 byte.");
     }
 
-    if (sqlBytes < 1 || sqlBytes > maxBodyBytes) {
-        setFieldError(sqlInput, sqlError, "SQL harus diisi dan maksimal 1 MiB.");
+    if (sqlBytes < 1 || sqlBytes > maxSQLBytes) {
+        setFieldError(sqlInput, sqlError, "SQL harus diisi dan maksimal 48 KiB.");
     }
 
     if (!titleError.hidden || !sqlError.hidden) {
@@ -500,7 +501,7 @@ form.addEventListener("submit", async (event) => {
     const serialized = JSON.stringify(payload);
 
     if (encoder.encode(serialized).length > maxBodyBytes) {
-        setFieldError(sqlInput, sqlError, "Ukuran JSON melebihi 1 MiB. " + "Kurangi ukuran SQL sebelum menyimpan.");
+        setFieldError(sqlInput, sqlError, "Ukuran JSON melebihi 64 KiB. " + "Kurangi ukuran SQL sebelum menyimpan.");
         return;
     }
 

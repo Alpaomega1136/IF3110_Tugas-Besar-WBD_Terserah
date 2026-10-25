@@ -102,6 +102,58 @@ test("draft cannot execute before save; creates draft without implicit execute",
     assert.equal(ui.$("draft-execution").hidden, false);
 });
 
+test("draft create and update enforce the 48 KiB SQL limit in UTF-8 bytes", async () => {
+    const prefix = "SELECT 1; --";
+    const limit = 48 * 1024;
+    for (const selected of [false, true]) {
+        for (const extra of [0, 1]) {
+            const ui = await setup({ selected });
+            const sql = prefix + "€".repeat(Math.floor((limit - prefix.length) / 3)) +
+                "a".repeat((limit - prefix.length) % 3 + extra);
+            ui.$("draft-title").value = "SQL limit";
+            ui.$("draft-sql").value = sql;
+            await ui.$("draft-form").fire("submit");
+            const saves = ui.calls.filter((call) => ["POST", "PATCH"].includes(call.method));
+            assert.equal(saves.length, extra === 0 ? 1 : 0);
+            if (extra === 0) {
+                assert.equal(saves[0].method, selected ? "PATCH" : "POST");
+                assert.equal(saves[0].body.sql, sql);
+            } else {
+                assert.equal(ui.$("draft-sql-error").hidden, false);
+                assert.match(ui.$("draft-sql-error").textContent, /48 KiB/);
+            }
+        }
+    }
+});
+
+test("draft create and update enforce 64 KiB serialized JSON independently of SQL size", async () => {
+    const encoder = new TextEncoder();
+    const limit = 64 * 1024;
+    const title = "JSON limit";
+    for (const selected of [false, true]) {
+        const start = "SELECT '" + '"'.repeat(32000);
+        const payload = (sql) => selected ? { title, sql, revision: draft.revision } : { title, sql };
+        const padding = limit - encoder.encode(JSON.stringify(payload(start + "'"))).length;
+        for (const extra of [0, 1]) {
+            const ui = await setup({ selected });
+            const sql = start + "a".repeat(padding + extra) + "'";
+            assert.ok(encoder.encode(sql).length < 48 * 1024);
+            assert.equal(encoder.encode(JSON.stringify(payload(sql))).length, limit + extra);
+            ui.$("draft-title").value = title;
+            ui.$("draft-sql").value = sql;
+            await ui.$("draft-form").fire("submit");
+            const saves = ui.calls.filter((call) => ["POST", "PATCH"].includes(call.method));
+            assert.equal(saves.length, extra === 0 ? 1 : 0);
+            if (extra === 0) {
+                assert.deepEqual(saves[0].body, payload(sql));
+            } else {
+                assert.equal(ui.$("draft-sql-error").hidden, false);
+                assert.match(ui.$("draft-sql-error").textContent, /64 KiB/);
+            }
+        }
+    }
+});
+
 test("saved draft preflight, explicit confirmation, exact string revision and success", async () => {
     const ui = await setup();
     assert.equal(ui.$("draft-execution").hidden, false);

@@ -158,11 +158,11 @@ function validateCreateInput() {
 
     const passwordBytes = utf8.encode(password).length;
 
-    if (passwordBytes < 8 || passwordBytes > 1024) {
+    if (passwordBytes < 12 || passwordBytes > 1024) {
         setFieldError(
             passwordInput,
             passwordError,
-            "Password harus terdiri dari 8–1024 byte."
+            "Password harus terdiri dari 12–1024 byte."
         );
     }
 
@@ -300,11 +300,11 @@ editForm.addEventListener("submit", async (event) => {
         const passwordLength =
             new TextEncoder().encode(newPassword).length;
 
-        if (passwordLength < 8 || passwordLength > 1024) {
+        if (passwordLength < 12 || passwordLength > 1024) {
             setFieldError(
                 editPassword,
                 editPasswordError,
-                "Password harus terdiri dari 8–1024 byte."
+                "Password harus terdiri dari 12–1024 byte."
             );
             editPassword.focus();
             return;
