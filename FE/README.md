@@ -89,6 +89,12 @@ Pengujian browser memerlukan PostgreSQL target terpisah dari metadata, kredensia
 
 ## Execute Migration 
 
+### Schema diff
+
+Pada halaman Draft, pilih dua schema yang dapat diakses di database target yang sama: schema yang akan diubah dan schema acuan. Klik **Bandingkan Schema** untuk melihat perbedaan dan kandidat SQL, lalu **Gunakan SQL sebagai Draft Baru** untuk mengedit dan menyimpannya. Perbandingan tidak menjalankan SQL. Memerlukan grant Edit pada database dan hak PostgreSQL untuk membaca kedua schema.
+
+Generator hanya membuat `CREATE TABLE` untuk tabel biasa dengan tipe sederhana yang didukung dan `ADD COLUMN` untuk kolom nullable tanpa default. Penghapusan, perubahan kolom yang ada, constraint, index, tabel partisi, default, identity, generated column, dan tipe lain perlu ditinjau manual; peringatan ditampilkan pada hasil. Schema acuan tidak otomatis disalin secara lengkap. Maksimum 100 tabel per schema; hasil membaca metadata per tabel, sehingga perubahan schema saat perbandingan berlangsung dapat memengaruhi hasil. Tinjau SQL sebelum execute.
+
 Login sebagai user dengan grant `edit`, buka Draft dari Dashboard, lalu simpan SQL yang ingin dijalankan. Pada Draft tersimpan, tinjau SQL, revision dan target, klik **Execute Migration**, kemudian konfirmasi. Tombol Execute dinonaktifkan jika belum tersimpan, ada perubahan lokal yang belum disimpan, sedang memproses permintaan, atau permintaan untuk revision tersebut sudah dikirim.
 
 FE memanggil `POST /api/v1/databases/{id}/drafts/{draftID}/execute` dengan JSON `{ "revision": "N" }` dan CSRF sesi. Hasil BE2 dibaca dari `status`, bukan hanya kode HTTP: `success` = commit, `failed` = rollback, sedangkan `running`/`unknown` **belum final**. Tampilkan version, execution ID dan error code, lalu periksa History; tidak ada retry otomatis pada error jaringan atau status ambigu.

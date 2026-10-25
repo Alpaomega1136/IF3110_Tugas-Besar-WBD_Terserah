@@ -37,12 +37,12 @@ function Ensure-DevAdmin([string]$Go, [string]$Directory) {
     if ($status -ne 'false') { throw 'Status admin tidak dapat diperiksa; server tidak dijalankan.' }
     do {
         $username = (Read-Host 'Username admin pertama').Trim()
-        $password = Read-Host 'Password admin baru (12-1024 byte UTF-8)' -AsSecureString
+        $password = Read-Host 'Password admin baru (gunakan 12-1024 huruf, angka, atau simbol biasa)' -AsSecureString
         $plain = (New-Object System.Net.NetworkCredential('', $password)).Password
         $length = [System.Text.Encoding]::UTF8.GetByteCount($plain)
         $nameLength = [System.Text.Encoding]::UTF8.GetByteCount($username)
         $valid = $nameLength -ge 1 -and $nameLength -le 100 -and $username -notmatch '[ \t\r\n\x00]' -and $length -ge 12 -and $length -le 1024
-        if (-not $valid) { Write-Warning 'Username harus 1-100 byte tanpa spasi/NUL; password harus 12-1024 byte. Ulangi input.' }
+        if (-not $valid) { Write-Warning 'Username harus 1-100 huruf, angka, atau simbol biasa tanpa spasi; password harus 12-1024 huruf, angka, atau simbol biasa. Karakter seperti emoji dapat dihitung lebih dari satu. Ulangi input.' }
     } until ($valid)
     $env:BOOTSTRAP_USERNAME = $username
     $env:BOOTSTRAP_PASSWORD = $plain
