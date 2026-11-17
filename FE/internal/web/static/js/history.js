@@ -1,49 +1,55 @@
 import { confirmAction } from "./confirmation.js";
-import {
-    authenticatedRequest,
-    requireAuthenticatedUser,
-    isCSRFError
-} from "./auth.js";
+import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
 import { positiveInt64, parseCursorPage, parseReconcileResult } from "./pagination.js";
+import { byId, addCell, formatDate } from "./ui.js";
 
-const page = document.getElementById("history-page");
+const page = byId("history-page");
 const databaseId = page.dataset.databaseId;
 const apiPath = `/api/v1/databases/${encodeURIComponent(databaseId)}/migrations`;
 
-const pageStatus = document.getElementById("history-page-status");
-const pageError = document.getElementById("history-page-error");
-const workspace = document.getElementById("history-workspace");
-const databaseName = document.getElementById("history-database-name");
-const targetName = document.getElementById("history-target-name");
-const access = document.getElementById("history-access");
-const draftsLink = document.getElementById("history-drafts-link");
+const pageStatus = byId("history-page-status");
+const pageError = byId("history-page-error");
+const workspace = byId("history-workspace");
+const databaseName = byId("history-database-name");
+const targetName = byId("history-target-name");
+const access = byId("history-access");
+const draftsLink = byId("history-drafts-link");
 
-const refreshButton = document.getElementById("history-refresh");
-const listStatus = document.getElementById("history-list-status");
-const listError = document.getElementById("history-list-error");
-const listEmpty = document.getElementById("history-list-empty");
-const listTable = document.getElementById("history-list-table");
-const listBody = document.getElementById("history-list-body");
-const pagination = document.getElementById("history-pagination");
-const prevButton = document.getElementById("history-prev");
-const nextButton = document.getElementById("history-next");
-const pageNumber = document.getElementById("history-page-number");
-const pendingNotice = document.getElementById("history-pending-notice");
-const reconcilePanel = document.getElementById("history-reconcile-panel");
-const reconcileButton = document.getElementById("history-reconcile");
-const reconcileStatus = document.getElementById("history-reconcile-status");
-const reconcileError = document.getElementById("history-reconcile-error");
-const reconcileResult = document.getElementById("history-reconcile-result");
-const reconcileSummary = document.getElementById("history-reconcile-summary");
-const reconcileTable = document.getElementById("history-reconcile-table");
-const reconcileBody = document.getElementById("history-reconcile-body");
+const refreshButton = byId("history-refresh");
+const listStatus = byId("history-list-status");
+const listError = byId("history-list-error");
+const listEmpty = byId("history-list-empty");
+const listTable = byId("history-list-table");
+const listBody = byId("history-list-body");
+const pagination = byId("history-pagination");
+const prevButton = byId("history-prev");
+const nextButton = byId("history-next");
+const pageNumber = byId("history-page-number");
+const pendingNotice = byId("history-pending-notice");
 
-const detail = document.getElementById("history-detail");
-const detailStatus = document.getElementById("history-detail-status");
-const detailError = document.getElementById("history-detail-error");
-const detailContent = document.getElementById("history-detail-content");
-const detailSQLSection = document.getElementById("history-detail-sql-section");
-const detailSQL = document.getElementById("history-detail-sql");
+const reconcilePanel = byId("history-reconcile-panel");
+const reconcileButton = byId("history-reconcile");
+const reconcileStatus = byId("history-reconcile-status");
+const reconcileError = byId("history-reconcile-error");
+const reconcileResult = byId("history-reconcile-result");
+const reconcileSummary = byId("history-reconcile-summary");
+const reconcileTable = byId("history-reconcile-table");
+const reconcileBody = byId("history-reconcile-body");
+
+const detail = byId("history-detail");
+const detailStatus = byId("history-detail-status");
+const detailError = byId("history-detail-error");
+const detailContent = byId("history-detail-content");
+const detailSQLSection = byId("history-detail-sql-section");
+const detailSQL = byId("history-detail-sql");
+
+const pageLimit = 50;
+const STATUS_LABELS = {
+    running: "Berjalan",
+    success: "Berhasil",
+    failed: "Gagal",
+    unknown: "Tidak pasti"
+};
 
 let busy = false;
 let canEdit = false;
@@ -51,41 +57,16 @@ let cursors = [null];
 let currentPage = 0;
 let nextCursor = null;
 let hasMore = false;
-const pageLimit = 50;
 
 function showMessage(element, message) {
     element.textContent = message;
     element.hidden = !message;
 }
 
-function formatDate(value, unfinished = false) {
-    if (value == null) return unfinished ? "Belum selesai" : "-";
+const formatHistoryDate = (value, unfinished = false) =>
+    formatDate(value, { nullLabel: unfinished ? "Belum selesai" : "-", invalidLabel: "Tanggal tidak valid" });
 
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "Tanggal tidak valid";
-
-    return new Intl.DateTimeFormat("id-ID", {
-        dateStyle: "medium",
-        timeStyle: "short"
-    }).format(date);
-}
-
-function statusLabel(status) {
-    const labels = {
-        running: "Berjalan",
-        success: "Berhasil",
-        failed: "Gagal",
-        unknown: "Tidak pasti"
-    };
-    return labels[status] ?? String(status ?? "-");
-}
-
-function addCell(row, value) {
-    const cell = document.createElement("td");
-    cell.textContent = String(value);
-    row.appendChild(cell);
-    return cell;
-}
+const statusLabel = (status) => STATUS_LABELS[status] ?? String(status ?? "-");
 
 function makeStatus(status) {
     const span = document.createElement("span");
@@ -97,9 +78,7 @@ function makeStatus(status) {
     return span;
 }
 
-function versionString(version) {
-    return positiveInt64(version) ? version : null;
-}
+const versionString = (version) => (positiveInt64(version) ? version : null);
 
 function updatePagination() {
     pagination.hidden = workspace.hidden;
@@ -146,14 +125,10 @@ function handleRequestError(error, target) {
         window.location.replace("/login");
         return;
     }
-
     if (error.status === 403 && !isCSRFError(error)) {
         clearPrivateData();
         workspace.hidden = true;
-        showMessage(
-            pageError,
-            "Hak akses ke database telah ditolak atau dicabut. Kembali ke Dashboard."
-        );
+        showMessage(pageError, "Hak akses ke database telah ditolak atau dicabut. Kembali ke Dashboard.");
         return;
     }
 
@@ -165,13 +140,16 @@ function handleRequestError(error, target) {
         target_unavailable: "Database target tidak dapat dijangkau. Pulihkan koneksi, lalu coba kembali secara manual.",
         migration_unavailable: "Layanan migration belum tersedia. Periksa backend/target dan coba kembali secara manual."
     };
-    showMessage(target, error.status === 404
+    const msg = error.status === 404
         ? "Riwayat atau versi migration tidak ditemukan."
-        : isCSRFError(error) ? "Token CSRF ditolak. Muat ulang halaman dan login ulang jika diperlukan."
-        : messages[error.code] || (error.status === 409 ? "Terjadi konflik migration. Muat ulang History dan periksa backend."
-        : error.status === 503 ? "Target migration tidak tersedia. Coba kembali secara manual setelah pulih."
-        : (error.message || "Operasi migration history gagal.")));
-
+        : isCSRFError(error)
+            ? "Token CSRF ditolak. Muat ulang halaman dan login ulang jika diperlukan."
+            : messages[error.code] || (error.status === 409
+                ? "Terjadi konflik migration. Muat ulang History dan periksa backend."
+                : error.status === 503
+                    ? "Target migration tidak tersedia. Coba kembali secara manual setelah pulih."
+                    : (error.message || "Operasi migration history gagal."));
+    showMessage(target, msg);
 }
 
 function renderHistory(entries) {
@@ -193,8 +171,8 @@ function renderHistory(entries) {
         addCell(row, entry.execution_id ?? "-");
         addCell(row, entry.error_code ?? "-");
         addCell(row, entry.username || "-");
-        addCell(row, formatDate(entry.started_at));
-        addCell(row, formatDate(entry.finished_at, true));
+        addCell(row, formatHistoryDate(entry.started_at));
+        addCell(row, formatHistoryDate(entry.finished_at, true));
 
         const actionCell = document.createElement("td");
         const button = document.createElement("button");
@@ -203,18 +181,13 @@ function renderHistory(entries) {
         button.textContent = "Detail";
         button.dataset.invalidVersion = String(version === null);
         button.disabled = busy || version === null;
-
         button.setAttribute(
             "aria-label",
-            version === null
-                ? "Versi migration tidak aman untuk dibuka"
-                : `Lihat detail migration versi ${version}`
+            version === null ? "Versi migration tidak aman untuk dibuka" : `Lihat detail migration versi ${version}`
         );
-
         if (version !== null) {
             button.addEventListener("click", () => openHistory(version));
         }
-
         actionCell.appendChild(button);
         row.appendChild(actionCell);
         listBody.appendChild(row);
@@ -224,28 +197,22 @@ function renderHistory(entries) {
     listTable.hidden = entries.length === 0;
 
     const pendingCount = entries.filter((item) => ["running", "unknown"].includes(item.status)).length;
-    showMessage(pendingNotice, pendingCount
-        ? `${pendingCount} eksekusi pada halaman ini belum final. ${canEdit ? "Gunakan Reconcile jika diperlukan." : "Mintalah pengguna Edit memeriksa statusnya."}`
-        : "");
+    showMessage(
+        pendingNotice,
+        pendingCount
+            ? `${pendingCount} eksekusi pada halaman ini belum final. ${canEdit ? "Gunakan Reconcile jika diperlukan." : "Mintalah pengguna Edit memeriksa statusnya."}`
+            : ""
+    );
 
     if (unsafeVersion) {
-        showMessage(
-            listError,
-            "Ada versi migration yang bukan string int64 valid. Muat ulang atau periksa data backend."
-        );
+        showMessage(listError, "Ada versi migration yang bukan string int64 valid. Muat ulang atau periksa data backend.");
     }
 }
 
 function showHistory(entry, version) {
-    if (
-        !entry ||
-        entry.database_id !== databaseId ||
-        versionString(entry.version) !== version ||
-        typeof entry.sql !== "string"
-    ) {
+    if (!entry || entry.database_id !== databaseId || versionString(entry.version) !== version || typeof entry.sql !== "string") {
         throw new Error("Format detail migration dari backend tidak valid.");
     }
-
     const fields = {
         "history-detail-version": version,
         "history-detail-execution-id": entry.execution_id ?? "-",
@@ -253,15 +220,13 @@ function showHistory(entry, version) {
         "history-detail-draft-id": entry.draft_id ?? "-",
         "history-detail-result": statusLabel(entry.status),
         "history-detail-executor": entry.username || "-",
-        "history-detail-started": formatDate(entry.started_at),
-        "history-detail-finished": formatDate(entry.finished_at, true),
+        "history-detail-started": formatHistoryDate(entry.started_at),
+        "history-detail-finished": formatHistoryDate(entry.finished_at, true),
         "history-detail-error-code": entry.error_code ?? "-"
     };
-
     for (const [id, value] of Object.entries(fields)) {
-        document.getElementById(id).textContent = String(value);
+        byId(id).textContent = String(value);
     }
-
     detailSQL.textContent = entry.sql;
     detailContent.hidden = false;
     detailSQLSection.hidden = false;
@@ -269,7 +234,6 @@ function showHistory(entry, version) {
 
 async function openHistory(version) {
     if (busy) return;
-
     setBusy(true);
     detail.hidden = false;
     detailContent.hidden = true;
@@ -279,9 +243,7 @@ async function openHistory(version) {
     showMessage(detailStatus, `Memuat detail versi ${version}...`);
 
     try {
-        const result = await authenticatedRequest(
-            `${apiPath}/${encodeURIComponent(version)}`
-        );
+        const result = await authenticatedRequest(`${apiPath}/${encodeURIComponent(version)}`);
         showHistory(result, version);
     } catch (error) {
         handleRequestError(error, detailError);
@@ -307,8 +269,11 @@ async function loadHistory(index = currentPage, reset = false) {
         const cursor = cursors[index];
         const query = new URLSearchParams({ limit: String(pageLimit) });
         if (cursor !== null) query.set("before", cursor);
+
         const result = parseCursorPage(
-            await authenticatedRequest(`${apiPath}?${query}`), "migrations", "next_before"
+            await authenticatedRequest(`${apiPath}?${query}`),
+            "migrations",
+            "next_before"
         );
         for (const entry of result.entries) {
             if (!entry || entry.database_id !== databaseId || !positiveInt64(entry.version)) {
@@ -361,6 +326,7 @@ async function reconcileHistory() {
         message: "Periksa dan perbarui status migration yang belum pasti? SQL tidak dijalankan ulang.",
         confirmLabel: "Reconcile"
     })) || busy || !canEdit) return;
+
     setBusy(true);
     showMessage(reconcileError, "");
     showMessage(reconcileStatus, "Memeriksa izin Edit dan receipt migration...");
@@ -375,9 +341,7 @@ async function reconcileHistory() {
             error.status = 403;
             throw error;
         }
-        const items = parseReconcileResult(await authenticatedRequest(`${apiPath}/reconcile`, {
-            method: "POST"
-        }));
+        const items = parseReconcileResult(await authenticatedRequest(`${apiPath}/reconcile`, { method: "POST" }));
         renderReconciled(items);
         completed = true;
     } catch (error) {
@@ -404,20 +368,16 @@ async function initialize() {
         if (!user) return;
 
         const result = await authenticatedRequest("/api/v1/databases");
-
         if (!Array.isArray(result?.databases)) {
             throw new Error("Format daftar database dari backend tidak valid.");
         }
-
         const database = result.databases.find((item) => String(item.id) === databaseId);
-
         if (!database || !["view", "edit"].includes(database.access)) {
             throw new Error("Database tidak ditemukan atau tidak dapat diakses.");
         }
 
         databaseName.textContent = database.name;
         targetName.textContent = database.database_name;
-
         access.textContent = database.access === "edit" ? "View + Edit" : "View Only";
 
         canEdit = database.access === "edit";

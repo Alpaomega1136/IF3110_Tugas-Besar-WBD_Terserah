@@ -1,7 +1,7 @@
 import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
+import { byId, addCell, formatDate, setBanner, utf8Bytes } from "./ui.js";
 
-const byId = (id) => document.getElementById(id);
 const status = byId("connections-status");
 const pageError = byId("connections-error");
 const forbidden = byId("connections-forbidden");
@@ -18,12 +18,11 @@ const editForm = byId("connection-edit-form");
 const editError = byId("connection-edit-error");
 const editCancel = byId("connection-edit-cancel");
 
+const modes = new Set(["disable", "require", "verify-ca", "verify-full"]);
+
 let entries = [];
 let selectedID = null;
 let busy = false;
-
-const modes = new Set(["disable", "require", "verify-ca", "verify-full"]);
-const encoder = new TextEncoder();
 
 function validID(id) {
     return typeof id === "string" && /^[1-9]\d*$/.test(id);
@@ -35,9 +34,7 @@ function pathFor(id) {
 }
 
 function setMessage(target, message, error = false) {
-    target.textContent = message;
-    target.hidden = !message;
-    target.className = error ? "error-message connection-message" : "success-message connection-message";
+    setBanner(target, message, error, "connection-message");
     if (target === actionMessage) target.setAttribute("role", error ? "alert" : "status");
 }
 
@@ -74,51 +71,42 @@ function handleError(error, target, operation) {
     setMessage(target, errorText(error, operation), true);
 }
 
-function textCell(row, value) {
-    const cell = document.createElement("td");
-    cell.textContent = String(value ?? "-");
-    row.appendChild(cell);
-    return cell;
-}
-
-function formatDate(value) {
-    const date = new Date(value);
-    return value && !Number.isNaN(date.getTime())
-        ? new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short" }).format(date)
-        : "-";
-}
-
 function renderList() {
     body.replaceChildren();
     for (const item of entries) {
         const row = document.createElement("tr");
-        textCell(row, item.id);
-        textCell(row, item.name);
-        textCell(row, `${item.host}:${item.port}`);
-        textCell(row, item.database_name);
-        textCell(row, item.username);
-        textCell(row, item.sslmode);
-        textCell(row, formatDate(item.created_at));
-        const actions = textCell(row, "");
+        addCell(row, item.id);
+        addCell(row, item.name);
+        addCell(row, `${item.host}:${item.port}`);
+        addCell(row, item.database_name);
+        addCell(row, item.username);
+        addCell(row, item.sslmode);
+        addCell(row, formatDate(item.created_at));
+
+        const actions = addCell(row, "");
         actions.className = "connection-actions";
+
         const editButton = document.createElement("button");
         editButton.type = "button";
         editButton.textContent = "Edit";
         editButton.className = "connection-action";
         editButton.disabled = busy;
         editButton.addEventListener("click", () => openEdit(item.id));
+
         const testButton = document.createElement("button");
         testButton.type = "button";
         testButton.textContent = "Tes";
         testButton.className = "connection-action button-secondary";
         testButton.disabled = busy;
         testButton.addEventListener("click", () => testConnection(item.id));
+
         const deleteButton = document.createElement("button");
         deleteButton.type = "button";
         deleteButton.textContent = "Hapus";
         deleteButton.className = "connection-action connection-danger";
         deleteButton.disabled = busy;
         deleteButton.addEventListener("click", () => deleteConnection(item.id));
+
         actions.replaceChildren(editButton, testButton, deleteButton);
         body.appendChild(row);
     }
@@ -162,13 +150,15 @@ function readForm(form, editing) {
     const sslmode = value("sslmode");
     const payload = { name, username, sslmode };
 
-    if (!name || encoder.encode(name).length > 100) throw new Error("Isi nama koneksi dengan maksimal 100 karakter biasa; karakter tertentu dapat dihitung lebih dari satu.");
-    if (!username.trim() || encoder.encode(username).length > 63 || username.includes("\0")) {
+    if (!name || utf8Bytes(name) > 100) {
+        throw new Error("Isi nama koneksi dengan maksimal 100 karakter biasa; karakter tertentu dapat dihitung lebih dari satu.");
+    }
+    if (!username.trim() || utf8Bytes(username) > 63 || username.includes("\0")) {
         throw new Error("Isi username PostgreSQL dengan maksimal 63 karakter biasa; karakter tertentu dapat dihitung lebih dari satu.");
     }
     if (!modes.has(sslmode)) throw new Error("SSL mode tidak valid.");
     if (!editing || password) {
-        if (!password || encoder.encode(password).length > 4096 || password.includes("\0")) {
+        if (!password || utf8Bytes(password) > 4096 || password.includes("\0")) {
             throw new Error("Isi password dengan maksimal 4096 karakter biasa tanpa karakter NUL; karakter tertentu dapat dihitung lebih dari satu.");
         }
         payload.password = password;
@@ -181,7 +171,7 @@ function readForm(form, editing) {
         if (!/^[0-9]+$/.test(portValue) || Number(portValue) < 1 || Number(portValue) > 65535) {
             throw new Error("Port harus bilangan bulat antara 1 dan 65535.");
         }
-        if (!databaseName || encoder.encode(databaseName).length > 63 || databaseName.includes("\0")) {
+        if (!databaseName || utf8Bytes(databaseName) > 63 || databaseName.includes("\0")) {
             throw new Error("Isi nama database target dengan maksimal 63 karakter biasa; karakter tertentu dapat dihitung lebih dari satu.");
         }
         Object.assign(payload, { host, port: Number(portValue), database_name: databaseName });
@@ -228,7 +218,9 @@ createForm.addEventListener("submit", async (event) => {
     setBusy(true);
     try {
         const created = await authenticatedRequest("/api/v1/admin/databases", {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
         });
         createForm.reset();
         if (!validID(created?.id)) throw new Error("Koneksi dibuat, tetapi respons ID tidak valid. Muat ulang daftar.");
@@ -258,7 +250,9 @@ editForm.addEventListener("submit", async (event) => {
     setBusy(true);
     try {
         const updated = await authenticatedRequest(pathFor(id), {
-            method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
         });
         if (!validID(updated?.id) || updated.id !== id) throw new Error("Respons pembaruan tidak valid. Muat ulang daftar.");
         closeEdit();

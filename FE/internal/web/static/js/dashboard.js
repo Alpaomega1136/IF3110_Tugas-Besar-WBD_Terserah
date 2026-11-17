@@ -1,6 +1,7 @@
 import { authenticatedRequest, requireAuthenticatedUser } from "./auth.js";
+import { positiveInt64 } from "./pagination.js";
+import { byId, addCell } from "./ui.js";
 
-const byId = (id) => document.getElementById(id);
 const status = byId("dashboard-status");
 const content = byId("dashboard-content");
 const username = byId("welcome-username");
@@ -10,17 +11,6 @@ const databasesError = byId("databases-error");
 const databasesEmpty = byId("databases-empty");
 const databasesTable = byId("databases-table");
 const databasesBody = byId("databases-body");
-
-function validID(id) {
-    return typeof id === "string" && /^[1-9]\d*$/.test(id) && BigInt(id) <= 9223372036854775807n;
-}
-
-function textCell(row, value) {
-    const cell = document.createElement("td");
-    cell.textContent = String(value);
-    row.appendChild(cell);
-    return cell;
-}
 
 function actionLink(cell, id, resource, label) {
     const link = document.createElement("a");
@@ -40,15 +30,15 @@ async function loadDatabases(isAdmin) {
     try {
         const result = await authenticatedRequest("/api/v1/databases");
         if (!Array.isArray(result?.databases) || !result.databases.every((db) =>
-            validID(db.id) && ["view", "edit"].includes(db.access))) {
+            positiveInt64(db.id) && ["view", "edit"].includes(db.access))) {
             throw new Error("Format daftar database atau izin dari backend tidak valid.");
         }
         for (const database of result.databases) {
             const row = document.createElement("tr");
-            textCell(row, database.id);
-            textCell(row, database.name);
-            textCell(row, database.database_name);
-            textCell(row, database.access === "edit" ? "View + Edit" : "View Only");
+            addCell(row, database.id);
+            addCell(row, database.name);
+            addCell(row, database.database_name);
+            addCell(row, database.access === "edit" ? "View + Edit" : "View Only");
             const links = document.createElement("td");
             links.className = "database-workspace-links";
             actionLink(links, database.id, "viewer", "Lihat Viewer");
