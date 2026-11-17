@@ -4,13 +4,12 @@ import (
 	"context"
 	"crypto/hmac"
 	"errors"
-	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"terserah/backend/internal/auth"
 	"terserah/backend/internal/connections"
-	"terserah/backend/internal/httpx"
 	"terserah/backend/internal/policy"
 )
 
@@ -29,71 +28,10 @@ type History struct {
 	ErrorCode   *string    `json:"error_code"`
 }
 
-func (s *Service) history(w http.ResponseWriter, r *http.Request) {
-	_, id, err := s.authorize(r, false)
+func (s *Service) listHistoryPage(ctx context.Context, dbID, before int64, limit int) ([]History, bool, *string, error) {
+	items, err := s.queryHistory(ctx, dbID, 0, before, limit+1)
 	if err != nil {
-		fail(w, err)
-		return
-	}
-	var version int64
-	detail := r.PathValue("version") != ""
-	if detail {
-		if r.URL.Query().Has("limit") || r.URL.Query().Has("before") {
-			fail(w, connections.ErrInvalid)
-			return
-		}
-		version, err = strconv.ParseInt(r.PathValue("version"), 10, 64)
-		if err != nil || version < 1 {
-			fail(w, connections.ErrInvalid)
-			return
-		}
-	}
-	limit := 50
-	var before int64
-	if r.URL.Query().Has("limit") {
-		limit, err = strconv.Atoi(r.URL.Query().Get("limit"))
-		if err != nil || limit < 1 || limit > 100 {
-			fail(w, connections.ErrInvalid)
-			return
-		}
-	}
-	if r.URL.Query().Has("before") {
-		before, err = strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
-		if err != nil || before < 1 {
-			fail(w, connections.ErrInvalid)
-			return
-		}
-	}
-	rows, err := s.db.Query(r.Context(), `SELECT h.database_id,h.draft_id,h.draft_revision,h.execution_id,h.version,
- CASE WHEN $2::bigint>0 THEN h.sql ELSE '' END,h.executed_by,u.username,h.started_at,h.finished_at,h.status,h.error_code
- FROM migration_history h JOIN users u ON u.id=h.executed_by WHERE h.database_id=$1
- AND ($2::bigint=0 OR h.version=$2) AND ($3::bigint=0 OR h.version<$3)
- ORDER BY h.version DESC LIMIT $4`, id, version, before, limit+1)
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	defer rows.Close()
-	items := []History{}
-	for rows.Next() {
-		var item History
-		if err = rows.Scan(&item.DatabaseID, &item.DraftID, &item.Revision, &item.ExecutionID, &item.Version, &item.SQL, &item.ExecutedBy, &item.Username, &item.StartedAt, &item.FinishedAt, &item.Status, &item.ErrorCode); err != nil {
-			fail(w, err)
-			return
-		}
-		items = append(items, item)
-	}
-	if err = rows.Err(); err != nil {
-		fail(w, err)
-		return
-	}
-	if detail {
-		if len(items) == 0 {
-			fail(w, pgx.ErrNoRows)
-			return
-		}
-		httpx.JSON(w, 200, items[0])
-		return
+		return nil, false, nil, err
 	}
 	more := len(items) > limit
 	if more {
@@ -104,94 +42,147 @@ func (s *Service) history(w http.ResponseWriter, r *http.Request) {
 		value := strconv.FormatInt(items[len(items)-1].Version, 10)
 		next = &value
 	}
-	httpx.JSON(w, 200, map[string]any{"migrations": items, "next_before": next, "has_more": more})
+	return items, more, next, nil
 }
 
-func (s *Service) reconcile(w http.ResponseWriter, r *http.Request) {
-	p, id, err := s.authorize(r, true)
+func (s *Service) getHistoryDetail(ctx context.Context, dbID, version int64) (History, error) {
+	items, err := s.queryHistory(ctx, dbID, version, 0, 1)
 	if err != nil {
-		fail(w, err)
-		return
+		return History{}, err
 	}
-	if r.ContentLength != 0 {
-		var in struct{}
-		if !httpx.Decode(w, r, &in) {
-			return
+	if len(items) == 0 {
+		return History{}, pgx.ErrNoRows
+	}
+	return items[0], nil
+}
+
+func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64, limit int) ([]History, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT
+			h.database_id,
+			h.draft_id,
+			h.draft_revision,
+			h.execution_id,
+			h.version,
+			CASE WHEN $2::bigint > 0 THEN h.sql ELSE '' END,
+			h.executed_by,
+			u.username,
+			h.started_at,
+			h.finished_at,
+			h.status,
+			h.error_code
+		FROM migration_history h
+		JOIN users u ON u.id = h.executed_by
+		WHERE h.database_id = $1
+		  AND ($2::bigint = 0 OR h.version = $2)
+		  AND ($3::bigint = 0 OR h.version < $3)
+		ORDER BY h.version DESC
+		LIMIT $4
+	`, dbID, version, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []History{}
+	for rows.Next() {
+		var item History
+		err := rows.Scan(
+			&item.DatabaseID,
+			&item.DraftID,
+			&item.Revision,
+			&item.ExecutionID,
+			&item.Version,
+			&item.SQL,
+			&item.ExecutedBy,
+			&item.Username,
+			&item.StartedAt,
+			&item.FinishedAt,
+			&item.Status,
+			&item.ErrorCode,
+		)
+		if err != nil {
+			return nil, err
 		}
+		items = append(items, item)
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Second)
-	defer cancel()
-	pool, err := s.targets.OpenTarget(ctx, p, id, true)
+	return items, rows.Err()
+}
+
+type pendingExecution struct {
+	execution *string
+	version   int64
+	sql       string
+	actor     int64
+	format    int
+}
+
+// reconcilePending checks `_terserah.migration_receipts` on the target DB for any
+// migration_history rows left in 'running' or 'unknown' status.
+func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID int64) ([]Result, error) {
+	pool, err := s.targets.OpenTarget(ctx, p, dbID, true)
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, err
 	}
 	defer pool.Close()
+
 	// Receipt reads must see commits completed while waiting for the target lock.
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, err
 	}
 	defer rollback(tx)
+
 	if _, err = tx.Exec(ctx, `SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='2s'`); err != nil {
-		fail(w, err)
-		return
+		return nil, err
 	}
 	if _, err = internalSearchPath(ctx, tx); err != nil {
-		fail(w, err)
-		return
+		return nil, err
 	}
-	// This is the same lock acquired BEFORE publishing a running ledger row.
-	// Owning it proves that no runner transaction can still commit this attempt.
+	// Acquiring the same advisory lock used by `run` proves no in-flight runner
+	// transaction can still commit a pending attempt while we inspect receipts.
 	if _, err = tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003)`); err != nil {
-		fail(w, err)
-		return
+		return nil, err
 	}
 	if err = protectedHistory(ctx, tx); err != nil {
-		fail(w, err)
-		return
+		return nil, err
 	}
-	access, err := policy.DatabaseAccess(ctx, s.db, p.ID, id)
+	access, err := policy.DatabaseAccess(ctx, s.db, p.ID, dbID)
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, err
 	}
 	if !policy.Allows(access, true) {
-		fail(w, connections.ErrForbidden)
-		return
+		return nil, connections.ErrForbidden
 	}
+
 	meta, err := s.db.Begin(ctx)
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, err
 	}
 	defer rollback(meta)
+
 	var locked int64
-	if err = meta.QueryRow(ctx, `SELECT id FROM database_connections WHERE id=$1 FOR UPDATE`, id).Scan(&locked); err != nil {
-		fail(w, err)
-		return
+	if err = meta.QueryRow(ctx, `SELECT id FROM database_connections WHERE id = $1 FOR UPDATE`, dbID).Scan(&locked); err != nil {
+		return nil, err
 	}
-	if err = bindTarget(ctx, meta, tx, id); err != nil {
-		fail(w, err)
-		return
+	if err = bindTarget(ctx, meta, tx, dbID); err != nil {
+		return nil, err
 	}
-	rows, err := meta.Query(ctx, `SELECT execution_id,version,sql,executed_by,receipt_version FROM migration_history
- WHERE database_id=$1 AND status IN ('running','unknown') ORDER BY version LIMIT 100 FOR UPDATE`, id)
+
+	rows, err := meta.Query(ctx, `
+		SELECT execution_id, version, sql, executed_by, receipt_version
+		FROM migration_history
+		WHERE database_id = $1 AND status IN ('running', 'unknown')
+		ORDER BY version
+		LIMIT 100
+		FOR UPDATE
+	`, dbID)
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, err
 	}
-	type pending struct {
-		execution *string
-		version   int64
-		sql       string
-		actor     int64
-		format    int
-	}
-	items := []pending{}
+	items := []pendingExecution{}
 	for rows.Next() {
-		var item pending
+		var item pendingExecution
 		if err = rows.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format); err != nil {
 			break
 		}
@@ -202,52 +193,73 @@ func (s *Service) reconcile(w http.ResponseWriter, r *http.Request) {
 		err = rows.Err()
 	}
 	if err != nil {
-		fail(w, err)
-		return
+		return nil, err
 	}
+
 	results := []Result{}
 	for _, item := range items {
-		out := Result{Version: item.version, Status: "unknown"}
-		code := "legacy_receipt_unverified"
-		var finished *time.Time
-		if item.execution != nil {
-			out.ExecutionID = *item.execution
+		out, finished, err := s.verifyPendingAttempt(ctx, tx, dbID, item)
+		if err != nil {
+			return nil, err
 		}
-		if item.format == 1 && item.execution != nil {
-			var receiptVersion, actor int64
-			var sql string
-			var signature *string
-			var at time.Time
-			err = tx.QueryRow(ctx, `SELECT version,sql,executed_by,committed_at,signature FROM _terserah.migration_receipts WHERE execution_id=$1`, out.ExecutionID).Scan(&receiptVersion, &sql, &actor, &at, &signature)
-			switch {
-			case errors.Is(err, pgx.ErrNoRows):
-				out.Status = "failed"
-				code = "reconciled_rollback"
-				now := time.Now().UTC()
-				finished = &now
-			case err != nil:
-				fail(w, err)
-				return
-			case signature != nil && receiptVersion == item.version && sql == item.sql && actor == item.actor && hmac.Equal([]byte(*signature), []byte(s.signature(id, out.ExecutionID, item.version, item.sql, item.actor))):
-				out.Status = "success"
-				code = ""
-				finished = &at
-			default:
-				code = "receipt_mismatch"
-			}
-		}
-		if code != "" {
-			out.ErrorCode = &code
-		}
-		if _, err = meta.Exec(ctx, `UPDATE migration_history SET status=$1,error_code=$2,finished_at=$3 WHERE database_id=$4 AND version=$5 AND status IN ('running','unknown')`, out.Status, out.ErrorCode, finished, id, item.version); err != nil {
-			fail(w, err)
-			return
+		_, err = meta.Exec(ctx, `
+			UPDATE migration_history
+			SET status = $1, error_code = $2, finished_at = $3
+			WHERE database_id = $4 AND version = $5 AND status IN ('running', 'unknown')
+		`, out.Status, out.ErrorCode, finished, dbID, item.version)
+		if err != nil {
+			return nil, err
 		}
 		results = append(results, out)
 	}
 	if err = meta.Commit(ctx); err != nil {
-		fail(w, err)
-		return
+		return nil, err
 	}
-	httpx.JSON(w, 200, map[string]any{"reconciled": results})
+	return results, nil
+}
+
+func (s *Service) verifyPendingAttempt(ctx context.Context, targetTx pgx.Tx, dbID int64, item pendingExecution) (Result, *time.Time, error) {
+	out := Result{Version: item.version, Status: "unknown"}
+	code := "legacy_receipt_unverified"
+	var finished *time.Time
+
+	if item.execution != nil {
+		out.ExecutionID = *item.execution
+	}
+	if item.format == 1 && item.execution != nil {
+		var receiptVersion, actor int64
+		var sql string
+		var signature *string
+		var committedAt time.Time
+		err := targetTx.QueryRow(ctx, `
+			SELECT version, sql, executed_by, committed_at, signature
+			FROM _terserah.migration_receipts
+			WHERE execution_id = $1
+		`, out.ExecutionID).Scan(&receiptVersion, &sql, &actor, &committedAt, &signature)
+
+		expectedSig := s.signature(dbID, out.ExecutionID, item.version, item.sql, item.actor)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			out.Status = "failed"
+			code = "reconciled_rollback"
+			now := time.Now().UTC()
+			finished = &now
+		case err != nil:
+			return Result{}, nil, err
+		case signature != nil &&
+			receiptVersion == item.version &&
+			sql == item.sql &&
+			actor == item.actor &&
+			hmac.Equal([]byte(*signature), []byte(expectedSig)):
+			out.Status = "success"
+			code = ""
+			finished = &committedAt
+		default:
+			code = "receipt_mismatch"
+		}
+	}
+	if code != "" {
+		out.ErrorCode = &code
+	}
+	return out, finished, nil
 }
