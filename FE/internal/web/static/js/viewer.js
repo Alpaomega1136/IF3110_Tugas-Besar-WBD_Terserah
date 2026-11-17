@@ -1,18 +1,16 @@
 import { authenticatedRequest, requireAuthenticatedUser } from "./auth.js";
+import { positiveInt64 } from "./pagination.js";
+import { byId } from "./ui.js";
 
-const byId = (id) => document.getElementById(id);
 const databaseId = byId("viewer-page").dataset.databaseId;
 const endpoint = `/api/v1/databases/${encodeURIComponent(databaseId)}`;
 const workspace = byId("viewer-workspace");
 const state = { schema: null, table: null, schemas: [], tables: [], offset: 0, limit: 50 };
+
 let schemaRun = 0;
 let tableRun = 0;
 let rowsRun = 0;
 let schemaLoadRun = 0;
-
-function validID(id) {
-    return typeof id === "string" && /^[1-9]\d*$/.test(id) && BigInt(id) <= 9223372036854775807n;
-}
 
 function validName(value) {
     return typeof value === "string" && value.length > 0 && value.length <= 63 && !value.includes("\0");
@@ -159,7 +157,9 @@ async function loadSchemas(initial = false) {
     try {
         const result = await authenticatedRequest(`${endpoint}/schemas`);
         if (request !== schemaLoadRun) return;
-        if (!Array.isArray(result?.schemas) || !result.schemas.every(validName)) throw new Error("Format daftar schema tidak valid.");
+        if (!Array.isArray(result?.schemas) || !result.schemas.every(validName)) {
+            throw new Error("Format daftar schema tidak valid.");
+        }
         state.schemas = result.schemas.filter((name) => !systemSchema(name));
         renderSchemas();
         workspace.hidden = false;
@@ -356,7 +356,7 @@ async function initialize() {
     try {
         const user = await requireAuthenticatedUser();
         if (!user) return;
-        if (!validID(databaseId)) throw new Error("ID database tidak valid.");
+        if (!positiveInt64(databaseId)) throw new Error("ID database tidak valid.");
         const data = await authenticatedRequest("/api/v1/databases");
         if (!Array.isArray(data?.databases)) throw new Error("Format database tidak valid.");
         const database = data.databases.find((entry) => entry.id === databaseId);
