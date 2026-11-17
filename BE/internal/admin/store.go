@@ -125,6 +125,17 @@ func (s *PostgresStore) UpdateUser(ctx context.Context, id int64, params UpdateU
 		newActive = *params.IsActive
 	}
 
+	if u.IsActive && !newActive {
+		var isGroupLeader bool
+		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM groups WHERE leader_user_id = $1)`, id).Scan(&isGroupLeader)
+		if err != nil {
+			return UserView{}, err
+		}
+		if isGroupLeader {
+			return UserView{}, ErrLeaderActive
+		}
+	}
+
 	if u.IsPlatformAdmin && u.IsActive && (!newAdmin || !newActive) {
 		var hasOtherAdmin bool
 		err = tx.QueryRow(ctx, `
@@ -174,7 +185,12 @@ func (s *PostgresStore) UpdateUser(ctx context.Context, id int64, params UpdateU
 }
 
 func (s *PostgresStore) ListGroups(ctx context.Context) ([]GroupView, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id, name FROM groups ORDER BY id ASC`)
+	rows, err := s.pool.Query(ctx, `
+		SELECT g.id, g.name, g.leader_user_id, u.username
+		FROM groups g
+		LEFT JOIN users u ON u.id = g.leader_user_id
+		ORDER BY g.id ASC
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +200,7 @@ func (s *PostgresStore) ListGroups(ctx context.Context) ([]GroupView, error) {
 	idxByID := make(map[int64]int)
 	for rows.Next() {
 		var g GroupView
-		if err := rows.Scan(&g.ID, &g.Name); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.LeaderUserID, &g.LeaderUsername); err != nil {
 			return nil, err
 		}
 		g.UserIDs = []string{}
@@ -255,6 +271,77 @@ func (s *PostgresStore) CreateGroup(ctx context.Context, name string) (GroupView
 	return g, nil
 }
 
+func (s *PostgresStore) SetGroupLeader(ctx context.Context, groupID, userID int64) (GroupView, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return GroupView{}, err
+	}
+	defer tx.Rollback(context.Background())
+
+	var g GroupView
+	err = tx.QueryRow(ctx, `
+		SELECT id, name
+		FROM groups
+		WHERE id = $1
+		FOR UPDATE
+	`, groupID).Scan(&g.ID, &g.Name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GroupView{}, ErrNotFound
+	}
+	if err != nil {
+		return GroupView{}, err
+	}
+
+	var username string
+	var isActive bool
+	err = tx.QueryRow(ctx, `
+		SELECT username, is_active
+		FROM users
+		WHERE id = $1
+	`, userID).Scan(&username, &isActive)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GroupView{}, ErrNotFound
+	}
+	if err != nil {
+		return GroupView{}, err
+	}
+	if !isActive {
+		return GroupView{}, ErrNotGroupMember
+	}
+
+	var isMember bool
+	err = tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM user_groups
+			WHERE group_id = $1 AND user_id = $2
+		)
+	`, groupID, userID).Scan(&isMember)
+	if err != nil {
+		return GroupView{}, err
+	}
+	if !isMember {
+		return GroupView{}, ErrNotGroupMember
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE groups SET leader_user_id = $2 WHERE id = $1`, groupID, userID); err != nil {
+		return GroupView{}, err
+	}
+	g.LeaderUserID = &userID
+	g.LeaderUsername = &username
+	g.UserIDs, err = listGroupMemberIDs(ctx, tx, groupID)
+	if err != nil {
+		return GroupView{}, err
+	}
+	g.Grants, err = listGroupGrants(ctx, tx, groupID)
+	if err != nil {
+		return GroupView{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return GroupView{}, err
+	}
+	return g, nil
+}
+
 func (s *PostgresStore) AddUserToGroup(ctx context.Context, groupID, userID int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -292,9 +379,18 @@ func (s *PostgresStore) RemoveUserFromGroup(ctx context.Context, groupID, userID
 	}
 	defer tx.Rollback(context.Background())
 
-	if err := lockGroup(ctx, tx, groupID); err != nil {
+	var leaderID *int64
+	err = tx.QueryRow(ctx, `SELECT leader_user_id FROM groups WHERE id = $1 FOR UPDATE`, groupID).Scan(&leaderID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
 		return err
 	}
+	if leaderID != nil && *leaderID == userID {
+		return ErrLeaderActive
+	}
+
 	tag, err := tx.Exec(ctx, `DELETE FROM user_groups WHERE group_id = $1 AND user_id = $2`, groupID, userID)
 	if err != nil {
 		return err
@@ -410,6 +506,49 @@ func listUserGroupIDs(ctx context.Context, tx pgx.Tx, userID int64) ([]string, e
 		groupIDs = append(groupIDs, strconv.FormatInt(gid, 10))
 	}
 	return groupIDs, rows.Err()
+}
+
+func listGroupMemberIDs(ctx context.Context, tx pgx.Tx, groupID int64) ([]string, error) {
+	rows, err := tx.Query(ctx, `SELECT user_id FROM user_groups WHERE group_id = $1 ORDER BY user_id ASC`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	userIDs := []string{}
+	for rows.Next() {
+		var uid int64
+		if err := rows.Scan(&uid); err != nil {
+			return nil, err
+		}
+		userIDs = append(userIDs, strconv.FormatInt(uid, 10))
+	}
+	return userIDs, rows.Err()
+}
+
+func listGroupGrants(ctx context.Context, tx pgx.Tx, groupID int64) ([]GrantView, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT group_id, database_id, access_level
+		FROM group_database_permissions
+		WHERE group_id = $1
+		ORDER BY database_id ASC
+	`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	grants := []GrantView{}
+	for rows.Next() {
+		var gr GrantView
+		var lvl string
+		if err := rows.Scan(&gr.GroupID, &gr.DatabaseID, &lvl); err != nil {
+			return nil, err
+		}
+		gr.AccessLevel = policy.Access(lvl)
+		grants = append(grants, gr)
+	}
+	return grants, rows.Err()
 }
 
 // lockGroup serializes group grants and membership changes, including first-time

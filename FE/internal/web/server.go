@@ -63,6 +63,11 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 		return nil, fmt.Errorf("parse viewer template: %w", err)
 	}
 
+	reviewsTemplate, err := parsePageTemplate("reviews")
+	if err != nil {
+		return nil, fmt.Errorf("parse reviews template: %w", err)
+	}
+
 	staticFiles, err := fs.Sub(assets, "static")
 	if err != nil {
 		return nil, fmt.Errorf("load static files: %w", err)
@@ -89,41 +94,33 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 	})
 
-	mux.HandleFunc("GET /login",
-		pageHandler(loginTemplate, PageData{
-			Title: "Login - Terserah",
-		}),
-	)
+	mux.HandleFunc("GET /login", pageHandler(loginTemplate, PageData{
+		Title: "Login - Terserah",
+	}))
 
-	mux.HandleFunc("GET /dashboard",
-		pageHandler(dashboardTemplate, PageData{
-			Title: "Dashboard - Terserah",
-		}),
-	)
+	mux.HandleFunc("GET /dashboard", pageHandler(dashboardTemplate, PageData{
+		Title: "Dashboard - Terserah",
+	}))
 
-	mux.HandleFunc("GET /admin/users",
-		pageHandler(usersTemplate, PageData{
-			Title: "User Management - Terserah",
-		}),
-	)
+	mux.HandleFunc("GET /reviews", pageHandler(reviewsTemplate, PageData{
+		Title: "Migration Reviews - Terserah",
+	}))
 
-	mux.HandleFunc("GET /admin/groups",
-		pageHandler(groupsTemplate, PageData{
-			Title: "Group Management - Terserah",
-		}),
-	)
+	mux.HandleFunc("GET /admin/users", pageHandler(usersTemplate, PageData{
+		Title: "User Management - Terserah",
+	}))
 
-	mux.HandleFunc("GET /admin/databases",
-		pageHandler(connectionsTemplate, PageData{
-			Title: "Database Connections - Terserah",
-		}),
-	)
+	mux.HandleFunc("GET /admin/groups", pageHandler(groupsTemplate, PageData{
+		Title: "Group Management - Terserah",
+	}))
 
-	mux.HandleFunc("GET /admin/grants",
-		pageHandler(grantsTemplate, PageData{
-			Title: "Database Grants - Terserah",
-		}),
-	)
+	mux.HandleFunc("GET /admin/databases", pageHandler(connectionsTemplate, PageData{
+		Title: "Database Connections - Terserah",
+	}))
+
+	mux.HandleFunc("GET /admin/grants", pageHandler(grantsTemplate, PageData{
+		Title: "Database Grants - Terserah",
+	}))
 
 	mux.HandleFunc("GET /databases/{id}/viewer", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -132,45 +129,64 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 			return
 		}
 		pageHandler(viewerTemplate, PageData{
-			Title: "Database Viewer - Terserah", DatabaseID: strconv.FormatInt(id, 10),
+			Title:      "Database Viewer - Terserah",
+			DatabaseID: strconv.FormatInt(id, 10),
 		})(w, r)
 	})
 
-	mux.HandleFunc("GET /databases/{id}/drafts",
-		func(w http.ResponseWriter, r *http.Request) {
-			databaseID := r.PathValue("id")
+	mux.HandleFunc("GET /databases/{id}/drafts", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id <= 0 {
+			http.Error(w, "ID database tidak valid", http.StatusBadRequest)
+			return
+		}
+		pageHandler(draftsTemplate, PageData{
+			Title:      "Migration Drafts - Terserah",
+			DatabaseID: strconv.FormatInt(id, 10),
+		})(w, r)
+	})
 
-			id, err := strconv.ParseInt(databaseID, 10, 64)
-			if err != nil || id <= 0 {
-				http.Error(w, "ID database tidak valid", http.StatusBadRequest)
-				return
-			}
+	mux.HandleFunc("GET /databases/{id}/history", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id <= 0 {
+			http.Error(w, "ID database tidak valid", http.StatusBadRequest)
+			return
+		}
+		pageHandler(historyTemplate, PageData{
+			Title:      "Migration History - Terserah",
+			DatabaseID: strconv.FormatInt(id, 10),
+		})(w, r)
+	})
 
-			pageHandler(draftsTemplate, PageData{
-				Title:      "Migration Drafts - Terserah",
-				DatabaseID: strconv.FormatInt(id, 10),
-			})(w, r)
-		},
-	)
+	mux.HandleFunc("GET /databases/{id}/reviews", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id <= 0 {
+			http.Error(w, "ID database tidak valid", http.StatusBadRequest)
+			return
+		}
+		pageHandler(reviewsTemplate, PageData{
+			Title:      "Migration Reviews - Terserah",
+			DatabaseID: strconv.FormatInt(id, 10),
+		})(w, r)
+	})
 
-	mux.HandleFunc("GET /databases/{id}/history",
-		func(w http.ResponseWriter, r *http.Request) {
-			id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-			if err != nil || id <= 0 {
-				http.Error(
-					w,
-					"ID database tidak valid",
-					http.StatusBadRequest,
-				)
-				return
-			}
-
-			pageHandler(historyTemplate, PageData{
-				Title:      "Migration History - Terserah",
-				DatabaseID: strconv.FormatInt(id, 10),
-			})(w, r)
-		},
-	)
+	mux.HandleFunc("GET /databases/{id}/reviews/{reviewID}", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id <= 0 {
+			http.Error(w, "ID database tidak valid", http.StatusBadRequest)
+			return
+		}
+		revID, err := strconv.ParseInt(r.PathValue("reviewID"), 10, 64)
+		if err != nil || revID <= 0 {
+			http.Error(w, "ID review tidak valid", http.StatusBadRequest)
+			return
+		}
+		pageHandler(reviewsTemplate, PageData{
+			Title:      "Migration Reviews - Terserah",
+			DatabaseID: strconv.FormatInt(id, 10),
+			ReviewID:   strconv.FormatInt(revID, 10),
+		})(w, r)
+	})
 
 	return mux, nil
 }

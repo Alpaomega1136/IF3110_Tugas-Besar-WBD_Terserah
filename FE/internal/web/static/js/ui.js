@@ -46,3 +46,11 @@ export function setFieldError(input, errorElement, message, helpElement = null) 
         input.removeAttribute("aria-invalid");
     }
 }
+
+export function navigateTo(path, { replace = false } = {}) {
+    if (typeof globalThis.window?.__spaNavigate === "function") {
+        globalThis.window.__spaNavigate(path, { replace });
+        return;
+    }
+    globalThis.window?.location?.replace?.(path);
+}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"terserah/backend/internal/admin"
+	"terserah/backend/internal/approval"
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/config"
 	"terserah/backend/internal/connections"
@@ -21,6 +22,7 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	if err := run(); err != nil {
 		// Do not log driver/config errors: they may contain connection credentials.
 		slog.Error(err.Error())
@@ -55,6 +57,7 @@ func run() error {
 		viewer.New(targets).Register(mux, sessions)
 		runner.New(pool, targets, cfg.SecretKey).Register(mux, sessions)
 		admin.NewService(admin.NewPostgresStore(pool), nil).Register(mux, sessions)
+		approval.NewService(approval.NewPostgresStore(pool), nil).Register(mux, sessions)
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	result := make(chan error, 1)

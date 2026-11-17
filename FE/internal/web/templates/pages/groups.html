@@ -5,109 +5,113 @@
     <main class="app-main">
         <h1>Group Management</h1>
         <p>
-            Daftar group, keanggotaan, dan grant database
-            yang terdaftar.
+            Daftar group, keanggotaan, leader group, dan grant database yang terdaftar.
         </p>
-      
-        <div class="users-layout">
+
+        <div class="users-layout groups-layout">
             <div>
-        <section id="create-group-section" class="dashboard-panel"
-                aria-labelledby="create-group-heading" hidden>
-            <h2 id="create-group-heading">Tambah Group</h2>
+                <section id="create-group-section" class="dashboard-panel"
+                         aria-labelledby="create-group-heading" hidden>
+                    <h2 id="create-group-heading">Tambah Group</h2>
 
-            <form id="create-group-form" class="group-form" novalidate>
-                <div class="form-group">
-                    <label for="create-group-name">
-                        Nama Group (wajib)
-                    </label>
+                    <form id="create-group-form" class="group-form" novalidate>
+                        <div class="form-group">
+                            <label for="create-group-name">Nama Group (wajib)</label>
+                            <input
+                                id="create-group-name"
+                                name="name"
+                                type="text"
+                                maxlength="100"
+                                autocomplete="off"
+                                required
+                                aria-describedby="create-group-error"
+                            >
+                            <p id="create-group-error" class="error-message" role="alert" hidden></p>
+                        </div>
 
-                    <input
-                        id="create-group-name"
-                        name="name"
-                        type="text"
-                        maxlength="100"
-                        autocomplete="off"
-                        required
-                        aria-describedby="create-group-error"
-                    >
+                        <button type="submit" id="create-group-submit">Buat Group</button>
+                        <p id="create-group-message" role="status" aria-live="polite" hidden></p>
+                    </form>
+                </section>
 
-                    <p id="create-group-error"
-                    class="error-message"
-                    role="alert"
-                    hidden></p>
-                </div>
+                <section id="membership-section" class="dashboard-panel"
+                         aria-labelledby="membership-heading" hidden>
+                    <h2 id="membership-heading">Tambah Anggota Group</h2>
 
-                <button type="submit" id="create-group-submit">
-                    Buat Group
-                </button>
+                    <form id="membership-form" class="group-form" novalidate>
+                        <div class="form-group">
+                            <label for="membership-group">Group (wajib)</label>
+                            <select id="membership-group" required disabled>
+                                <option value="">Pilih group...</option>
+                            </select>
+                        </div>
 
-                <p id="create-group-message"
-                role="status"
-                aria-live="polite"
-                hidden></p>
-            </form>
-        </section>
-        
-        <section id="membership-section" class="dashboard-panel"
-                aria-labelledby="membership-heading" hidden>
-            <h2 id="membership-heading">Tambah Anggota Group</h2>
+                        <div class="form-group">
+                            <label for="membership-user">Pengguna (wajib)</label>
+                            <select id="membership-user" required disabled>
+                                <option value="">Pilih pengguna...</option>
+                            </select>
+                        </div>
 
-            <form id="membership-form" class="group-form" novalidate>
-                <div class="form-group">
-                    <label for="membership-group">Group (wajib)</label>
-                    <select id="membership-group" required disabled>
-                        <option value="">Pilih group...</option>
-                    </select>
-                </div>
+                        <button id="membership-submit" type="submit" disabled>Tambahkan Anggota</button>
+                        <p id="membership-message" role="status" aria-live="polite" hidden></p>
+                    </form>
+                </section>
 
-                <div class="form-group">
-                    <label for="membership-user">Pengguna (wajib)</label>
-                    <select id="membership-user" required disabled>
-                        <option value="">Pilih pengguna...</option>
-                    </select>
-                </div>
+                <section id="leader-section" class="dashboard-panel"
+                         aria-labelledby="leader-heading" hidden>
+                    <h2 id="leader-heading">Tetapkan Leader Group</h2>
+                    <p class="form-help">
+                        Leader group wajib merupakan anggota aktif group tersebut dan bertugas menyetujui pengajuan migration pada database yang diakses group.
+                    </p>
 
-                <button id="membership-submit" type="submit" disabled>
-                    Tambahkan Anggota
-                </button>
+                    <form id="leader-form" class="group-form" novalidate>
+                        <div class="form-group">
+                            <label for="leader-group">Group (wajib)</label>
+                            <select id="leader-group" required disabled>
+                                <option value="">Pilih group...</option>
+                            </select>
+                        </div>
 
-                <p id="membership-message" role="status"
-                aria-live="polite" hidden></p>
-            </form>
-        </section>
+                        <div class="form-group">
+                            <label for="leader-user">Anggota Leader (wajib)</label>
+                            <select id="leader-user" required disabled>
+                                <option value="">Pilih anggota aktif...</option>
+                            </select>
+                        </div>
 
+                        <button id="leader-submit" type="submit" disabled>Simpan Leader</button>
+                        <p id="leader-message" role="status" aria-live="polite" hidden></p>
+                    </form>
+                </section>
             </div>
+
             <div>
-        <p id="groups-status" role="status" aria-live="polite">
-            Memeriksa akses...
-        </p>
+                <p id="groups-status" role="status" aria-live="polite">Memeriksa akses...</p>
+                <p id="groups-error" class="error-message" role="alert" hidden></p>
+                <p id="groups-empty" hidden>
+                    Belum ada group. Gunakan form Tambah Group di atas untuk membuat group pertama.
+                </p>
 
-        <p id="groups-error" class="error-message"
-           role="alert" hidden></p>
-
-        <p id="groups-empty" hidden>
-            Belum ada group. Gunakan form Tambah Group di atas
-            untuk membuat group pertama.
-        </p>
-
-        <section id="groups-section" class="dashboard-panel admin-directory" aria-label="Daftar group" hidden>
-            <h2>Daftar Group</h2>
-            <div class="users-table-wrapper admin-list-scroll">
-                <table class="users-table">
-                    <thead>
-                        <tr>
-                            <th scope="col">ID</th>
-                            <th scope="col">Nama group</th>
-                            <th scope="col">Anggota &amp; Aksi</th>
-                            <th scope="col">Grant database</th>
-                        </tr>
-                    </thead>
-                    <tbody id="groups-body"></tbody>
-                </table>
+                <section id="groups-section" class="dashboard-panel admin-directory" aria-label="Daftar group" hidden>
+                    <h2>Daftar Group</h2>
+                    <div class="users-table-wrapper admin-list-scroll">
+                        <table class="users-table">
+                            <thead>
+                                <tr>
+                                    <th scope="col">ID</th>
+                                    <th scope="col">Nama group</th>
+                                    <th scope="col">Anggota &amp; Aksi</th>
+                                    <th scope="col">Grant database</th>
+                                    <th scope="col">Leader</th>
+                                </tr>
+                            </thead>
+                            <tbody id="groups-body"></tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
-        </section>            </div>
         </div>
-
     </main>
 </div>
 

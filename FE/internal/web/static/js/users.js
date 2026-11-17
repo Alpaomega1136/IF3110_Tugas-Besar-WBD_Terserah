@@ -298,6 +298,8 @@ editForm.addEventListener("submit", async (event) => {
         }
         if (error.status === 403 && isCSRFError(error)) {
             setBanner(editMessage, "Token CSRF tidak valid. Silakan coba simpan lagi.", true);
+        } else if (error.status === 409 && error.code === "group_leader_active") {
+            setBanner(editMessage, "Pengguna ini masih menjadi Leader Group aktif. Ganti leader group terlebih dahulu sebelum menonaktifkan akun.", true);
         } else if (error.status === 403) {
             setBanner(editMessage, "Akses ditolak. Kamu tidak memiliki izin mengubah pengguna.", true);
         } else if (error.status === 404) {

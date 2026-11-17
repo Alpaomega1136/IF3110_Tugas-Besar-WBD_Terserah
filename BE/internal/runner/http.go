@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"terserah/backend/internal/approval"
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/httpx"
@@ -59,6 +60,8 @@ func fail(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusNotFound, "not_found", "Database object not found")
 	case errors.Is(err, errConflict):
 		httpx.Error(w, http.StatusConflict, "execution_conflict", "Reload draft or resolve the pending execution before retrying")
+	case errors.Is(err, approval.ErrNotApproved), errors.Is(err, approval.ErrLeaderMissing):
+		httpx.Error(w, http.StatusConflict, "approval_incomplete", "Approval from current group leaders is required before execution")
 	case errors.Is(err, connections.ErrInvalid), errors.Is(err, errSQL):
 		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid ID, revision, title or unsupported SQL")
 	case errors.Is(err, errHistorySetup):

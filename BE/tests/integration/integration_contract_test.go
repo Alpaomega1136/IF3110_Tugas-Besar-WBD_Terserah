@@ -87,6 +87,7 @@ func TestDraftListingRevisionContract(t *testing.T) {
 	}
 	status(t, editor.request("PATCH", path, map[string]string{"title": "stale", "sql": "SELECT 3", "revision": "1"}), 409)
 	status(t, editor.request("POST", path+"/execute", map[string]string{"revision": "1"}), 409)
+	approveDraft(t, a, editor, target.ID, first.ID, 2)
 	w = editor.request("POST", path+"/execute", map[string]string{"revision": "2"})
 	status(t, w, 200)
 	var result runner.Result
