@@ -68,6 +68,7 @@ func TestProductionHTTPFlow(t *testing.T) {
 		admin.call(t, "POST", "/api/v1/admin/groups", map[string]string{"name": entry.name}, 201, &out)
 		path := "/api/v1/admin/groups/" + out.Group.ID
 		admin.call(t, "PUT", path+"/users/"+users[entry.name], nil, 200, nil)
+		admin.call(t, "PUT", path+"/leader", map[string]string{"user_id": users[entry.name]}, 200, nil)
 		admin.call(t, "PUT", fmt.Sprintf("%s/databases/%d", path, targets[0].ID), map[string]string{"access_level": entry.access}, 200, nil)
 		if entry.access == "edit" {
 			editGroup = path
@@ -122,6 +123,19 @@ func TestProductionHTTPFlow(t *testing.T) {
 	editor.csrf = "invalid"
 	editor.call(t, "POST", path+"/execute", map[string]string{"revision": "1"}, 403, nil)
 	editor.csrf = csrf
+	approve := func(revision string) {
+		t.Helper()
+		var review struct {
+			Review struct {
+				ID string `json:"id"`
+			} `json:"review"`
+		}
+		editor.call(t, "POST", base+"/reviews", map[string]string{"draft_id": fmt.Sprint(draft.ID), "revision": revision}, 201, &review)
+		for _, leader := range []*browser{editor, viewer} {
+			leader.call(t, "POST", base+"/reviews/"+review.Review.ID+"/approve", map[string]string{"note": "approved for test"}, 200, nil)
+		}
+	}
+	approve("1")
 	var success runner.Result
 	editor.call(t, "POST", path+"/execute", map[string]string{"revision": "1"}, 200, &success)
 	if success.Status != "success" || success.Version != 1 {
@@ -151,6 +165,7 @@ func TestProductionHTTPFlow(t *testing.T) {
 	badSQL := demoSQL(t, "002_rollback.sql", schema)
 	editor.call(t, "PATCH", path, map[string]string{"title": "Demo rollback", "sql": badSQL, "revision": "1"}, 200, &draft)
 	editor.call(t, "POST", path+"/execute", map[string]string{"revision": "1"}, 409, nil)
+	approve("2")
 	var failed runner.Result
 	editor.call(t, "POST", path+"/execute", map[string]string{"revision": "2"}, 200, &failed)
 	if failed.Status != "failed" || failed.Version != 2 || failed.ErrorCode == nil || *failed.ErrorCode != "22012" {

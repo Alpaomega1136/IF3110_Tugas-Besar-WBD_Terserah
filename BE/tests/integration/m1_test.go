@@ -48,6 +48,7 @@ type m1App struct {
 	clock   *testClock
 	key     []byte
 	users   map[string]int64
+	leaders map[string]*browser
 }
 
 func newM1App(t *testing.T) *m1App {
@@ -221,8 +222,46 @@ func grant(t *testing.T, a *m1App, user string, target int64, access string) {
 	if _, err := a.db.Exec(ctx, "INSERT INTO user_groups(user_id,group_id) VALUES($1,$2)", a.users[user], group); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := a.db.Exec(ctx, "UPDATE groups SET leader_user_id=$1 WHERE id=$2", a.users[user], group); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := a.db.Exec(ctx, "INSERT INTO group_database_permissions(group_id,database_id,access_level) VALUES($1,$2,$3)", group, target, access); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func approveDraft(t *testing.T, a *m1App, editor *browser, dbID, draftID, revision int64) {
+	t.Helper()
+	path := fmt.Sprintf("/api/v1/databases/%d/reviews", dbID)
+	w := editor.request("POST", path, map[string]string{"draft_id": fmt.Sprint(draftID), "revision": fmt.Sprint(revision)})
+	status(t, w, 201)
+	var result struct {
+		Review struct {
+			ID        string `json:"id"`
+			Approvals []struct {
+				LeaderUsername string `json:"leader_username"`
+			} `json:"approvals"`
+		} `json:"review"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool)
+	if a.leaders == nil {
+		a.leaders = make(map[string]*browser)
+	}
+	for _, item := range result.Review.Approvals {
+		if seen[item.LeaderUsername] {
+			continue
+		}
+		seen[item.LeaderUsername] = true
+		leader := a.leaders[item.LeaderUsername]
+		if leader == nil {
+			leader = a.browser()
+			leader.login(t, item.LeaderUsername)
+			a.leaders[item.LeaderUsername] = leader
+		}
+		status(t, leader.request("POST", path+"/"+result.Review.ID+"/approve", map[string]string{"note": "approved for test"}), 200)
 	}
 }
 

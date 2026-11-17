@@ -95,6 +95,20 @@ func TestRunnerAPI(t *testing.T) {
 	status(t, editor.request("POST", path+"/execute", map[string]string{"revision": "1", "sql": "DROP TABLE x"}), 400)
 	execute := func(path, rev string) runner.Result {
 		t.Helper()
+		var draftID, revision int64
+		if _, err := fmt.Sscanf(path, "/api/v1/databases/"+fmt.Sprint(target.ID)+"/drafts/%d", &draftID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fmt.Sscan(rev, &revision); err != nil {
+			t.Fatal(err)
+		}
+		var exists bool
+		if err := a.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM migration_reviews WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3 AND status='approved')", target.ID, draftID, revision).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			approveDraft(t, a, editor, target.ID, draftID, revision)
+		}
 		w := editor.request("POST", path+"/execute", map[string]string{"revision": rev})
 		status(t, w, 200)
 		var out runner.Result
@@ -159,6 +173,7 @@ func TestRunnerAPI(t *testing.T) {
 	if err = a.db.QueryRow(ctx, "INSERT INTO migration_drafts(database_id,title,sql,created_by) VALUES($1,'unsafe','SELECT 1;COMMIT',$2) RETURNING id", target.ID, a.users["editor"]).Scan(&unsafeID); err != nil {
 		t.Fatal(err)
 	}
+	approveDraft(t, a, editor, target.ID, unsafeID, 1)
 	status(t, editor.request("POST", fmt.Sprintf("%s/%d/execute", base, unsafeID), map[string]string{"revision": "1"}), 400)
 	// Replaying a pending execution must not run SQL or create another attempt.
 	_, err = a.db.Exec(ctx, "UPDATE migration_history SET status='unknown' WHERE execution_id=$1", failed.ExecutionID)
@@ -178,6 +193,7 @@ func TestRunnerAPI(t *testing.T) {
 	status(t, w, 201)
 	_ = json.Unmarshal(w.Body.Bytes(), &d)
 	concurrentPath := fmt.Sprintf("%s/%d/execute", base, d.ID)
+	approveDraft(t, a, editor, target.ID, d.ID, 1)
 	browsers := []*browser{a.browser(), a.browser()}
 	for _, b := range browsers {
 		b.login(t, "editor")
