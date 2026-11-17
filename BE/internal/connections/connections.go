@@ -127,7 +127,7 @@ func databaseError(err error) error {
 	return err
 }
 
-const columns = "id,name,host,port,database_name,username,sslmode,created_at,password_encrypted"
+const columns = "id, name, host, port, database_name, username, sslmode, created_at, password_encrypted"
 
 func scan(row pgx.Row) (Connection, error) {
 	var c Connection
@@ -151,12 +151,18 @@ func (s *Service) Create(ctx context.Context, p auth.Principal, input Input) (Co
 		return Connection{}, err
 	}
 	defer tx.Rollback(context.Background())
-	c, err := scan(tx.QueryRow(ctx, "INSERT INTO database_connections(name,host,port,database_name,username,password_encrypted,sslmode) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING "+columns, in.Name, in.Host, in.Port, in.DatabaseName, in.Username, []byte{}, in.SSLMode))
+
+	c, err := scan(tx.QueryRow(ctx, `
+		INSERT INTO database_connections (name, host, port, database_name, username, password_encrypted, sslmode)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING `+columns,
+		in.Name, in.Host, in.Port, in.DatabaseName, in.Username, []byte{}, in.SSLMode,
+	))
 	if err != nil {
 		return Connection{}, err
 	}
 	encrypted := s.box.Seal([]byte(*in.Password), fmt.Sprintf("target:%d", c.ID))
-	if _, err = tx.Exec(ctx, "UPDATE database_connections SET password_encrypted=$2 WHERE id=$1", c.ID, encrypted); err != nil {
+	if _, err = tx.Exec(ctx, "UPDATE database_connections SET password_encrypted = $2 WHERE id = $1", c.ID, encrypted); err != nil {
 		return Connection{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -174,25 +180,36 @@ func (s *Service) List(ctx context.Context, p auth.Principal, admin bool) ([]Con
 			return nil, err
 		}
 	}
-	query := "SELECT " + columns + ",''::text FROM database_connections ORDER BY id"
+
+	query := "SELECT " + columns + ", ''::text FROM database_connections ORDER BY id"
 	var args []any
 	if !admin {
-		query = `SELECT d.id,d.name,d.host,d.port,d.database_name,d.username,d.sslmode,d.created_at,d.password_encrypted,
-		CASE WHEN bool_or(p.access_level='edit') THEN 'edit' ELSE 'view' END
-		FROM database_connections d JOIN group_database_permissions p ON p.database_id=d.id
-		JOIN user_groups ug ON ug.group_id=p.group_id JOIN users u ON u.id=ug.user_id
-		WHERE ug.user_id=$1 AND u.is_active=true GROUP BY d.id ORDER BY d.id`
+		query = `
+			SELECT
+				d.id, d.name, d.host, d.port, d.database_name, d.username, d.sslmode, d.created_at, d.password_encrypted,
+				CASE WHEN bool_or(p.access_level = 'edit') THEN 'edit' ELSE 'view' END
+			FROM database_connections d
+			JOIN group_database_permissions p ON p.database_id = d.id
+			JOIN user_groups ug ON ug.group_id = p.group_id
+			JOIN users u ON u.id = ug.user_id
+			WHERE ug.user_id = $1 AND u.is_active = true
+			GROUP BY d.id
+			ORDER BY d.id
+		`
 		args = []any{p.ID}
 	}
+
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+
 	result := make([]Connection, 0)
 	for rows.Next() {
 		var c Connection
-		if err = rows.Scan(&c.ID, &c.Name, &c.Host, &c.Port, &c.DatabaseName, &c.Username, &c.SSLMode, &c.CreatedAt, &c.passwordEncrypted, &c.Access); err != nil {
+		err = rows.Scan(&c.ID, &c.Name, &c.Host, &c.Port, &c.DatabaseName, &c.Username, &c.SSLMode, &c.CreatedAt, &c.passwordEncrypted, &c.Access)
+		if err != nil {
 			return nil, err
 		}
 		result = append(result, c)
@@ -209,11 +226,21 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, id int64, patch 
 		return Connection{}, err
 	}
 	defer tx.Rollback(context.Background())
-	c, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id=$1 FOR UPDATE", id))
+
+	c, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id = $1 FOR UPDATE", id))
 	if err != nil {
 		return Connection{}, err
 	}
-	in := Input{Name: c.Name, Host: c.Host, Port: c.Port, DatabaseName: c.DatabaseName, Username: c.Username, SSLMode: c.SSLMode, Password: patch.Password}
+
+	in := Input{
+		Name:         c.Name,
+		Host:         c.Host,
+		Port:         c.Port,
+		DatabaseName: c.DatabaseName,
+		Username:     c.Username,
+		SSLMode:      c.SSLMode,
+		Password:     patch.Password,
+	}
 	if patch.Name != nil {
 		in.Name = *patch.Name
 	}
@@ -235,6 +262,7 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, id int64, patch 
 	if patch.SSLMode != nil {
 		in.SSLMode = *patch.SSLMode
 	}
+
 	in, err = normalize(in)
 	if err != nil {
 		return Connection{}, err
@@ -242,11 +270,19 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, id int64, patch 
 	if in.Host != c.Host || in.Port != c.Port || in.DatabaseName != c.DatabaseName {
 		return Connection{}, ErrConflict
 	}
+
 	encrypted := c.passwordEncrypted
 	if in.Password != nil && *in.Password != "" {
 		encrypted = s.box.Seal([]byte(*in.Password), fmt.Sprintf("target:%d", id))
 	}
-	c, err = scan(tx.QueryRow(ctx, "UPDATE database_connections SET name=$2,username=$3,password_encrypted=$4,sslmode=$5 WHERE id=$1 RETURNING "+columns, id, in.Name, in.Username, encrypted, in.SSLMode))
+
+	c, err = scan(tx.QueryRow(ctx, `
+		UPDATE database_connections
+		SET name = $2, username = $3, password_encrypted = $4, sslmode = $5
+		WHERE id = $1
+		RETURNING `+columns,
+		id, in.Name, in.Username, encrypted, in.SSLMode,
+	))
 	if err != nil {
 		return Connection{}, err
 	}
@@ -262,15 +298,26 @@ func (s *Service) Delete(ctx context.Context, p auth.Principal, id int64) error 
 		return err
 	}
 	defer tx.Rollback(context.Background())
-	if _, err = scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id=$1 FOR UPDATE", id)); err != nil {
+
+	if _, err = scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id = $1 FOR UPDATE", id)); err != nil {
 		return err
 	}
 	// Deleting the grant-bearing connection revokes every affected session.
-	if _, err = tx.Exec(ctx, `UPDATE sessions SET revoked_at=now() WHERE revoked_at IS NULL AND user_id IN
-		(SELECT ug.user_id FROM user_groups ug JOIN group_database_permissions p ON p.group_id=ug.group_id WHERE p.database_id=$1)`, id); err != nil {
+	_, err = tx.Exec(ctx, `
+		UPDATE sessions
+		SET revoked_at = now()
+		WHERE revoked_at IS NULL
+		  AND user_id IN (
+			SELECT ug.user_id
+			FROM user_groups ug
+			JOIN group_database_permissions p ON p.group_id = ug.group_id
+			WHERE p.database_id = $1
+		  )
+	`, id)
+	if err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, "DELETE FROM database_connections WHERE id=$1", id); err != nil {
+	if _, err = tx.Exec(ctx, "DELETE FROM database_connections WHERE id = $1", id); err != nil {
 		return databaseError(err)
 	}
 	return tx.Commit(ctx)
@@ -280,7 +327,7 @@ func (s *Service) Test(ctx context.Context, p auth.Principal, id int64) error {
 	if err := requireAdmin(p); err != nil {
 		return err
 	}
-	c, err := scan(s.db.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id=$1", id))
+	c, err := scan(s.db.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id = $1", id))
 	if err != nil {
 		return err
 	}
@@ -292,9 +339,8 @@ func (s *Service) Test(ctx context.Context, p auth.Principal, id int64) error {
 	return nil
 }
 
-// OpenTarget is shared by the upcoming viewer and runner. The caller must close
-// the returned pool. Pools are request-scoped, so configuration changes cannot
-// leave a cached pool using old credentials.
+// OpenTarget checks RBAC against the metadata DB, decrypts the target credential,
+// and opens a request-scoped connection pool to the target PostgreSQL database.
 func (s *Service) OpenTarget(ctx context.Context, p auth.Principal, id int64, write bool) (*pgxpool.Pool, error) {
 	if p.ID < 1 {
 		return nil, auth.ErrUnauthenticated
@@ -306,7 +352,7 @@ func (s *Service) OpenTarget(ctx context.Context, p auth.Principal, id int64, wr
 	if !policy.Allows(access, write) {
 		return nil, ErrForbidden
 	}
-	c, err := scan(s.db.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id=$1", id))
+	c, err := scan(s.db.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id = $1", id))
 	if err != nil {
 		return nil, err
 	}
@@ -318,17 +364,24 @@ func (s *Service) open(ctx context.Context, c Connection) (*pgxpool.Pool, error)
 	if err != nil {
 		return nil, errors.New("cannot decrypt target credential")
 	}
-	u := url.URL{Scheme: "postgres", Host: net.JoinHostPort(c.Host, fmt.Sprint(c.Port)), Path: "/" + c.DatabaseName, User: url.UserPassword(c.Username, string(password))}
-	q := url.Values{"sslmode": {c.SSLMode}, "connect_timeout": {"5"}}
-	u.RawQuery = q.Encode()
+
+	u := url.URL{
+		Scheme:   "postgres",
+		Host:     net.JoinHostPort(c.Host, fmt.Sprint(c.Port)),
+		Path:     "/" + c.DatabaseName,
+		User:     url.UserPassword(c.Username, string(password)),
+		RawQuery: url.Values{"sslmode": {c.SSLMode}, "connect_timeout": {"5"}}.Encode(),
+	}
 	cfg, err := pgxpool.ParseConfig(u.String())
 	if err != nil {
 		return nil, ErrTargetUnavailable
 	}
 	cfg.MaxConns = 3
 	cfg.ConnConfig.RuntimeParams = map[string]string{"application_name": "terserah-target"}
+
 	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+
 	pool, err := pgxpool.NewWithConfig(connectCtx, cfg)
 	if err != nil {
 		return nil, ErrTargetUnavailable
@@ -337,15 +390,17 @@ func (s *Service) open(ctx context.Context, c Connection) (*pgxpool.Pool, error)
 		pool.Close()
 		return nil, ErrTargetUnavailable
 	}
-	// Compare the actual database and server start time, not the supplied host:
-	// the same PostgreSQL instance can be reached through different host aliases.
+
+	// Compare the actual database name and postmaster start time so the metadata
+	// database cannot be registered as a target even through host/DNS aliases.
 	var metadataName, targetName string
 	var metadataStart, targetStart time.Time
-	if err = s.db.QueryRow(connectCtx, "SELECT pg_catalog.current_database(),pg_catalog.pg_postmaster_start_time()").Scan(&metadataName, &metadataStart); err != nil {
+	const instanceQuery = "SELECT pg_catalog.current_database(), pg_catalog.pg_postmaster_start_time()"
+	if err = s.db.QueryRow(connectCtx, instanceQuery).Scan(&metadataName, &metadataStart); err != nil {
 		pool.Close()
 		return nil, errors.New("cannot inspect metadata database")
 	}
-	if err = pool.QueryRow(connectCtx, "SELECT pg_catalog.current_database(),pg_catalog.pg_postmaster_start_time()").Scan(&targetName, &targetStart); err != nil {
+	if err = pool.QueryRow(connectCtx, instanceQuery).Scan(&targetName, &targetStart); err != nil {
 		pool.Close()
 		return nil, ErrTargetUnavailable
 	}
