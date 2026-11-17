@@ -2,47 +2,92 @@
 <div class="app-shell">
     {{template "navigation" .}}
 
-    <main class="app-main">
-        <h1>Dashboard</h1>
-
-        <p id="dashboard-status" role="status" aria-live="polite">
-            Memeriksa session...
-        </p>
+    <main class="app-main dashboard-page">
+        <div class="dashboard-header">
+            <div>
+                <h1>Dashboard</h1>
+                <p id="dashboard-status" role="status" aria-live="polite">
+                    Memeriksa session...
+                </p>
+            </div>
+        </div>
 
         <div id="dashboard-content" hidden>
-            <section class="dashboard-panel"
-                     aria-labelledby="welcome-heading">
-                <h2 id="welcome-heading">
-                    Selamat datang,
-                    <span id="welcome-username"></span>!
-                </h2>
-
-                <p>
-                    Role akun:
-                    <strong id="account-role"></strong>
-                </p>
+            <section class="dashboard-summary" aria-labelledby="welcome-heading">
+                <div class="dashboard-identity">
+                    <h2 id="welcome-heading">
+                        Akun: <span id="welcome-username"></span>
+                    </h2>
+                    <p class="dashboard-role-line">
+                        Peran: <strong id="account-role"></strong>
+                    </p>
+                </div>
+                <div class="dashboard-stats">
+                    <div class="stat-item">
+                        <span class="stat-label">Database Diakses</span>
+                        <strong id="stat-db-count" class="stat-value">-</strong>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Menunggu Approval Anda</span>
+                        <strong id="stat-pending-reviews" class="stat-value">-</strong>
+                    </div>
+                </div>
             </section>
 
-            <section class="dashboard-panel"
-                    aria-labelledby="database-heading">
-                <h2 id="database-heading">Database Saya</h2>
+            <section id="dashboard-admin-shortcuts" class="dashboard-panel" aria-labelledby="admin-shortcuts-heading" hidden>
+                <div class="dashboard-panel-head">
+                    <h2 id="admin-shortcuts-heading">Administrasi Platform</h2>
+                    <span class="form-help">Pengaturan pengguna, group, leader, dan koneksi target.</span>
+                </div>
+                <div class="quick-links-grid">
+                    <a class="quick-link-card" href="/admin/users">
+                        <strong>Pengguna</strong>
+                        <span>Buat akun, ubah role admin, atau nonaktifkan akses.</span>
+                    </a>
+                    <a class="quick-link-card" href="/admin/groups">
+                        <strong>Group &amp; Leader</strong>
+                        <span>Atur anggota group dan tetapkan leader pemberi approval.</span>
+                    </a>
+                    <a class="quick-link-card" href="/admin/grants">
+                        <strong>Grant Database</strong>
+                        <span>Beri izin View atau View + Edit per group.</span>
+                    </a>
+                    <a class="quick-link-card" href="/admin/databases">
+                        <strong>Koneksi Target</strong>
+                        <span>Daftarkan dan uji koneksi PostgreSQL target.</span>
+                    </a>
+                </div>
+            </section>
+
+            <section id="dashboard-reviews-panel" class="dashboard-panel" aria-labelledby="pending-reviews-heading" hidden>
+                <div class="dashboard-panel-head">
+                    <h2 id="pending-reviews-heading">Menunggu Keputusan Review Anda</h2>
+                    <a class="workspace-link-inline" href="/reviews">Lihat semua review</a>
+                </div>
+                <p id="dashboard-reviews-empty" class="form-help" hidden>
+                    Tidak ada pengajuan migration yang menunggu keputusan Anda.
+                </p>
+                <ul id="dashboard-reviews-list" class="pending-reviews-list" hidden></ul>
+            </section>
+
+            <section class="dashboard-panel" aria-labelledby="database-heading">
+                <div class="dashboard-panel-head">
+                    <h2 id="database-heading">Database yang Dapat Diakses</h2>
+                    <span class="form-help">Pilih Viewer untuk melihat isi tabel, History untuk riwayat eksekusi, atau Draft untuk membuat migration.</span>
+                </div>
 
                 <p id="databases-status" role="status" aria-live="polite">
                     Memuat database...
                 </p>
 
-                <p id="databases-error"
-                class="error-message"
-                role="alert"
-                hidden></p>
+                <p id="databases-error" class="error-message" role="alert" hidden></p>
 
                 <p id="databases-empty" hidden>
-                    Belum ada database yang bisa diakses.
-                    Akses diberikan melalui group.
+                    Belum ada database yang bisa diakses. Akses diberikan melalui group.
                 </p>
 
                 <div id="databases-table" class="users-table-wrapper" hidden>
-                    <table class="users-table">
+                    <table class="users-table dashboard-db-table">
                         <thead>
                             <tr>
                                 <th scope="col">ID</th>
@@ -55,14 +100,7 @@
                         <tbody id="databases-body"></tbody>
                     </table>
                 </div>
-
-                <p class="form-help">
-                    Viewer dan History dapat dibuka dengan izin View Only atau Edit.
-                    Editor Draft hanya tersedia bagi pengguna dengan izin Edit.
-                    Izin diperiksa kembali oleh backend pada setiap permintaan.
-                </p>
             </section>
-
         </div>
     </main>
 </div>

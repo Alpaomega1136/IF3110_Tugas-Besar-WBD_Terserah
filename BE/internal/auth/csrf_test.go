@@ -44,3 +44,28 @@ func TestPreloginCSRFAndSecureCookie(t *testing.T) {
 		}
 	}
 }
+
+func TestCookieSecureFollowsOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		origin string
+		secure bool
+	}{
+		{"http://localhost:3000", true},
+		{"https://example.test", true},
+		{"http://example.test", false},
+		{"http://localhost.example.test", false},
+	} {
+		t.Run(tc.origin, func(t *testing.T) {
+			s, err := New(nil, Options{Origin: tc.origin, Key: make([]byte, 32)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := httptest.NewRecorder()
+			s.cookie(w, CookieName, "session", time.Now().Add(time.Hour))
+			cookies := w.Result().Cookies()
+			if len(cookies) != 1 || cookies[0].Secure != tc.secure {
+				t.Fatalf("cookie Secure = %v, want %v", cookies, tc.secure)
+			}
+		})
+	}
+}

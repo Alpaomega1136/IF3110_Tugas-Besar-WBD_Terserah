@@ -33,9 +33,12 @@
                     <strong id="draft-access"></strong>
                 </p>
 
-                <p>
+                <p class="database-workspace-links">
                     <a class="workspace-button" href="/databases/{{.DatabaseID}}/history">
                         Lihat Migration History
+                    </a>
+                    <a class="workspace-button" href="/databases/{{.DatabaseID}}/reviews">
+                        Lihat Review &amp; Approval
                     </a>
                 </p>
 
@@ -212,6 +215,7 @@
                 <p id="draft-execution-state" role="status" aria-live="polite"></p>
                 <div class="draft-execution-actions">
                     <button type="button" id="draft-explain" disabled>Analisis Query</button>
+                    <button type="button" id="draft-submit-review" disabled>Ajukan Review Approval</button>
                     <button type="button" id="draft-execute" disabled>Execute Migration</button>
                 </div>
                 <p id="draft-explain-message" role="status" aria-live="polite" hidden></p>

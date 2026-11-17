@@ -1228,6 +1228,7 @@ func TestPhase6HistoryAndDraftPaginationPages(t *testing.T) {
 	}
 	for _, asset := range []string{
 		"/static/js/pagination.js", "/static/js/history.js", "/static/js/drafts.js",
+		"/static/js/reviews.js", "/static/js/spa.js", "/static/js/ui.js",
 		"/static/css/style.css",
 	} {
 		w := httptest.NewRecorder()
@@ -1288,5 +1289,31 @@ func TestPhase6CursorAndReconcileAPIProxy(t *testing.T) {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestReviewsPagesAndInvalidIDs(t *testing.T) {
+	h := testHandler(t, "http://localhost:8080")
+	for _, tc := range []struct {
+		path   string
+		status int
+		parts  []string
+	}{
+		{"/reviews", http.StatusOK, []string{"Migration Reviews - Terserah", `id="reviews-page"`, `id="reviews-list-body"`, `/static/js/reviews.js`, `/static/js/spa.js`}},
+		{"/databases/5/reviews", http.StatusOK, []string{`data-database-id="5"`, `id="reviews-list-body"`, `id="review-detail"`}},
+		{"/databases/5/reviews/12", http.StatusOK, []string{`data-database-id="5"`, `data-review-id="12"`, `id="review-decision-panel"`}},
+		{"/databases/0/reviews", http.StatusBadRequest, nil},
+		{"/databases/5/reviews/0", http.StatusBadRequest, nil},
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if w.Code != tc.status {
+			t.Fatalf("%s: status=%d want=%d", tc.path, w.Code, tc.status)
+		}
+		for _, part := range tc.parts {
+			if !strings.Contains(w.Body.String(), part) {
+				t.Errorf("%s missing %q", tc.path, part)
+			}
+		}
 	}
 }
