@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"terserah/backend/internal/approval"
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/policy"
@@ -180,6 +181,9 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 	}
 	if hasPending {
 		return "", nil, false, errConflict
+	}
+	if _, err = approval.EnsureApprovedTx(ctx, meta, dbID, draftID, revision, "up"); err != nil {
+		return "", nil, false, err
 	}
 
 	parts, err := statements(sqlText)

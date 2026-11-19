@@ -45,6 +45,7 @@ const detailSQL = byId("draft-detail-sql");
 
 const executionPanel = byId("draft-execution");
 const executeButton = byId("draft-execute");
+const submitReviewButton = byId("draft-submit-review");
 const explainButton = byId("draft-explain");
 const explainMessage = byId("draft-explain-message");
 const explainResult = byId("draft-explain-result");
@@ -74,7 +75,7 @@ let nextCursor = null;
 
 function updatePagination() {
     pagination.hidden = workspace.hidden;
-    pageNumber.textContent = `Halaman ${currentPage + 1}`;
+    pageNumber.textContent = String(currentPage + 1);
     prevButton.disabled = busy || currentPage === 0;
     nextButton.disabled = busy || !hasMore;
 }
@@ -130,6 +131,7 @@ function updateExecutionControls() {
 
     executionPanel.hidden = !saved;
     executeButton.disabled = busy || !saved || modified || locked;
+    if (submitReviewButton) submitReviewButton.disabled = busy || !saved || modified;
     explainButton.disabled = busy || !saved || modified;
     reloadButton.disabled = busy || !saved;
     executeButton.textContent = executing ? "Menjalankan Migration..." : "Execute Migration";
@@ -357,7 +359,7 @@ async function executeDraft() {
                 "Periksa SQL tersimpan di bagian Detail Draft. Eksekusi mengubah database target. " +
                 "SQL gagal akan di-rollback oleh backend. Lanjutkan?",
             confirmLabel: "Execute Migration",
-            tone: "danger"
+            tone: "warning"
         });
         if (!confirmed) {
             setBanner(executionMessage, "Eksekusi dibatalkan. Tidak ada SQL dijalankan.");
@@ -397,6 +399,41 @@ async function executeDraft() {
 }
 
 executeButton.addEventListener("click", executeDraft);
+submitReviewButton?.addEventListener("click", async () => {
+    if (busy || !selectedDraft || isDirty()) return;
+    const draft = selectedDraft;
+    const confirmed = await confirmAction({
+        title: "Ajukan Review Migration?",
+        message: `Ajukan Draft "${draft.title}" (ID ${draft.id}, revisi ${draft.revision}) untuk ditinjau dan disetujui oleh seluruh Leader Group pada database ini?`,
+        confirmLabel: "Ajukan Review"
+    });
+    if (!confirmed || busy) return;
+
+    setBusy(true);
+    setBanner(executionMessage, "Mengirim pengajuan review ke leader group...");
+    try {
+        const result = await authenticatedRequest(`/api/v1/databases/${encodeURIComponent(databaseId)}/reviews`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ draft_id: draft.id, revision: draft.revision, action_type: "up" })
+        });
+        const count = Array.isArray(result?.review?.approvals) ? result.review.approvals.length : 0;
+        setBanner(
+            executionMessage,
+            `Pengajuan review #${result?.review?.id ?? "-"} berhasil dibuat (Status: Pending Review, membutuhkan persetujuan ${count} leader group).`
+        );
+    } catch (err) {
+        if (err.status === 409 && err.code === "group_leader_required") {
+            setBanner(executionMessage, "Pengajuan ditolak: setiap group yang memiliki akses view atau edit ke database ini wajib memiliki Leader Group aktif.", true);
+        } else if (err.status === 409) {
+            setBanner(executionMessage, "Revisi draft ini sudah memiliki pengajuan review aktif atau revisi draft telah berubah.", true);
+        } else {
+            handleError(err, executionMessage);
+        }
+    } finally {
+        setBusy(false);
+    }
+});
 explainButton.addEventListener("click", async () => {
     if (busy || !selectedDraft || isDirty()) return;
     const draft = selectedDraft;

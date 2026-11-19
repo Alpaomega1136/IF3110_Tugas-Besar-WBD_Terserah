@@ -82,7 +82,7 @@ const versionString = (version) => (positiveInt64(version) ? version : null);
 
 function updatePagination() {
     pagination.hidden = workspace.hidden;
-    pageNumber.textContent = `Halaman ${currentPage + 1}`;
+    pageNumber.textContent = String(currentPage + 1);
     prevButton.disabled = busy || currentPage === 0;
     nextButton.disabled = busy || !hasMore;
 }

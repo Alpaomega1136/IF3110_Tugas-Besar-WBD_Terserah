@@ -14,30 +14,40 @@
 
         <div id="history-workspace" class="migration-layout" hidden>
             <div class="migration-column">
-            <section class="dashboard-panel"
+            <section class="dashboard-panel history-target-panel"
                      aria-labelledby="history-database-heading">
-                <h2 id="history-database-heading">
-                    Database: <span id="history-database-name"></span>
-                </h2>
-                <p>
-                    Database target: <span id="history-target-name"></span>
-                </p>
-                <p>
-                    Hak akses efektif: <strong id="history-access"></strong>
-                </p>
-                <p id="history-drafts-link" hidden>
-                    <a class="workspace-button" href="/databases/{{.DatabaseID}}/drafts">
-                        Kelola Draft Migration
-                    </a>
-                </p>
+                <div class="history-target-info">
+                    <h2 id="history-database-heading">
+                        Database: <span id="history-database-name"></span>
+                    </h2>
+                    <p>
+                        Database target: <span id="history-target-name"></span>
+                    </p>
+                </div>
+                <div class="history-target-actions">
+                    <p class="viewer-access-pill">
+                        Hak akses: <strong id="history-access"></strong>
+                    </p>
+                    <p id="history-drafts-link" hidden>
+                        <a class="workspace-button" href="/databases/{{.DatabaseID}}/drafts">
+                            Kelola Draft Migration
+                        </a>
+                    </p>
+                </div>
             </section>
 
             <section class="dashboard-panel"
                      aria-labelledby="history-list-heading">
-                <div class="draft-heading-row">
+                <div class="draft-heading-row history-list-header">
                     <h2 id="history-list-heading">Daftar Eksekusi Migration</h2>
                     <button type="button" id="history-refresh"
-                            class="button-secondary">Muat Ulang</button>
+                            class="button-secondary history-refresh-btn"
+                            aria-label="Muat Ulang" title="Muat Ulang">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                            <polyline points="21 3 21 9 15 9" />
+                        </svg>
+                    </button>
                 </div>
 
                 <p id="history-list-status" role="status"
@@ -69,9 +79,9 @@
                 </div>
                 <p id="history-pending-notice" class="form-help" role="status" hidden></p>
                 <nav id="history-pagination" class="cursor-pagination" aria-label="Navigasi halaman riwayat" hidden>
-                    <button type="button" id="history-prev" class="button-secondary" disabled>Halaman Sebelumnya</button>
-                    <span id="history-page-number" aria-live="polite">Halaman 1</span>
-                    <button type="button" id="history-next" class="button-secondary" disabled>Halaman Berikutnya</button>
+                    <button type="button" id="history-prev" class="button-secondary" aria-label="Halaman Sebelumnya" title="Halaman Sebelumnya" disabled>&lt;</button>
+                    <span id="history-page-number" aria-live="polite">1</span>
+                    <button type="button" id="history-next" class="button-secondary" aria-label="Halaman Berikutnya" title="Halaman Berikutnya" disabled>&gt;</button>
                 </nav>
                 <div id="history-reconcile-panel" hidden>
                 <div class="history-reconcile-actions">

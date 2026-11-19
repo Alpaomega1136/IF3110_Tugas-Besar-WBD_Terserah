@@ -135,6 +135,7 @@ func TestRecoveryIgnoresTargetSearchPath(t *testing.T) {
 		if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
 			t.Fatal(err)
 		}
+		approveDraft(t, a, editor, target.ID, d.ID, 1)
 		w = editor.request("POST", fmt.Sprintf("%s/drafts/%d/execute", base, d.ID), map[string]string{"revision": "1"})
 		status(t, w, 200)
 		var out runner.Result

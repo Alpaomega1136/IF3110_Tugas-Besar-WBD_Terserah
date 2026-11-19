@@ -9,9 +9,11 @@ import (
 )
 
 var (
-	ErrNotFound  = errors.New("resource not found")
-	ErrConflict  = errors.New("resource conflict")
-	ErrLastAdmin = errors.New("cannot remove the last active platform admin")
+	ErrNotFound       = errors.New("resource not found")
+	ErrConflict       = errors.New("resource conflict")
+	ErrLastAdmin      = errors.New("cannot remove the last active platform admin")
+	ErrLeaderActive   = errors.New("cannot remove or deactivate an active group leader; assign a new leader first")
+	ErrNotGroupMember = errors.New("leader must be an active member of the group")
 )
 
 type UserView struct {
@@ -30,10 +32,12 @@ type GrantView struct {
 }
 
 type GroupView struct {
-	ID      int64       `json:"id,string"`
-	Name    string      `json:"name"`
-	UserIDs []string    `json:"user_ids"`
-	Grants  []GrantView `json:"grants"`
+	ID             int64       `json:"id,string"`
+	Name           string      `json:"name"`
+	LeaderUserID   *int64      `json:"leader_user_id,string"`
+	LeaderUsername *string     `json:"leader_username"`
+	UserIDs        []string    `json:"user_ids"`
+	Grants         []GrantView `json:"grants"`
 }
 
 type UpdateUserParams struct {
@@ -42,7 +46,7 @@ type UpdateUserParams struct {
 	IsActive        *bool
 }
 
-// Store defines metadata persistence for users, groups, memberships, and grants.
+// Store defines metadata persistence for users, groups, leaders, memberships, and grants.
 type Store interface {
 	ListUsers(ctx context.Context) ([]UserView, error)
 	CreateUser(ctx context.Context, username, passwordHash string, isPlatformAdmin bool, now time.Time) (UserView, error)
@@ -50,6 +54,7 @@ type Store interface {
 
 	ListGroups(ctx context.Context) ([]GroupView, error)
 	CreateGroup(ctx context.Context, name string) (GroupView, error)
+	SetGroupLeader(ctx context.Context, groupID, userID int64) (GroupView, error)
 	AddUserToGroup(ctx context.Context, groupID, userID int64) error
 	RemoveUserFromGroup(ctx context.Context, groupID, userID int64, now time.Time) error
 

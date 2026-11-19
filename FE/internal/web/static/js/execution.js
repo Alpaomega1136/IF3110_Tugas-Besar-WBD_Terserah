@@ -28,6 +28,7 @@ export function executeErrorMessage(error) {
     }
     if (error?.status === 409) {
         switch (error.code) {
+            case "approval_incomplete": return "Approval belum lengkap atau ada perubahan leader dan akses. Ajukan review baru jika diperlukan.";
             case "execution_conflict": return "Revisi berubah atau ada eksekusi pending. Buka ulang draft dan periksa History sebelum tindakan berikutnya.";
             case "migration_busy": return "Database target sedang menjalankan migration lain. Periksa History sebelum mencoba lagi secara manual.";
             case "target_history_unprotected": return "History target atau isolasi executor belum aman. Minta admin PostgreSQL menjalankan BE/sql/provision_target_history.sql dan gunakan executor restricted khusus database ini, lalu buka ulang draft.";

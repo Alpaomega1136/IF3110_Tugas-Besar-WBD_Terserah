@@ -2,6 +2,7 @@ package admin
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,6 +19,8 @@ func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 		"PATCH /api/v1/admin/users/{id}":                          s.HandleUpdateUser,
 		"GET /api/v1/admin/groups":                                s.HandleListGroups,
 		"POST /api/v1/admin/groups":                               s.HandleCreateGroup,
+		"PUT /api/v1/admin/groups/{id}/leader":                    s.HandleSetGroupLeader,
+		"PUT /api/v1/admin/groups/{id}/leader/{userID}":           s.HandleSetGroupLeader,
 		"PUT /api/v1/admin/groups/{id}/users/{userID}":            s.HandleAddUserToGroup,
 		"DELETE /api/v1/admin/groups/{id}/users/{userID}":         s.HandleRemoveUserFromGroup,
 		"PUT /api/v1/admin/groups/{id}/databases/{databaseID}":    s.HandleSetGrant,
@@ -72,6 +75,15 @@ func (s *Service) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot create user")
 		return
 	}
+	actor, _ := auth.User(r.Context())
+	slog.InfoContext(r.Context(), "admin_user_created",
+		"event", "admin_user_created",
+		"actor_id", actor.ID,
+		"target_user_id", user.ID,
+		"target_username", user.Username,
+		"is_platform_admin", user.IsPlatformAdmin,
+		"status", "success",
+	)
 	httpx.JSON(w, http.StatusCreated, map[string]any{"user": user})
 }
 
@@ -109,11 +121,22 @@ func (s *Service) HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrLastAdmin):
 		httpx.Error(w, http.StatusConflict, "last_active_admin", "At least one active Platform Admin must remain")
+	case errors.Is(err, ErrLeaderActive):
+		httpx.Error(w, http.StatusConflict, "group_leader_active", "Cannot deactivate user while assigned as a group leader; replace the group leader first")
 	case errors.Is(err, ErrNotFound):
 		httpx.Error(w, http.StatusNotFound, "not_found", "User not found")
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot update user")
 	default:
+		actor, _ := auth.User(r.Context())
+		slog.InfoContext(r.Context(), "admin_user_updated",
+			"event", "admin_user_updated",
+			"actor_id", actor.ID,
+			"target_user_id", user.ID,
+			"is_active", user.IsActive,
+			"is_platform_admin", user.IsPlatformAdmin,
+			"status", "success",
+		)
 		httpx.JSON(w, http.StatusOK, map[string]any{"user": user})
 	}
 }
@@ -148,7 +171,62 @@ func (s *Service) HandleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot create group")
 		return
 	}
+	actor, _ := auth.User(r.Context())
+	slog.InfoContext(r.Context(), "admin_group_created",
+		"event", "admin_group_created",
+		"actor_id", actor.ID,
+		"group_id", group.ID,
+		"group_name", group.Name,
+		"status", "success",
+	)
 	httpx.JSON(w, http.StatusCreated, map[string]any{"group": group})
+}
+
+func (s *Service) HandleSetGroupLeader(w http.ResponseWriter, r *http.Request) {
+	groupID, err := parseID(r.PathValue("id"))
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid group ID")
+		return
+	}
+	var userID int64
+	if rawUser := r.PathValue("userID"); rawUser != "" {
+		userID, err = parseID(rawUser)
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid user ID")
+			return
+		}
+	} else {
+		var req struct {
+			UserID string `json:"user_id"`
+		}
+		if !httpx.Decode(w, r, &req) {
+			return
+		}
+		userID, err = parseID(req.UserID)
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid user ID")
+			return
+		}
+	}
+	group, err := s.store.SetGroupLeader(r.Context(), groupID, userID)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		httpx.Error(w, http.StatusNotFound, "not_found", "Group or user not found")
+	case errors.Is(err, ErrNotGroupMember):
+		httpx.Error(w, http.StatusConflict, "leader_not_member", "Leader must be an active member of the group")
+	case err != nil:
+		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot set group leader")
+	default:
+		actor, _ := auth.User(r.Context())
+		slog.InfoContext(r.Context(), "admin_group_leader_set",
+			"event", "admin_group_leader_set",
+			"actor_id", actor.ID,
+			"group_id", group.ID,
+			"leader_user_id", userID,
+			"status", "success",
+		)
+		httpx.JSON(w, http.StatusOK, map[string]any{"group": group})
+	}
 }
 
 func (s *Service) HandleAddUserToGroup(w http.ResponseWriter, r *http.Request) {
@@ -163,6 +241,14 @@ func (s *Service) HandleAddUserToGroup(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot add user to group")
 	default:
+		actor, _ := auth.User(r.Context())
+		slog.InfoContext(r.Context(), "admin_group_member_added",
+			"event", "admin_group_member_added",
+			"actor_id", actor.ID,
+			"group_id", groupID,
+			"user_id", userID,
+			"status", "success",
+		)
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }
@@ -174,11 +260,21 @@ func (s *Service) HandleRemoveUserFromGroup(w http.ResponseWriter, r *http.Reque
 	}
 	err := s.store.RemoveUserFromGroup(r.Context(), groupID, userID, s.now())
 	switch {
+	case errors.Is(err, ErrLeaderActive):
+		httpx.Error(w, http.StatusConflict, "group_leader_active", "Cannot remove the current group leader from the group; assign another leader first")
 	case errors.Is(err, ErrNotFound):
 		httpx.Error(w, http.StatusNotFound, "not_found", "Group membership not found")
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot remove user from group")
 	default:
+		actor, _ := auth.User(r.Context())
+		slog.InfoContext(r.Context(), "admin_group_member_removed",
+			"event", "admin_group_member_removed",
+			"actor_id", actor.ID,
+			"group_id", groupID,
+			"user_id", userID,
+			"status", "success",
+		)
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }
@@ -206,6 +302,15 @@ func (s *Service) HandleSetGrant(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot set database grant")
 	default:
+		actor, _ := auth.User(r.Context())
+		slog.InfoContext(r.Context(), "admin_grant_updated",
+			"event", "admin_grant_updated",
+			"actor_id", actor.ID,
+			"group_id", groupID,
+			"database_id", databaseID,
+			"access_level", access,
+			"status", "success",
+		)
 		httpx.JSON(w, http.StatusOK, map[string]any{"grant": grant})
 	}
 }
@@ -222,6 +327,14 @@ func (s *Service) HandleRevokeGrant(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot revoke database grant")
 	default:
+		actor, _ := auth.User(r.Context())
+		slog.InfoContext(r.Context(), "admin_grant_revoked",
+			"event", "admin_grant_revoked",
+			"actor_id", actor.ID,
+			"group_id", groupID,
+			"database_id", databaseID,
+			"status", "success",
+		)
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -74,7 +75,12 @@ func New(db *pgxpool.Pool, opts Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Service{db: db, box: box, origin: opts.Origin, secure: strings.HasPrefix(opts.Origin, "https://"), csrfKey: h.Sum(nil), now: opts.Now, dummyHash: dummy}, nil
+	origin, err := url.Parse(opts.Origin)
+	if err != nil {
+		return nil, err
+	}
+	secure := origin.Scheme == "https" || (origin.Scheme == "http" && origin.Hostname() == "localhost")
+	return &Service{db: db, box: box, origin: opts.Origin, secure: secure, csrfKey: h.Sum(nil), now: opts.Now, dummyHash: dummy}, nil
 }
 
 func randomToken() string {

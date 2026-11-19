@@ -179,6 +179,7 @@ func TestCommitResponseRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			path := fmt.Sprintf("%s/drafts/%d/execute", base, d.ID)
+			approveDraft(t, a, editor, target.ID, d.ID, 1)
 			w = editor.request("POST", path, map[string]string{"revision": "1"})
 			status(t, w, 202)
 			var attempt runner.Result
@@ -276,6 +277,7 @@ func TestRecoveryAfterWaitingForCommit(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &draft); err != nil {
 				t.Fatal(err)
 			}
+			approveDraft(t, a, editor, target.ID, draft.ID, 1)
 			barrier, err := owner.Begin(ctx)
 			if err != nil {
 				t.Fatal(err)

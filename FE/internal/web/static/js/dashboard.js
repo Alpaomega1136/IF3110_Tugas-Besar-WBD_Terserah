@@ -5,19 +5,72 @@ import { byId, addCell } from "./ui.js";
 const status = byId("dashboard-status");
 const content = byId("dashboard-content");
 const username = byId("welcome-username");
-const role = byId("account-role");
 const databasesStatus = byId("databases-status");
 const databasesError = byId("databases-error");
 const databasesEmpty = byId("databases-empty");
 const databasesTable = byId("databases-table");
 const databasesBody = byId("databases-body");
 
-function actionLink(cell, id, resource, label) {
+const statDbCount = byId("stat-db-count");
+const statPendingReviews = byId("stat-pending-reviews");
+const adminShortcuts = byId("dashboard-admin-shortcuts");
+const reviewsPanel = byId("dashboard-reviews-panel");
+const reviewsEmpty = byId("dashboard-reviews-empty");
+const reviewsList = byId("dashboard-reviews-list");
+
+function actionLink(cell, id, resource, label, variant = "secondary") {
     const link = document.createElement("a");
-    link.className = "workspace-button";
+    link.className = variant === "primary"
+        ? "workspace-button"
+        : "workspace-button workspace-button--subtle";
     link.href = `/databases/${encodeURIComponent(id)}/${resource}`;
     link.textContent = label;
     cell.appendChild(link);
+}
+
+async function loadPendingReviews() {
+    if (!reviewsPanel) return;
+    try {
+        const result = await authenticatedRequest("/api/v1/reviews");
+        const reviews = Array.isArray(result?.reviews) ? result.reviews : [];
+        const actionable = reviews.filter((r) => r.can_current_user_act);
+        if (statPendingReviews) statPendingReviews.textContent = String(actionable.length);
+
+        if (reviewsList && reviewsEmpty) {
+            reviewsList.replaceChildren();
+            reviewsEmpty.textContent = "Tidak ada pengajuan migration yang menunggu keputusan Anda.";
+            for (const review of actionable.slice(0, 5)) {
+                const item = document.createElement("li");
+                item.className = "pending-review-item";
+
+                const info = document.createElement("div");
+                info.className = "pending-review-info";
+                const title = document.createElement("strong");
+                title.textContent = `${review.database_name} — ${review.draft_title} (rev ${review.draft_revision})`;
+                const meta = document.createElement("span");
+                meta.textContent = `Aksi: ${review.action_type} · Pengaju: ${review.requested_by_username || "-"}`;
+                info.append(title, meta);
+
+                const link = document.createElement("a");
+                link.className = "workspace-button";
+                link.href = `/databases/${encodeURIComponent(review.database_id)}/reviews/${encodeURIComponent(review.id)}`;
+                link.textContent = "Tinjau";
+
+                item.append(info, link);
+                reviewsList.appendChild(item);
+            }
+            reviewsPanel.hidden = false;
+            reviewsEmpty.hidden = actionable.length !== 0;
+            reviewsList.hidden = actionable.length === 0;
+        }
+    } catch {
+        if (statPendingReviews) statPendingReviews.textContent = "–";
+        if (reviewsPanel && reviewsEmpty) {
+            reviewsPanel.hidden = false;
+            reviewsEmpty.hidden = false;
+            reviewsEmpty.textContent = "Review tidak dapat dimuat. Coba buka halaman Review & Approval.";
+        }
+    }
 }
 
 async function loadDatabases(isAdmin) {
@@ -33,17 +86,28 @@ async function loadDatabases(isAdmin) {
             positiveInt64(db.id) && ["view", "edit"].includes(db.access))) {
             throw new Error("Format daftar database atau izin dari backend tidak valid.");
         }
+        if (statDbCount) statDbCount.textContent = String(result.databases.length);
+
         for (const database of result.databases) {
             const row = document.createElement("tr");
             addCell(row, database.id);
             addCell(row, database.name);
             addCell(row, database.database_name);
-            addCell(row, database.access === "edit" ? "View + Edit" : "View Only");
+
+            const accessCell = document.createElement("td");
+            const badge = document.createElement("span");
+            badge.className = database.access === "edit"
+                ? "access-badge access-badge--edit"
+                : "access-badge access-badge--view";
+            badge.textContent = database.access === "edit" ? "View + Edit" : "View Only";
+            accessCell.appendChild(badge);
+            row.appendChild(accessCell);
+
             const links = document.createElement("td");
             links.className = "database-workspace-links";
-            actionLink(links, database.id, "viewer", "Lihat Viewer");
-            actionLink(links, database.id, "history", "Lihat History");
-            if (database.access === "edit") actionLink(links, database.id, "drafts", "Kelola Draft");
+            actionLink(links, database.id, "viewer", "Viewer", "secondary");
+            actionLink(links, database.id, "history", "History", "secondary");
+            if (database.access === "edit") actionLink(links, database.id, "drafts", "Kelola Draft", "primary");
             row.appendChild(links);
             databasesBody.appendChild(row);
         }
@@ -72,10 +136,11 @@ async function loadDashboard() {
         const user = await requireAuthenticatedUser();
         if (!user) return;
         username.textContent = user.username;
-        role.textContent = user.is_platform_admin ? "Platform Admin" : "Pengguna";
+        if (adminShortcuts) adminShortcuts.hidden = !user.is_platform_admin;
         content.hidden = false;
         status.hidden = true;
         await loadDatabases(user.is_platform_admin);
+        await loadPendingReviews();
     } catch (error) {
         status.textContent = error.message || "Gagal memuat dashboard.";
         status.className = "error-message";

@@ -22,9 +22,17 @@ const membershipUser = byId("membership-user");
 const membershipSubmit = byId("membership-submit");
 const membershipMessage = byId("membership-message");
 
+const leaderSection = byId("leader-section");
+const leaderForm = byId("leader-form");
+const leaderGroup = byId("leader-group");
+const leaderUser = byId("leader-user");
+const leaderSubmit = byId("leader-submit");
+const leaderMessage = byId("leader-message");
+
 let groupsData = [];
 let usersData = null;
 let membershipSaving = false;
+let leaderSaving = false;
 let currentUserId = null;
 
 function updateGroupChoices() {
@@ -42,6 +50,7 @@ function updateGroupChoices() {
     membershipSection.hidden = groupsData.length === 0;
     membershipGroup.disabled = membershipSaving || groupsData.length === 0;
     updateUserChoices();
+    updateLeaderChoices();
 }
 
 function updateUserChoices() {
@@ -72,6 +81,55 @@ function updateUserChoices() {
     membershipSubmit.disabled = membershipSaving || !group || !membershipUser.value;
 }
 
+function updateLeaderChoices() {
+    if (!leaderGroup || !leaderUser || !leaderSubmit) return;
+    const previousGroup = leaderGroup.value;
+    leaderGroup.replaceChildren();
+    addOption(leaderGroup, "", "Pilih group...");
+
+    for (const group of groupsData) {
+        addOption(leaderGroup, String(group.id), group.name);
+    }
+    if (groupsData.some((group) => String(group.id) === previousGroup)) {
+        leaderGroup.value = previousGroup;
+    }
+
+    if (leaderSection) leaderSection.hidden = groupsData.length === 0;
+    leaderGroup.disabled = leaderSaving || groupsData.length === 0;
+    updateLeaderMemberChoices();
+}
+
+function updateLeaderMemberChoices() {
+    if (!leaderGroup || !leaderUser || !leaderSubmit) return;
+    const previousUser = leaderUser.value;
+    const group = groupsData.find((item) => String(item.id) === leaderGroup.value);
+    const memberIds = new Set(Array.isArray(group?.user_ids) ? group.user_ids.map(String) : []);
+
+    const activeMembers = group && Array.isArray(usersData)
+        ? usersData.filter((user) => user.is_active && memberIds.has(String(user.id)))
+        : [];
+
+    leaderUser.replaceChildren();
+    addOption(
+        leaderUser,
+        "",
+        group && activeMembers.length === 0 ? "Belum ada anggota aktif di group ini" : "Pilih anggota aktif..."
+    );
+
+    for (const user of activeMembers) {
+        const currentTag = group?.leader_user_id && String(group.leader_user_id) === String(user.id) ? " (Leader saat ini)" : "";
+        addOption(leaderUser, String(user.id), `${user.username}${currentTag}`);
+    }
+    if (activeMembers.some((user) => String(user.id) === previousUser)) {
+        leaderUser.value = previousUser;
+    } else if (group?.leader_user_id && activeMembers.some((user) => String(user.id) === String(group.leader_user_id))) {
+        leaderUser.value = String(group.leader_user_id);
+    }
+
+    leaderUser.disabled = leaderSaving || activeMembers.length === 0;
+    leaderSubmit.disabled = leaderSaving || !group || !leaderUser.value;
+}
+
 function renderGroupsTable() {
     body.replaceChildren();
     const usersById = new Map((usersData ?? []).map((user) => [String(user.id), user]));
@@ -80,15 +138,6 @@ function renderGroupsTable() {
         const row = document.createElement("tr");
         const userIds = Array.isArray(group.user_ids) ? group.user_ids : [];
         const grants = Array.isArray(group.grants) ? group.grants : [];
-
-        const grantText = grants.length
-            ? grants.map((grant) => {
-                const level = grant.access_level === "edit"
-                    ? "View + Edit"
-                    : grant.access_level === "view" ? "View Only" : grant.access_level;
-                return `DB ${grant.database_id}: ${level}`;
-            }).join(", ")
-            : "Belum ada grant";
 
         addCell(row, group.id);
         addCell(row, group.name);
@@ -107,9 +156,13 @@ function renderGroupsTable() {
             for (const rawId of userIds) {
                 const userId = String(rawId);
                 const user = usersById.get(userId);
-                const label = user
-                    ? `${user.username}${user.is_active ? "" : " (nonaktif)"}`
-                    : `User ID ${userId}`;
+                let label = `User ID ${userId}`;
+                if (user) {
+                    label = user.username;
+                    if (!user.is_active) {
+                        label += " (nonaktif)";
+                    }
+                }
 
                 const item = document.createElement("div");
                 item.className = "group-member-item";
@@ -131,7 +184,31 @@ function renderGroupsTable() {
         }
 
         row.appendChild(membersCell);
-        addCell(row, grantText);
+        const grantsCell = document.createElement("td");
+        if (grants.length) {
+            const list = document.createElement("ul");
+            list.className = "group-grants-list";
+            for (const grant of grants) {
+                const item = document.createElement("li");
+                let level = grant.access_level;
+                if (level === "edit") {
+                    level = "View + Edit";
+                } else if (level === "view") {
+                    level = "View Only";
+                }
+                item.textContent = `DB ${grant.database_id}: ${level}`;
+                list.appendChild(item);
+            }
+            grantsCell.appendChild(list);
+        } else {
+            grantsCell.textContent = "Belum ada grant";
+        }
+        row.appendChild(grantsCell);
+        let leader = "Belum ditetapkan";
+        if (group.leader_username) {
+            leader = `${group.leader_username} (ID ${group.leader_user_id})`;
+        }
+        addCell(row, leader);
         body.appendChild(row);
     }
 }
@@ -179,6 +256,8 @@ async function removeMember(group, userId, label) {
         }
         if (err.status === 403 && isCSRFError(err)) {
             setBanner(membershipMessage, "Token CSRF tidak valid. Silakan coba lagi.", true);
+        } else if (err.status === 409 && err.code === "group_leader_active") {
+            setBanner(membershipMessage, "Anggota ini adalah Leader Group aktif. Ganti leader group terlebih dahulu sebelum mengeluarkan anggota.", true);
         } else if (err.status === 403) {
             setBanner(membershipMessage, "Akses ditolak. Kamu tidak boleh mengubah membership.", true);
         } else if (err.status === 404) {
@@ -361,6 +440,69 @@ membershipForm.addEventListener("submit", async (event) => {
         membershipSaving = false;
         membershipSubmit.textContent = "Tambahkan Anggota";
         if (usersData !== null) updateGroupChoices();
+    }
+});
+
+leaderGroup?.addEventListener("change", () => {
+    if (leaderMessage) setBanner(leaderMessage, "");
+    updateLeaderMemberChoices();
+});
+leaderUser?.addEventListener("change", () => {
+    if (leaderMessage) setBanner(leaderMessage, "");
+    updateLeaderMemberChoices();
+});
+
+leaderForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (leaderSaving) return;
+
+    const group = groupsData.find((item) => String(item.id) === leaderGroup.value);
+    const user = usersData?.find((item) => String(item.id) === leaderUser.value);
+    if (!group || !user) {
+        setBanner(leaderMessage, "Pilih group dan anggota aktif untuk ditetapkan sebagai leader.", true);
+        return;
+    }
+
+    leaderSaving = true;
+    leaderGroup.disabled = true;
+    leaderUser.disabled = true;
+    leaderSubmit.disabled = true;
+    leaderSubmit.textContent = "Menyimpan...";
+    setBanner(leaderMessage, "");
+
+    try {
+        await authenticatedRequest(
+            `/api/v1/admin/groups/${encodeURIComponent(String(group.id))}/leader`,
+            {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ user_id: String(user.id) })
+            }
+        );
+        const refreshed = await loadGroups();
+        setBanner(
+            leaderMessage,
+            refreshed
+                ? `${user.username} berhasil ditetapkan sebagai Leader group ${group.name}.`
+                : "Leader group tersimpan, tetapi daftar group gagal diperbarui.",
+            !refreshed
+        );
+    } catch (err) {
+        if (err.status === 401) {
+            window.location.replace("/login");
+            return;
+        }
+        if (err.status === 403 && isCSRFError(err)) {
+            setBanner(leaderMessage, "Token CSRF tidak valid. Silakan coba lagi.", true);
+        } else if (err.status === 409) {
+            setBanner(leaderMessage, "Leader harus merupakan anggota aktif dari group tersebut.", true);
+        } else {
+            setBanner(leaderMessage, err.message || "Gagal menetapkan leader group.", true);
+        }
+    } finally {
+        leaderSaving = false;
+        leaderSubmit.textContent = "Simpan Leader";
+        if (usersData !== null) updateLeaderChoices();
     }
 });
 

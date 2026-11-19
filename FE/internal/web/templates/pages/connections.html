@@ -2,22 +2,23 @@
 <div class="app-shell">
     {{template "navigation" .}}
 
-    <main class="app-main">
+    <main class="app-main connections-page">
         <h1>Koneksi Database Target</h1>
-        <p class="connection-intro">Daftarkan PostgreSQL target yang terpisah dari database metadata platform. Hak akses pengguna diberikan melalui Group dan Grant.</p>
+        <p class="connection-intro">Kelola koneksi PostgreSQL untuk database target.</p>
         <p id="connections-status" role="status" aria-live="polite">Memeriksa akses...</p>
         <p id="connections-error" class="error-message connection-message" role="alert" hidden></p>
         <p id="connections-forbidden" class="error-message" role="alert" hidden>Hanya Platform Admin yang dapat mengelola koneksi database.</p>
 
         <div id="connections-content" hidden>
-            <div class="users-layout">
+            <div class="users-layout connections-layout">
                 <div>
             <section class="dashboard-panel" aria-labelledby="connection-create-heading">
-                <h2 id="connection-create-heading">Tambah Koneksi</h2>
-                <p class="form-help">Semua field wajib. Password disimpan terenkripsi oleh backend dan tidak dapat ditampilkan kembali. Gunakan database target, bukan database metadata platform.</p>
+                <div class="connection-panel-heading">
+                    <h2 id="connection-create-heading">Tambah Koneksi</h2>
+                </div>
                 <form id="connection-create-form" class="connection-form" novalidate>
                     <div class="connection-form-grid">
-                        <div class="form-group">
+                        <div class="form-group connection-name-field">
                             <label for="connection-create-name">Nama koneksi</label>
                             <input id="connection-create-name" name="name" maxlength="100" required autocomplete="off">
                         </div>
@@ -51,6 +52,7 @@
                             </select>
                         </div>
                     </div>
+                    <p class="connection-form-note">Gunakan database target yang terpisah dari metadata platform.</p>
                     <p id="connection-create-error" class="error-message connection-message" role="alert" hidden></p>
                     <button id="connection-create-submit" type="submit" class="connection-submit">Daftarkan Koneksi</button>
                 </form>
@@ -58,7 +60,7 @@
 
             <section id="connection-edit-section" class="dashboard-panel" aria-labelledby="connection-edit-heading" hidden>
                 <h2 id="connection-edit-heading">Edit: <span id="connection-edit-name"></span></h2>
-                <p class="form-help">Identitas target (host, port, nama database) tidak dapat diubah. Untuk mengganti target, buat koneksi baru. Biarkan password kosong untuk mempertahankan password saat ini.</p>
+                <p class="form-help">Host, port, dan database tidak dapat diubah. Kosongkan password untuk mempertahankan password saat ini.</p>
                 <dl class="connection-identity">
                     <dt>Host</dt><dd id="connection-edit-host"></dd>
                     <dt>Port</dt><dd id="connection-edit-port"></dd>
@@ -94,11 +96,17 @@
                         <button id="connection-edit-cancel" type="button" class="button-secondary">Batal</button>
                     </div>
                 </form>
-            </section>                </div>
+            </section>
+                </div>
             <section class="dashboard-panel admin-directory" aria-labelledby="connections-list-heading">
                 <div class="connection-heading">
                     <h2 id="connections-list-heading">Daftar Koneksi</h2>
-                    <button id="connections-refresh" type="button" class="button-secondary">Muat Ulang</button>
+                    <button id="connections-refresh" type="button" class="button-secondary connection-refresh-btn" aria-label="Muat Ulang" title="Muat Ulang">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                            <polyline points="21 3 21 9 15 9" />
+                        </svg>
+                    </button>
                 </div>
                 <p id="connections-empty" hidden>Belum ada koneksi. Tambahkan target PostgreSQL melalui form di samping.</p>
                 <div id="connections-table" class="users-table-wrapper admin-list-scroll" hidden>
