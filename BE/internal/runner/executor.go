@@ -1,0 +1,206 @@
+package runner
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"terserah/backend/internal/approval"
+	"terserah/backend/internal/auth"
+	"terserah/backend/internal/connections"
+	"terserah/backend/internal/jobs"
+	"terserah/backend/internal/telemetry"
+)
+
+// ExecuteJob runs only a fenced queue claim; HTTP handlers never execute SQL.
+func (s *Service) ExecuteJob(ctx context.Context, c *jobs.Claim) (Result, error) {
+	if c == nil {
+		return Result{}, jobs.ErrInvalid
+	}
+	p := auth.Principal{ID: c.Job.RequestedBy}
+	pool, err := s.targets.OpenTarget(ctx, p, c.Job.DatabaseID, true)
+	if err != nil {
+		return s.preflightFailure(ctx, c, err)
+	}
+	defer pool.Close()
+	acquired, err := pool.Acquire(ctx)
+	if err != nil {
+		return s.preflightFailure(ctx, c, err)
+	}
+	// Closing the hijacked connection releases every session lock; it never returns to a pool.
+	conn := acquired.Hijack()
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = conn.Close(closeCtx)
+	}()
+	lockCtx, lockSpan := telemetry.Start(ctx, "migration.lock")
+	started := time.Now()
+	_, err = conn.Exec(lockCtx, `SET statement_timeout='5min'; SET lock_timeout='2s'; SET standard_conforming_strings=on; SELECT pg_catalog.pg_advisory_lock(3110003)`)
+	if err != nil {
+		telemetry.Failure(lockSpan, executionCode(err))
+		lockSpan.End()
+		return s.preflightFailure(ctx, c, err)
+	}
+	lockSpan.End()
+	telemetry.Event(ctx, "target_lock_acquired", "job_id", c.Job.ID, "database_id", c.Job.DatabaseID, "wait_ms", time.Since(started).Milliseconds())
+	targetTx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return s.preflightFailure(ctx, c, err)
+	}
+	defer rollback(targetTx)
+	path, err := internalSearchPath(ctx, targetTx)
+	// Transaction locks cannot be released by migration SQL calling pg_advisory_unlock_all.
+	if err == nil {
+		_, err = targetTx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003)`)
+	}
+	if err == nil {
+		err = protectedHistory(ctx, targetTx)
+	}
+	if err != nil {
+		return s.preflightFailure(ctx, c, err)
+	}
+	result, err := s.reserveJob(ctx, c)
+	if err != nil {
+		return result, err
+	}
+	err = s.validateJob(ctx, targetTx, c)
+	var parts []string
+	if err == nil {
+		parts, err = statements(c.SQL)
+	}
+	if err == nil {
+		err = s.execStatementsWithReceipt(ctx, targetTx, path, parts, c.Job.DatabaseID, c.ExecutionID, result.Version, c.SQL, p.ID)
+	}
+	// Extend and check the lease immediately before COMMIT, including after long SQL.
+	if err == nil {
+		err = jobs.New(s.db).Heartbeat(ctx, c, 30*time.Second)
+	}
+	s.commitAndFinalizeLedger(ctx, targetTx, err, &result)
+	return result, nil
+}
+
+func (s *Service) preflightFailure(ctx context.Context, c *jobs.Claim, cause error) (Result, error) {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	result, err := s.reserveJob(cleanup, c)
+	if err != nil {
+		return result, err
+	}
+	s.commitAndFinalizeLedger(cleanup, nil, cause, &result)
+	return result, nil
+}
+
+func (s *Service) reserveJob(ctx context.Context, c *jobs.Claim) (Result, error) {
+	result := Result{ExecutionID: c.ExecutionID, Status: "running"}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer rollback(tx)
+	var locked int64
+	if err = tx.QueryRow(ctx, `SELECT id FROM database_connections WHERE id=$1 FOR UPDATE`, c.Job.DatabaseID).Scan(&locked); err != nil {
+		return result, err
+	}
+	if err = jobs.CheckOwnedTx(ctx, tx, c); err != nil {
+		return result, err
+	}
+	var pending bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history WHERE database_id=$1 AND status IN ('running','unknown'))`, c.Job.DatabaseID).Scan(&pending); err != nil {
+		return result, err
+	}
+	if pending {
+		return result, errConflict
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO migration_history(database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id,receipt_version)
+ SELECT $1,$2,$3,COALESCE(MAX(version),0)+1,$4,$5,'running',$6,1 FROM migration_history WHERE database_id=$1 RETURNING version`,
+		c.Job.DatabaseID, c.Job.DraftID, c.Job.DraftRevision, c.SQL, c.Job.RequestedBy, c.ExecutionID).Scan(&result.Version)
+	if err != nil {
+		return result, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return result, err
+	}
+	telemetry.Event(ctx, "execution_started", "actor_id", c.Job.RequestedBy, "database_id", c.Job.DatabaseID, "job_id", c.Job.ID, "execution_id", c.ExecutionID, "version", result.Version)
+	return result, nil
+}
+
+func (s *Service) validateJob(ctx context.Context, target pgx.Tx, c *jobs.Claim) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	var locked int64
+	if err = tx.QueryRow(ctx, `SELECT id FROM database_connections WHERE id=$1 FOR UPDATE`, c.Job.DatabaseID).Scan(&locked); err != nil {
+		return err
+	}
+	if err = jobs.CheckOwnedTx(ctx, tx, c); err != nil {
+		return err
+	}
+	var allowed bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users u JOIN user_groups ug ON ug.user_id=u.id
+ JOIN group_database_permissions p ON p.group_id=ug.group_id WHERE u.id=$1 AND u.is_active AND p.database_id=$2 AND p.access_level='edit')`, c.Job.RequestedBy, c.Job.DatabaseID).Scan(&allowed)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return connections.ErrForbidden
+	}
+	if err = bindTarget(ctx, tx, target, c.Job.DatabaseID); err != nil {
+		return err
+	}
+	var revision int64
+	var sql string
+	if err = tx.QueryRow(ctx, `SELECT revision,sql FROM migration_drafts WHERE database_id=$1 AND id=$2 FOR UPDATE`, c.Job.DatabaseID, c.Job.DraftID).Scan(&revision, &sql); err != nil {
+		return err
+	}
+	if revision != c.Job.DraftRevision || sql != c.SQL {
+		return errConflict
+	}
+	review, err := approval.EnsureApprovedTx(ctx, tx, c.Job.DatabaseID, c.Job.DraftID, c.Job.DraftRevision, c.Job.ActionType)
+	if err != nil {
+		return err
+	}
+	if review.ID != c.Job.ReviewID || review.SQLSnapshot != c.SQL || c.Job.ActionType != "up" || c.Job.ExecutionMode != "normal" {
+		return errConflict
+	}
+	return tx.Commit(ctx)
+}
+
+func executionCode(err error) string {
+	var pgerr *pgconn.PgError
+	if errors.As(err, &pgerr) {
+		return pgerr.Code
+	}
+	switch {
+	case errors.Is(err, connections.ErrForbidden), errors.Is(err, auth.ErrUnauthenticated):
+		return "access_revoked"
+	case errors.Is(err, approval.ErrNotApproved), errors.Is(err, approval.ErrLeaderMissing):
+		return "approval_incomplete"
+	case errors.Is(err, errConflict):
+		return "snapshot_changed"
+	case errors.Is(err, errHistorySetup):
+		return "target_history_unprotected"
+	case errors.Is(err, errTargetIdentity):
+		return "target_identity_conflict"
+	case errors.Is(err, connections.ErrMetadataTarget):
+		return "metadata_target_forbidden"
+	case errors.Is(err, connections.ErrTargetUnavailable):
+		return "target_unavailable"
+	case errors.Is(err, jobs.ErrLeaseLost):
+		return "lease_lost"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "execution_timeout"
+	default:
+		return "execution_failed"
+	}
+}
+
+func sqlSpan(ctx context.Context, index int) (context.Context, trace.Span) {
+	return telemetry.Start(ctx, "migration.sql", trace.WithAttributes(attribute.Int("statement.index", index)))
+}

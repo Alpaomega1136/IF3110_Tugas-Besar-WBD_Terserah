@@ -12,8 +12,19 @@ export function parseExecutionResult(result) {
     return result;
 }
 
+export function parseJobResponse(response, databaseID) {
+    const job = response?.job;
+    if (!job || !validVersion(job.id) || job.database_id !== databaseID ||
+        !["queued", "running", "success", "failed", "unknown"].includes(job.status) ||
+        (job.error_code != null && typeof job.error_code !== "string")) {
+        throw new Error("Respons job tidak valid. Periksa History sebelum mengirim ulang.");
+    }
+    return job;
+}
+
 export function executionFeedback(status) {
     switch (status) {
+        case "queued": return { message: "Migration masuk antrean. SQL belum dinyatakan berhasil; worker akan memprosesnya.", isError: false };
         case "success": return { message: "Migration berhasil di-commit. Periksa Viewer dan History untuk memastikan perubahan.", isError: false };
         case "failed": return { message: "Migration gagal dan transaksi telah di-rollback. Lihat error code dan History sebelum memperbaiki draft.", isError: true };
         case "running": return { message: "Migration masih berjalan (belum final). Periksa History; jangan mengirim Execute lagi.", isError: false };

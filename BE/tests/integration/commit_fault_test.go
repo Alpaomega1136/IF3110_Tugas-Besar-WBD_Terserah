@@ -180,7 +180,7 @@ func TestCommitResponseRecovery(t *testing.T) {
 			}
 			path := fmt.Sprintf("%s/drafts/%d/execute", base, d.ID)
 			approveDraft(t, a, editor, target.ID, d.ID, 1)
-			w = editor.request("POST", path, map[string]string{"revision": "1"})
+			w = editor.executeAndWait(t, path, map[string]string{"revision": "1"})
 			status(t, w, 202)
 			var attempt runner.Result
 			if err := json.Unmarshal(w.Body.Bytes(), &attempt); err != nil || attempt.Status != "unknown" {
@@ -205,7 +205,7 @@ func TestCommitResponseRecovery(t *testing.T) {
 			if err = db.QueryRow(context.Background(), "SELECT to_regclass($1) IS NOT NULL", schema+".proof").Scan(&exists); err != nil || exists != after {
 				t.Fatalf("target changes exist=%v after=%v err=%v", exists, after, err)
 			}
-			w = editor.request("POST", path, map[string]string{"revision": "1"})
+			w = editor.executeAndWait(t, path, map[string]string{"revision": "1"})
 			status(t, w, 200)
 			var replay runner.Result
 			if err := json.Unmarshal(w.Body.Bytes(), &replay); err != nil || replay.Status != want || replay.ExecutionID != attempt.ExecutionID {
@@ -320,7 +320,7 @@ func TestRecoveryAfterWaitingForCommit(t *testing.T) {
 			executeDone = make(chan *httptest.ResponseRecorder, 1)
 			go func() {
 				defer close(executeDone)
-				executeDone <- editor.request("POST", fmt.Sprintf("%s/drafts/%d/execute", base, draft.ID), map[string]string{"revision": "1"})
+				executeDone <- editor.executeAndWait(t, fmt.Sprintf("%s/drafts/%d/execute", base, draft.ID), map[string]string{"revision": "1"})
 			}()
 			waitForLock(3110099)
 			recoveryDone = make(chan *httptest.ResponseRecorder, 1)

@@ -1,6 +1,6 @@
 import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
-import { executionFeedback, parseExecutionResult, executeErrorMessage } from "./execution.js";
+import { executionFeedback, parseExecutionResult, parseJobResponse, executeErrorMessage } from "./execution.js";
 import { positiveInt64, parseCursorPage } from "./pagination.js";
 import { initializeSchemaDiff } from "./schema-diff.js";
 import { byId, addCell, formatDate, setBanner, setFieldError, utf8Bytes } from "./ui.js";
@@ -330,6 +330,31 @@ function displayExecutionResult(result) {
     setBanner(executionMessage, feedback.message, feedback.isError);
 }
 
+async function followJob(response) {
+    let job = parseJobResponse(response, databaseId);
+    displayExecutionResult({ status: job.status, version: "-", execution_id: `Job ${job.id}`, error_code: job.error_code });
+    for (let poll = 0; poll < 30; poll++) {
+        if (executionResult.isConnected === false) return;
+        response = await authenticatedRequest(`/api/v1/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(job.id)}`);
+        if (executionResult.isConnected === false) return;
+        const current = parseJobResponse(response, databaseId);
+        if (current.id !== job.id) throw new Error("Identitas job berubah. Periksa History.");
+        job = current;
+        const attempt = response.attempts?.at(-1);
+        if (attempt?.version && !["queued", "running"].includes(job.status)) {
+            displayExecutionResult(parseExecutionResult({
+                execution_id: attempt.execution_id, version: attempt.version,
+                status: job.status, error_code: job.error_code
+            }));
+            return;
+        }
+        displayExecutionResult({ status: job.status, version: "-", execution_id: `Job ${job.id}`, error_code: job.error_code });
+        if (!["queued", "running"].includes(job.status)) return;
+        if (poll < 29) await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    setBanner(executionMessage, `Job ${job.id} masih ${job.status}. Pekerjaan berlanjut di worker; periksa History untuk hasil akhir.`);
+}
+
 async function executeDraft() {
     if (busy || !selectedDraft || isDirty() || lockedExecution === executionKey(selectedDraft)) return;
 
@@ -369,17 +394,21 @@ async function executeDraft() {
         lockedExecution = revisionKey;
         executing = true;
         updateExecutionControls();
-        setBanner(executionMessage, "Permintaan eksekusi dikirim. Menunggu hasil backend...");
+        setBanner(executionMessage, "Mengirim migration ke antrean...");
 
-        const result = parseExecutionResult(await authenticatedRequest(
+        const response = await authenticatedRequest(
             `${apiPath}/${encodeURIComponent(draft.id)}/execute`,
             {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ revision: draft.revision })
             }
-        ));
-        displayExecutionResult(result);
+        );
+        if (response?.job) {
+            await followJob(response);
+        } else {
+            displayExecutionResult(parseExecutionResult(response));
+        }
     } catch (err) {
         if (err.status === 401) {
             redirectToLogin();

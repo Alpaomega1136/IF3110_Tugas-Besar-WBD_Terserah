@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Element, tick } from "./mock-dom.mjs";
 import { clearAuthState } from "../internal/web/static/js/auth.js";
-import { parseExecutionResult, executionFeedback, executeErrorMessage } from "../internal/web/static/js/execution.js";
+import { parseExecutionResult, parseJobResponse, executionFeedback, executeErrorMessage } from "../internal/web/static/js/execution.js";
 
 const databaseID = "9007199254740993";
 const draftID = "9007199254740995";
@@ -79,6 +79,65 @@ async function setup({ access = "edit", selected = true, confirm = true, backend
 }
 
 const executeCalls = (ui) => ui.calls.filter((call) => call.url.endsWith("/execute"));
+
+test("queued jobs keep string IDs and do not claim a committed migration", () => {
+    const job = { id: "9007199254740999", database_id: databaseID, status: "queued", error_code: null };
+    assert.deepEqual(parseJobResponse({ job }, databaseID), job);
+    for (const changed of [{ id: 9007199254740999 }, { database_id: "99" }, { status: "committed" }, { id: "0" }]) {
+        assert.throws(() => parseJobResponse({ job: { ...job, ...changed } }, databaseID), /tidak valid/);
+    }
+    assert.doesNotMatch(executionFeedback("queued").message, /berhasil di-commit/);
+});
+
+test("Execute submits once and polls the job until the worker commits", async () => {
+    let polls = 0;
+    const job = { id: "9007199254740999", database_id: databaseID, status: "queued", error_code: null };
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job, replayed: false }, 202);
+        if (url.endsWith(`/jobs/${job.id}`)) {
+            polls++;
+            return reply({ job: { ...job, status: "success" }, attempts: [{ execution_id: "worker-execution", version: "9" }] });
+        }
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(executeCalls(ui).length, 1);
+    assert.equal(polls, 1);
+    assert.equal(ui.$("draft-result-id").textContent, "worker-execution");
+    assert.match(ui.$("draft-execution-message").textContent, /berhasil di-commit/);
+});
+
+test("job polling failure preserves uncertainty and never resubmits SQL", async () => {
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job: { id: "12", database_id: databaseID, status: "queued" } }, 202);
+        if (url.endsWith("/jobs/12")) return apiError(503, "jobs_unavailable");
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(executeCalls(ui).length, 1);
+    assert.doesNotMatch(ui.$("draft-execution-message").textContent, /berhasil di-commit/);
+    assert.match(ui.$("draft-execution-message").textContent, /Jangan retry otomatis/);
+});
+
+test("a job finishing on the last poll still displays the committed result", async (t) => {
+    const timer = globalThis.setTimeout;
+    t.mock.method(globalThis, "setTimeout", (fn, delay, ...args) => timer(fn, delay === 1000 ? 0 : delay, ...args));
+    let polls = 0;
+    const job = { id: "12", database_id: databaseID, status: "queued", error_code: null };
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job }, 202);
+        if (url.endsWith("/jobs/12")) {
+            polls++;
+            return reply({ job: { ...job, status: polls === 30 ? "success" : "running" },
+                attempts: [{ execution_id: "last-poll-execution", version: "9" }] });
+        }
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(polls, 30);
+    assert.equal(executeCalls(ui).length, 1);
+    assert.match(ui.$("draft-execution-message").textContent, /berhasil di-commit/);
+});
 
 test("BE2 Result requires status, string version, execution ID and valid error_code", () => {
     const valid = { execution_id: "id-1", version: "9007199254740997", status: "unknown", error_code: null };

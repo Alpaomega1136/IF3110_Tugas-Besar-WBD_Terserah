@@ -8,10 +8,11 @@ import (
 )
 
 type Config struct {
-	HTTPAddr    string
-	DatabaseURL string
-	AppOrigin   string
-	SecretKey   []byte
+	HTTPAddr       string
+	DatabaseURL    string
+	AppOrigin      string
+	SecretKey      []byte
+	WorkerEmbedded bool
 }
 
 // LoadAPI requires secrets only for the API, not the metadata migration CLI.
@@ -24,6 +25,26 @@ func LoadAPI() (Config, error) {
 	u, err := url.Parse(c.AppOrigin)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return Config{}, errors.New("APP_ORIGIN must be an http(s) origin without a path")
+	}
+	worker, err := LoadWorker()
+	if err != nil {
+		return Config{}, err
+	}
+	c.SecretKey = worker.SecretKey
+	c.WorkerEmbedded = true
+	if value := os.Getenv("WORKER_EMBEDDED"); value != "" {
+		if value != "true" && value != "false" {
+			return Config{}, errors.New("WORKER_EMBEDDED must be true or false")
+		}
+		c.WorkerEmbedded = value == "true"
+	}
+	return c, nil
+}
+
+func LoadWorker() (Config, error) {
+	c, err := Load()
+	if err != nil {
+		return Config{}, err
 	}
 	c.SecretKey, err = base64.StdEncoding.DecodeString(os.Getenv("TARGET_CREDENTIAL_KEY"))
 	if err != nil || len(c.SecretKey) != 32 {

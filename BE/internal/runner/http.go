@@ -14,6 +14,7 @@ import (
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/httpx"
+	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/policy"
 )
 
@@ -54,15 +55,15 @@ func fail(w http.ResponseWriter, err error) {
 		return
 	}
 	switch {
-	case errors.Is(err, connections.ErrForbidden):
+	case errors.Is(err, connections.ErrForbidden), errors.Is(err, jobs.ErrForbidden):
 		httpx.Error(w, http.StatusForbidden, "forbidden", "Database access denied")
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, pgx.ErrNoRows), errors.Is(err, jobs.ErrNotFound):
 		httpx.Error(w, http.StatusNotFound, "not_found", "Database object not found")
-	case errors.Is(err, errConflict):
+	case errors.Is(err, errConflict), errors.Is(err, jobs.ErrConflict):
 		httpx.Error(w, http.StatusConflict, "execution_conflict", "Reload draft or resolve the pending execution before retrying")
 	case errors.Is(err, approval.ErrNotApproved), errors.Is(err, approval.ErrLeaderMissing):
 		httpx.Error(w, http.StatusConflict, "approval_incomplete", "Approval from current group leaders is required before execution")
-	case errors.Is(err, connections.ErrInvalid), errors.Is(err, errSQL):
+	case errors.Is(err, connections.ErrInvalid), errors.Is(err, errSQL), errors.Is(err, jobs.ErrInvalid):
 		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid ID, revision, title or unsupported SQL")
 	case errors.Is(err, errHistorySetup):
 		httpx.Error(w, http.StatusConflict, "target_history_unprotected", "Provision target history and use a dedicated restricted executor per database")
@@ -169,20 +170,30 @@ func (s *Service) execute(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Leave time for rollback and ledger persistence inside the session's 10s budget.
-	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Second)
-	defer cancel()
-
-	result, err := s.run(ctx, p, dbID, draftID, revision)
+	draft, err := s.getDraft(r.Context(), dbID, draftID)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	code := http.StatusOK
-	if result.Status == "unknown" || result.Status == "running" {
-		code = http.StatusAccepted
+	if draft.Revision != revision {
+		fail(w, errConflict)
+		return
 	}
-	httpx.JSON(w, code, result)
+	if _, err = statements(draft.SQL); err != nil {
+		fail(w, err)
+		return
+	}
+	job, replayed, err := jobs.New(s.db).EnqueueDraft(r.Context(), p, dbID, draftID, revision)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	code := http.StatusAccepted
+	if replayed {
+		code = http.StatusOK
+	}
+	w.Header().Set("Location", "/api/v1/databases/"+strconv.FormatInt(dbID, 10)+"/jobs/"+strconv.FormatInt(job.ID, 10))
+	httpx.JSON(w, code, map[string]any{"job": job, "replayed": replayed})
 }
 
 func (s *Service) explain(w http.ResponseWriter, r *http.Request) {

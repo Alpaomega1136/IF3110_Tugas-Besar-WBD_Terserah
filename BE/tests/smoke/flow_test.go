@@ -136,13 +136,11 @@ func TestProductionHTTPFlow(t *testing.T) {
 		}
 	}
 	approve("1")
-	var success runner.Result
-	editor.call(t, "POST", path+"/execute", map[string]string{"revision": "1"}, 200, &success)
+	success := editor.executeAndWait(t, path+"/execute", "1", false)
 	if success.Status != "success" || success.Version != 1 {
 		t.Fatal("migration did not commit")
 	}
-	var replay runner.Result
-	editor.call(t, "POST", path+"/execute", map[string]string{"revision": "1"}, 200, &replay)
+	replay := editor.executeAndWait(t, path+"/execute", "1", true)
 	if replay.ExecutionID != success.ExecutionID || replay.Status != "success" {
 		t.Fatal("execute replay changed attempt")
 	}
@@ -166,8 +164,7 @@ func TestProductionHTTPFlow(t *testing.T) {
 	editor.call(t, "PATCH", path, map[string]string{"title": "Demo rollback", "sql": badSQL, "revision": "1"}, 200, &draft)
 	editor.call(t, "POST", path+"/execute", map[string]string{"revision": "1"}, 409, nil)
 	approve("2")
-	var failed runner.Result
-	editor.call(t, "POST", path+"/execute", map[string]string{"revision": "2"}, 200, &failed)
+	failed := editor.executeAndWait(t, path+"/execute", "2", false)
 	if failed.Status != "failed" || failed.Version != 2 || failed.ErrorCode == nil || *failed.ErrorCode != "22012" {
 		t.Fatal("migration failure contract changed")
 	}

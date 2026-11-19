@@ -55,7 +55,7 @@ func TestHistoryAndReconciliation(t *testing.T) {
 	execute := func(d runner.Draft) runner.Result {
 		t.Helper()
 		approveDraft(t, a, editor, target.ID, d.ID, 1)
-		w := editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/drafts/%d/execute", target.ID, d.ID), map[string]string{"revision": "1"})
+		w := editor.executeAndWait(t, fmt.Sprintf("/api/v1/databases/%d/drafts/%d/execute", target.ID, d.ID), map[string]string{"revision": "1"})
 		status(t, w, 200)
 		var out runner.Result
 		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
@@ -128,7 +128,7 @@ func TestHistoryAndReconciliation(t *testing.T) {
 	approveDraft(t, a, editor, target.ID, active.ID, 1)
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		done <- editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/drafts/%d/execute", target.ID, active.ID), map[string]string{"revision": "1"})
+		done <- editor.executeAndWait(t, fmt.Sprintf("/api/v1/databases/%d/drafts/%d/execute", target.ID, active.ID), map[string]string{"revision": "1"})
 	}()
 	deadline := time.Now().Add(3 * time.Second)
 	for {

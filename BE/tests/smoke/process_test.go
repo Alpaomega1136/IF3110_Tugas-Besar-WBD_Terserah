@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"terserah/backend/internal/jobs"
+	"terserah/backend/internal/runner"
 	"testing"
 	"time"
 
@@ -113,6 +115,34 @@ func (b *browser) login(t *testing.T, name string) {
 	b.csrf = csrf.Token
 }
 
+func (b *browser) executeAndWait(t *testing.T, path, revision string, replayed bool) runner.Result {
+	t.Helper()
+	var response struct {
+		Job      jobs.Job       `json:"job"`
+		Attempts []jobs.Attempt `json:"attempts"`
+	}
+	want := 202
+	if replayed {
+		want = 200
+	}
+	b.call(t, "POST", path, map[string]string{"revision": revision}, want, &response)
+	jobPath := fmt.Sprintf("/api/v1/databases/%d/jobs/%d", response.Job.DatabaseID, response.Job.ID)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		b.call(t, "GET", jobPath, nil, 200, &response)
+		if response.Job.Status == jobs.Success || response.Job.Status == jobs.Failed || response.Job.Status == jobs.Unknown {
+			if len(response.Attempts) != 1 || response.Attempts[0].Version == nil {
+				t.Fatal("completed job has no execution history")
+			}
+			a := response.Attempts[0]
+			return runner.Result{ExecutionID: a.ExecutionID, Version: *a.Version, Status: string(response.Job.Status), ErrorCode: response.Job.ErrorCode}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("worker did not finish production HTTP job")
+	return runner.Result{}
+}
+
 // Launch all three production entry points against an isolated metadata schema.
 func startAPI(t *testing.T, firstAdminCommand string) (string, string) {
 	t.Helper()
@@ -163,12 +193,16 @@ func startAPI(t *testing.T, firstAdminCommand string) (string, string) {
 	}
 	password := base64.RawURLEncoding.EncodeToString(passwordBytes[:])
 	env := append(os.Environ(), "GOTOOLCHAIN=local", "DATABASE_URL="+u.String(), "HTTP_ADDR="+address, "APP_ORIGIN="+origin, "TARGET_CREDENTIAL_KEY="+base64.StdEncoding.EncodeToString(key[:]), "BOOTSTRAP_USERNAME=demo-admin", "BOOTSTRAP_PASSWORD="+password, "ADMIN_USERNAME=demo-admin", "ADMIN_PASSWORD="+password)
+	env = append(env, "WORKER_EMBEDDED=true", "OTEL_EXPORTER_OTLP_ENDPOINT=", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=")
+	if firstAdminCommand == "bootstrap" {
+		env = append(env, "WORKER_EMBEDDED=false")
+	}
 	bin := t.TempDir()
 	suffix := ""
 	if runtime.GOOS == "windows" {
 		suffix = ".exe"
 	}
-	for _, name := range []string{"migrate", "bootstrap", "seed", "api"} {
+	for _, name := range []string{"migrate", "bootstrap", "seed", "api", "worker"} {
 		buildCtx, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		cmd := exec.CommandContext(buildCtx, "go", "build", "-o", filepath.Join(bin, name+suffix), "./cmd/"+name)
 		cmd.Dir = filepath.Join("..", "..")
@@ -225,6 +259,25 @@ func startAPI(t *testing.T, firstAdminCommand string) (string, string) {
 		}
 	}
 	server := exec.Command(filepath.Join(bin, "api"+suffix))
+	if firstAdminCommand == "bootstrap" {
+		background := exec.Command(filepath.Join(bin, "worker"+suffix))
+		background.Env = env
+		background.Stdout = io.Discard
+		background.Stderr = io.Discard
+		if err = background.Start(); err != nil {
+			t.Fatal("cannot start standalone worker")
+		}
+		workerDone := make(chan struct{})
+		go func() { _ = background.Wait(); close(workerDone) }()
+		t.Cleanup(func() {
+			_ = background.Process.Kill()
+			select {
+			case <-workerDone:
+			case <-time.After(5 * time.Second):
+				t.Error("worker cleanup timed out")
+			}
+		})
+	}
 	server.Env = env
 	server.Stdout = io.Discard
 	server.Stderr = io.Discard

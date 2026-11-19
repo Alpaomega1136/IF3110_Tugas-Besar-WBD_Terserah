@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/connections"
+	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/policy"
 )
 
@@ -209,6 +210,15 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 		`, out.Status, out.ErrorCode, finished, dbID, item.version)
 		if err != nil {
 			return nil, err
+		}
+		if out.Status == "success" || out.Status == "failed" {
+			outcome := jobs.Outcome{Status: jobs.Status(out.Status)}
+			if out.ErrorCode != nil {
+				outcome.ErrorCode = *out.ErrorCode
+			}
+			if err = jobs.ResolveUnknownTx(ctx, meta, out.ExecutionID, outcome); err != nil {
+				return nil, err
+			}
 		}
 		results = append(results, out)
 	}

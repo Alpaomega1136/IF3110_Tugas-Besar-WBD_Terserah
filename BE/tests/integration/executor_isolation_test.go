@@ -40,14 +40,13 @@ func TestExecutorIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 		approveDraft(t, a, editor, target.ID, d.ID, 1)
-		w = editor.request("POST", fmt.Sprintf("%s/%d/execute", base, d.ID), map[string]string{"revision": "1"})
-		status(t, w, want)
+		w = editor.executeAndWait(t, fmt.Sprintf("%s/%d/execute", base, d.ID), map[string]string{"revision": "1"})
+		status(t, w, 200)
 		var result runner.Result
-		if want == 200 {
-			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
-				t.Fatal(err)
-			}
-		} else if !strings.Contains(w.Body.String(), "target_history_unprotected") {
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if want == 409 && (result.Status != "failed" || !strings.Contains(w.Body.String(), "target_history_unprotected")) {
 			t.Fatal("unsafe executor was not diagnosed")
 		}
 		return result

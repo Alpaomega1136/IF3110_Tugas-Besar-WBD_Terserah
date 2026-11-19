@@ -28,6 +28,7 @@ import (
 	"terserah/backend/internal/runner"
 	"terserah/backend/internal/secretbox"
 	"terserah/backend/internal/viewer"
+	"terserah/backend/internal/worker"
 	"terserah/backend/migrations"
 )
 
@@ -43,13 +44,14 @@ func (c *testClock) Now() time.Time          { c.mu.Lock(); defer c.mu.Unlock();
 func (c *testClock) Advance(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.now = c.now.Add(d) }
 
 type m1App struct {
-	db      *pgxpool.Pool
-	http    http.Handler
-	targets *connections.Service
-	clock   *testClock
-	key     []byte
-	users   map[string]int64
-	leaders map[string]*browser
+	db         *pgxpool.Pool
+	http       http.Handler
+	targets    *connections.Service
+	clock      *testClock
+	key        []byte
+	users      map[string]int64
+	leaders    map[string]*browser
+	workerOnce sync.Once
 }
 
 func newM1App(t *testing.T) *m1App {
@@ -129,12 +131,67 @@ type browser struct {
 
 func (a *m1App) browser() *browser { return &browser{app: a, cookies: map[string]*http.Cookie{}} }
 
+// Legacy assertions inspect the final outcome explicitly, through the real asynchronous worker.
+func (b *browser) executeAndWait(t *testing.T, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	b.app.workerOnce.Do(func() {
+		background, err := worker.New(jobs.New(b.app.db), runner.New(b.app.db, b.app.targets, b.app.key), worker.Options{JobTimeout: 7 * time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); background.Run(ctx) }()
+		t.Cleanup(func() { cancel(); <-done })
+	})
+	w := b.request("POST", path, body)
+	if w.Code != 200 && w.Code != 202 {
+		return w
+	}
+	var queued struct {
+		Job jobs.Job `json:"job"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &queued); err != nil || queued.Job.ID < 1 {
+		t.Fatal("missing asynchronous job")
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		var state string
+		if err := b.app.db.QueryRow(context.Background(), `SELECT status FROM migration_jobs WHERE id=$1`, queued.Job.ID).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state == "success" || state == "failed" || state == "unknown" {
+			var result runner.Result
+			err := b.app.db.QueryRow(context.Background(), `SELECT h.execution_id,h.version,h.status,h.error_code FROM migration_job_attempts a JOIN migration_history h ON h.execution_id=a.execution_id WHERE a.job_id=$1 ORDER BY a.attempt_no DESC LIMIT 1`, queued.Job.ID).Scan(&result.ExecutionID, &result.Version, &result.Status, &result.ErrorCode)
+			if err != nil {
+				t.Fatal("job has no history outcome", err)
+			}
+			out := httptest.NewRecorder()
+			if state == "unknown" {
+				out.WriteHeader(202)
+			} else {
+				out.WriteHeader(200)
+			}
+			_ = json.NewEncoder(out).Encode(result)
+			return out
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("asynchronous migration did not finish")
+	return nil
+}
+
 func (b *browser) request(method, path string, body any) *httptest.ResponseRecorder {
+	return b.requestContext(context.Background(), method, path, body)
+}
+
+func (b *browser) requestContext(ctx context.Context, method, path string, body any) *httptest.ResponseRecorder {
 	var payload []byte
 	if body != nil {
 		payload, _ = json.Marshal(body)
 	}
 	r := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	r = r.WithContext(ctx)
 	r.Header.Set("Origin", testOrigin)
 	r.Header.Set("X-CSRF-Token", b.csrf)
 	for _, c := range b.cookies {

@@ -19,7 +19,9 @@ import (
 	"terserah/backend/internal/httpapi"
 	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/runner"
+	"terserah/backend/internal/telemetry"
 	"terserah/backend/internal/viewer"
+	"terserah/backend/internal/worker"
 )
 
 func main() {
@@ -38,6 +40,15 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	shutdownTrace, err := telemetry.Init(ctx, "terserah-api")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTrace(cleanup)
+	}()
 	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	pool, err := database.Open(connectCtx, cfg.DatabaseURL)
@@ -53,13 +64,25 @@ func run() error {
 	if err != nil {
 		return errors.New("cannot initialize target connections")
 	}
+	executor := runner.New(pool, targets, cfg.SecretKey)
+	queue := jobs.New(pool)
+	if cfg.WorkerEmbedded {
+		background, err := worker.New(queue, executor, worker.Options{})
+		if err != nil {
+			return err
+		}
+		workerCtx, cancelWorker := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); background.Run(workerCtx) }()
+		defer func() { cancelWorker(); <-done }()
+	}
 	handler := httpapi.New(pool, sessions.Register, func(mux *http.ServeMux) {
 		targets.Register(mux, sessions)
 		viewer.New(targets).Register(mux, sessions)
-		runner.New(pool, targets, cfg.SecretKey).Register(mux, sessions)
+		executor.Register(mux, sessions)
 		admin.NewService(admin.NewPostgresStore(pool), nil).Register(mux, sessions)
 		approval.NewService(approval.NewPostgresStore(pool), nil).Register(mux, sessions)
-		jobs.New(pool).Register(mux, sessions)
+		queue.Register(mux, sessions)
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	result := make(chan error, 1)

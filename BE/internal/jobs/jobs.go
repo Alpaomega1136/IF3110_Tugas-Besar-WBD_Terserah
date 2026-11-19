@@ -54,6 +54,7 @@ type Job struct {
 
 type Attempt struct {
 	ExecutionID string     `json:"execution_id"`
+	Version     *int64     `json:"version,string,omitempty"`
 	Number      int        `json:"attempt_no"`
 	Status      Status     `json:"status"`
 	StartedAt   time.Time  `json:"started_at"`

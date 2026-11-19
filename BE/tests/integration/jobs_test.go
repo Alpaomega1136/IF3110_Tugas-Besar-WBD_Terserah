@@ -143,8 +143,8 @@ func TestJobsAPI(t *testing.T) {
 	if err != nil || read.ID != queued.Job.ID || len(attempts) != 0 {
 		t.Fatal("job did not survive service reconstruction")
 	}
-	// The interim synchronous endpoint cannot execute a queued revision again.
-	status(t, f.editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/drafts/%d/execute", f.first, d.ID), map[string]string{"revision": "1"}), 409)
+	// Execute now reuses the same queue entry; it cannot execute queued SQL inline.
+	status(t, f.editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/drafts/%d/execute", f.first, d.ID), map[string]string{"revision": "1"}), 200)
 	if _, err = f.a.db.Exec(ctx, `UPDATE migration_jobs SET sql_snapshot='SELECT 99' WHERE id=$1`, queued.Job.ID); err == nil {
 		t.Fatal("job SQL snapshot was mutable")
 	}
@@ -349,8 +349,11 @@ func TestJobsRejectStaleOrExecutedReviews(t *testing.T) {
 	if _, err := f.a.db.Exec(ctx, `UPDATE users SET is_active=true WHERE id=$1`, f.actor.ID); err != nil {
 		t.Fatal(err)
 	}
-	w := f.editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/drafts/%d/execute", f.first, d.ID), map[string]string{"revision": "1"})
-	status(t, w, 200)
+	// Represent an existing Milestone 1 execution, before the queue was introduced.
+	if _, err := f.a.db.Exec(ctx, `INSERT INTO migration_history(database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id,receipt_version)
+ VALUES($1,$2,1,1,'SELECT 4',$3,'success','00000000000000000000000000000001',1)`, f.first, d.ID, f.actor.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, _, err := f.service.Enqueue(ctx, f.actor, f.first, reviewID, ""); !errors.Is(err, jobs.ErrConflict) {
 		t.Fatal("already executed revision was queued again")
 	}

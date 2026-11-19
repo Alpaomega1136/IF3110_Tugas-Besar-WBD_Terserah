@@ -6,14 +6,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"log/slog"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/trace"
 	"terserah/backend/internal/approval"
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/policy"
+	"terserah/backend/internal/telemetry"
 )
 
 const jobColumns = `id,database_id,review_id,draft_id,draft_revision,action_type,execution_mode,
@@ -52,6 +53,11 @@ func (s *Service) authorize(ctx context.Context, p auth.Principal, dbID int64, w
 
 // Enqueue binds one approved review to one immutable job in the same transaction.
 func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID int64, parent string) (Job, bool, error) {
+	ctx, span := telemetry.Start(ctx, "migration.enqueue", trace.WithSpanKind(trace.SpanKindProducer))
+	defer span.End()
+	if current := telemetry.Parent(ctx); current != "" {
+		parent = current
+	}
 	if reviewID < 1 {
 		return Job{}, false, ErrInvalid
 	}
@@ -141,7 +147,7 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 	if err = tx.Commit(ctx); err != nil {
 		return Job{}, false, err
 	}
-	slog.InfoContext(ctx, "migration_job_queued", "event", "job_queued", "actor_id", p.ID, "database_id", dbID, "job_id", j.ID, "review_id", reviewID, "status", j.Status)
+	telemetry.Event(ctx, "job_queued", "actor_id", p.ID, "database_id", dbID, "job_id", j.ID, "review_id", reviewID, "status", j.Status)
 	return j, false, nil
 }
 
@@ -199,8 +205,8 @@ func (s *Service) Get(ctx context.Context, p auth.Principal, dbID, jobID int64) 
 	if err != nil {
 		return Job{}, nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT execution_id,attempt_no,status,started_at,finished_at,error_code
- FROM migration_job_attempts WHERE job_id=$1 ORDER BY attempt_no`, jobID)
+	rows, err := tx.Query(ctx, `SELECT a.execution_id,h.version,a.attempt_no,a.status,a.started_at,a.finished_at,a.error_code
+ FROM migration_job_attempts a LEFT JOIN migration_history h ON h.execution_id=a.execution_id WHERE a.job_id=$1 ORDER BY a.attempt_no`, jobID)
 	if err != nil {
 		return Job{}, nil, err
 	}
@@ -208,7 +214,7 @@ func (s *Service) Get(ctx context.Context, p auth.Principal, dbID, jobID int64) 
 	items := []Attempt{}
 	for rows.Next() {
 		var a Attempt
-		if err = rows.Scan(&a.ExecutionID, &a.Number, &a.Status, &a.StartedAt, &a.FinishedAt, &a.ErrorCode); err != nil {
+		if err = rows.Scan(&a.ExecutionID, &a.Version, &a.Number, &a.Status, &a.StartedAt, &a.FinishedAt, &a.ErrorCode); err != nil {
 			return Job{}, nil, err
 		}
 		items = append(items, a)
@@ -296,7 +302,7 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	slog.InfoContext(ctx, "migration_job_claimed", "event", "job_claimed", "actor_id", j.RequestedBy, "database_id", dbID, "job_id", j.ID, "execution_id", c.ExecutionID, "attempt", j.AttemptCount, "status", j.Status)
+	telemetry.Event(telemetry.Restore(ctx, parent), "job_claimed", "actor_id", j.RequestedBy, "database_id", dbID, "job_id", j.ID, "execution_id", c.ExecutionID, "attempt", j.AttemptCount, "status", j.Status)
 	return c, nil
 }
 
@@ -355,6 +361,21 @@ func (s *Service) Finish(ctx context.Context, c *Claim, out Outcome) error {
 	if err != nil {
 		return err
 	}
+	// Recovery may verify COMMIT between executor return and this finalization.
+	if out.Status == Unknown {
+		var state Status
+		var code *string
+		err = tx.QueryRow(ctx, `SELECT status,error_code FROM migration_history WHERE execution_id=$1`, c.ExecutionID).Scan(&state, &code)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if err == nil && (state == Success || state == Failed) {
+			out = Outcome{Status: state}
+			if code != nil {
+				out.ErrorCode = *code
+			}
+		}
+	}
 	result, err := tx.Exec(ctx, `UPDATE migration_job_attempts a SET status=$3,error_code=NULLIF($4,''),finished_at=clock_timestamp()
  WHERE job_id=$1 AND execution_id=$2 AND status='running'
  AND attempt_no=(SELECT attempt_count FROM migration_jobs WHERE id=$1)`, c.Job.ID, c.ExecutionID, out.Status, out.ErrorCode)
@@ -373,6 +394,60 @@ func (s *Service) Finish(ctx context.Context, c *Claim, out Outcome) error {
 	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
-	slog.InfoContext(ctx, "migration_job_finished", "event", "job_finished", "actor_id", c.Job.RequestedBy, "database_id", c.Job.DatabaseID, "job_id", c.Job.ID, "execution_id", c.ExecutionID, "attempt", c.Job.AttemptCount, "status", out.Status, "error_code", out.ErrorCode)
+	telemetry.Event(ctx, "job_finished", "actor_id", c.Job.RequestedBy, "database_id", c.Job.DatabaseID, "job_id", c.Job.ID, "execution_id", c.ExecutionID, "attempt", c.Job.AttemptCount, "status", out.Status, "error_code", out.ErrorCode)
 	return nil
+}
+
+// CheckOwnedTx fences executor metadata changes against the current immutable claim.
+func CheckOwnedTx(ctx context.Context, tx pgx.Tx, c *Claim) error {
+	if !validClaim(c) {
+		return ErrInvalid
+	}
+	var id int64
+	err := tx.QueryRow(ctx, `SELECT j.id FROM migration_jobs j WHERE j.id=$1 AND j.status='running' AND j.worker_id=$2
+ AND j.lease_token_hash=$3 AND j.lease_expires_at>clock_timestamp() AND j.database_id=$5 AND j.review_id=$6
+ AND j.draft_id=$7 AND j.draft_revision=$8 AND j.requested_by=$9 AND j.sql_snapshot=$10
+ AND EXISTS(SELECT 1 FROM migration_job_attempts a WHERE a.job_id=j.id AND a.execution_id=$4 AND a.attempt_no=j.attempt_count AND a.status='running') FOR UPDATE`,
+		c.Job.ID, c.WorkerID, leaseHash(c.LeaseToken), c.ExecutionID, c.Job.DatabaseID, c.Job.ReviewID, c.Job.DraftID, c.Job.DraftRevision, c.Job.RequestedBy, c.SQL).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrLeaseLost
+	}
+	return err
+}
+
+func (s *Service) EnqueueDraft(ctx context.Context, p auth.Principal, dbID, draftID, revision int64) (Job, bool, error) {
+	if err := s.authorize(ctx, p, dbID, true); err != nil {
+		return Job{}, false, err
+	}
+	var reviewID int64
+	err := s.db.QueryRow(ctx, `SELECT id FROM migration_reviews WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3
+ AND action_type='up' AND status IN ('approved','queued') ORDER BY id DESC LIMIT 1`, dbID, draftID, revision).Scan(&reviewID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Job{}, false, approval.ErrNotApproved
+	}
+	if err != nil {
+		return Job{}, false, err
+	}
+	return s.Enqueue(ctx, p, dbID, reviewID, telemetry.Parent(ctx))
+}
+
+// ResolveUnknownTx is called only after the target lock and verified receipt prove the outcome.
+func ResolveUnknownTx(ctx context.Context, tx pgx.Tx, execution string, out Outcome) error {
+	if !validOutcome(out) || (out.Status != Success && out.Status != Failed) {
+		return ErrInvalid
+	}
+	var jobID int64
+	err := tx.QueryRow(ctx, `SELECT j.id FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id
+ WHERE a.execution_id=$1 AND a.attempt_no=j.attempt_count AND j.status='unknown' FOR UPDATE OF j`, execution).Scan(&jobID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE migration_job_attempts SET status=$2,error_code=NULLIF($3,''),finished_at=clock_timestamp() WHERE execution_id=$1 AND status='unknown'`, execution, out.Status, out.ErrorCode); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE migration_jobs SET status=$2,error_code=NULLIF($3,''),finished_at=clock_timestamp() WHERE id=$1`, jobID, out.Status, out.ErrorCode)
+	return err
 }

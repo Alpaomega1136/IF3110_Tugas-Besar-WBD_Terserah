@@ -2,8 +2,6 @@ package runner
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -11,10 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"terserah/backend/internal/approval"
-	"terserah/backend/internal/auth"
 	"terserah/backend/internal/connections"
-	"terserah/backend/internal/policy"
+	"terserah/backend/internal/telemetry"
 )
 
 type Service struct {
@@ -55,187 +51,32 @@ type Result struct {
 var errConflict = errors.New("draft revision changed or an unresolved execution exists")
 
 func rollback(tx pgx.Tx) {
+	if tx == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_ = tx.Rollback(ctx)
 }
 
-// run orchestrates a migration across the Target DB and Metadata DB:
-//  1. Lock target DB via advisory lock and verify `_terserah` receipt protection.
-//  2. Record a 'running' attempt in Metadata DB (`migration_history`).
-//  3. Execute migration SQL statements + insert HMAC receipt in one Target DB transaction.
-//  4. Commit Target DB and update `migration_history` status in Metadata DB.
-func (s *Service) run(ctx context.Context, p auth.Principal, dbID, draftID, revision int64) (Result, error) {
-	var result Result
-
-	pool, err := s.targets.OpenTarget(ctx, p, dbID, true)
-	if err != nil {
-		return result, err
-	}
-	defer pool.Close()
-
-	targetTx, userPath, err := s.lockAndValidateTarget(ctx, pool, p.ID, dbID)
-	if err != nil {
-		return result, err
-	}
-	defer rollback(targetTx)
-
-	sqlText, parts, replayed, err := s.recordRunningAttempt(ctx, targetTx, p.ID, dbID, draftID, revision, &result)
-	if err != nil || replayed {
-		return result, err
-	}
-
-	execErr := s.execStatementsWithReceipt(ctx, targetTx, userPath, parts, dbID, result.ExecutionID, result.Version, sqlText, p.ID)
-	s.commitAndFinalizeLedger(ctx, targetTx, execErr, &result)
-	return result, nil
-}
-
-func (s *Service) lockAndValidateTarget(ctx context.Context, pool *pgxpool.Pool, userID, dbID int64) (pgx.Tx, string, error) {
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return nil, "", err
-	}
-	// A transaction-scoped advisory lock serializes all runner requests on this target.
-	_, err = tx.Exec(ctx, `SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='2s'; SET LOCAL standard_conforming_strings=on`)
-	if err != nil {
-		rollback(tx)
-		return nil, "", err
-	}
-	userPath, err := internalSearchPath(ctx, tx)
-	if err != nil {
-		rollback(tx)
-		return nil, "", err
-	}
-	if _, err = tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003)`); err != nil {
-		rollback(tx)
-		return nil, "", err
-	}
-	access, err := policy.DatabaseAccess(ctx, s.db, userID, dbID)
-	if err != nil {
-		rollback(tx)
-		return nil, "", err
-	}
-	if !policy.Allows(access, true) {
-		rollback(tx)
-		return nil, "", connections.ErrForbidden
-	}
-	if err = protectedHistory(ctx, tx); err != nil {
-		rollback(tx)
-		return nil, "", err
-	}
-	return tx, userPath, nil
-}
-
-func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, userID, dbID, draftID, revision int64, result *Result) (string, []string, bool, error) {
-	meta, err := s.db.Begin(ctx)
-	if err != nil {
-		return "", nil, false, err
-	}
-	defer rollback(meta)
-
-	var locked int64
-	if err = meta.QueryRow(ctx, `SELECT id FROM database_connections WHERE id = $1 FOR UPDATE`, dbID).Scan(&locked); err != nil {
-		return "", nil, false, err
-	}
-	if err = bindTarget(ctx, meta, targetTx, dbID); err != nil {
-		return "", nil, false, err
-	}
-
-	var sqlText string
-	var actualRevision int64
-	err = meta.QueryRow(ctx, `
-		SELECT sql, revision
-		FROM migration_drafts
-		WHERE database_id = $1 AND id = $2
-		FOR UPDATE
-	`, dbID, draftID).Scan(&sqlText, &actualRevision)
-	if err != nil {
-		return "", nil, false, err
-	}
-	if actualRevision != revision {
-		return "", nil, false, errConflict
-	}
-
-	// Idempotent replay: if this exact (draft_id, draft_revision) already has a history entry, return it.
-	err = meta.QueryRow(ctx, `
-		SELECT execution_id, version, status, error_code
-		FROM migration_history
-		WHERE database_id = $1 AND draft_id = $2 AND draft_revision = $3
-	`, dbID, draftID, revision).Scan(&result.ExecutionID, &result.Version, &result.Status, &result.ErrorCode)
-	if err == nil {
-		return "", nil, true, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return "", nil, false, err
-	}
-
-	var hasPending bool
-	err = meta.QueryRow(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM migration_history
-			WHERE database_id = $1 AND status IN ('running', 'unknown')
-		)
-	`, dbID).Scan(&hasPending)
-	if err != nil {
-		return "", nil, false, err
-	}
-	if hasPending {
-		return "", nil, false, errConflict
-	}
-	// Prevent synchronous re-execution of queued work during the asynchronous rollout.
-	var queued bool
-	err = meta.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs WHERE database_id=$1
- AND ((draft_id=$2 AND draft_revision=$3) OR status IN ('running','unknown')))`, dbID, draftID, revision).Scan(&queued)
-	if err != nil {
-		return "", nil, false, err
-	}
-	if queued {
-		return "", nil, false, errConflict
-	}
-	if _, err = approval.EnsureApprovedTx(ctx, meta, dbID, draftID, revision, "up"); err != nil {
-		return "", nil, false, err
-	}
-
-	parts, err := statements(sqlText)
-	if err != nil {
-		return "", nil, false, err
-	}
-
-	var token [16]byte
-	if _, err = rand.Read(token[:]); err != nil {
-		return "", nil, false, err
-	}
-	result.ExecutionID = hex.EncodeToString(token[:])
-	result.Status = "running"
-
-	err = meta.QueryRow(ctx, `
-		INSERT INTO migration_history (
-			database_id, draft_id, draft_revision, version, sql,
-			executed_by, status, execution_id, receipt_version
-		)
-		SELECT $1, $2, $3, COALESCE(MAX(version), 0) + 1, $4, $5, 'running', $6, 1
-		FROM migration_history
-		WHERE database_id = $1
-		RETURNING version
-	`, dbID, draftID, revision, sqlText, userID, result.ExecutionID).Scan(&result.Version)
-	if err != nil {
-		return "", nil, false, err
-	}
-	if err = meta.Commit(ctx); err != nil {
-		return "", nil, false, err
-	}
-	return sqlText, parts, false, nil
-}
-
 func (s *Service) execStatementsWithReceipt(ctx context.Context, targetTx pgx.Tx, userPath string, parts []string, dbID int64, executionID string, version int64, sqlText string, actorID int64) error {
 	_, err := targetTx.Exec(ctx, `SELECT pg_catalog.set_config('search_path', $1, true)`, userPath)
-	for _, part := range parts {
+	for index, part := range parts {
 		if err != nil {
 			break
 		}
 		// pgx.Tx.Exec falls back to simple protocol for parameterless SQL.
 		// ExecParams forces one server-parsed command and discards returned rows.
-		_, err = targetTx.Conn().PgConn().ExecParams(ctx, part, nil, nil, nil, nil).Close()
+		statementCtx, span := sqlSpan(ctx, index+1)
+		started := time.Now()
+		_, err = targetTx.Conn().PgConn().ExecParams(statementCtx, part, nil, nil, nil, nil).Close()
+		code := ""
+		if err != nil {
+			code = executionCode(err)
+			telemetry.Failure(span, code)
+		}
+		telemetry.Event(statementCtx, "sql_executed", "actor_id", actorID, "database_id", dbID, "execution_id", executionID, "statement_index", index+1, "duration_ms", time.Since(started).Milliseconds(), "error_code", code)
+		span.End()
 	}
 	if err == nil {
 		_, err = targetTx.Exec(ctx, `SET LOCAL search_path=pg_catalog,pg_temp`)
@@ -251,16 +92,12 @@ func (s *Service) execStatementsWithReceipt(ctx context.Context, targetTx pgx.Tx
 }
 
 func (s *Service) commitAndFinalizeLedger(ctx context.Context, targetTx pgx.Tx, execErr error, result *Result) {
+	ctx, span := telemetry.Start(ctx, "migration.finalize")
+	defer span.End()
 	if execErr != nil {
 		rollback(targetTx)
 		result.Status = "failed"
-		code := "execution_failed"
-		var pgerr *pgconn.PgError
-		if errors.As(execErr, &pgerr) {
-			code = pgerr.Code
-		} else if ctx.Err() != nil {
-			code = "execution_timeout"
-		}
+		code := executionCode(execErr)
 		result.ErrorCode = &code
 	} else if commitErr := targetTx.Commit(ctx); commitErr != nil {
 		var pgerr *pgconn.PgError
@@ -284,16 +121,20 @@ func (s *Service) commitAndFinalizeLedger(ctx context.Context, targetTx pgx.Tx, 
 
 	cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err := s.db.Exec(cleanup, `
+	updated, err := s.db.Exec(cleanup, `
 		UPDATE migration_history
 		SET status = $1,
 		    error_code = $2,
 		    finished_at = CASE WHEN $1 IN ('success', 'failed') THEN now() ELSE NULL END
 		WHERE execution_id = $3 AND status IN ('running', 'unknown')
 	`, result.Status, result.ErrorCode, result.ExecutionID)
-	if err != nil {
+	if err != nil || updated.RowsAffected() != 1 {
 		result.Status = "unknown"
 		code := "ledger_unavailable"
 		result.ErrorCode = &code
+	}
+	telemetry.Event(ctx, "execution_finished", "execution_id", result.ExecutionID, "version", result.Version, "status", result.Status, "error_code", result.ErrorCode)
+	if result.ErrorCode != nil {
+		telemetry.Failure(span, *result.ErrorCode)
 	}
 }
