@@ -154,7 +154,7 @@ func TestAdminUsersPage(t *testing.T) {
 		`id="create-password"`,
 		`aria-describedby="create-password-help create-password-error"`,
 		`aria-describedby="edit-password-help edit-password-error"`,
-		"Gunakan 12–1024 huruf",
+		"Minimal 12 karakter",
 		`id="users-section"`,
 		`/static/js/users.js`,
 		`id="edit-user-form"`,

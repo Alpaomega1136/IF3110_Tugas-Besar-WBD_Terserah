@@ -84,23 +84,23 @@ test("reconcile response parser requires real version, status and error_code", (
 test("history list uses cursor and returns to previous page; no numeric precision loss", async () => {
     const ui = await setupHistory();
     assert.equal(ui.$("history-list-body").children.length, 50);
-    assert.equal(ui.$("history-page-number").textContent, "Halaman 1");
+    assert.equal(ui.$("history-page-number").textContent, "1");
     assert.equal(ui.$("history-prev").disabled, true);
     assert.equal(ui.$("history-next").disabled, false);
     assert.match(ui.$("history-list-body").children[0].textContent, /9007199254741199/);
     assert.match(ui.$("history-list-body").children[0].textContent, /exec-0/);
     assert.match(ui.$("history-pending-notice").textContent, /belum final/);
     await ui.$("history-next").fire("click");
-    assert.equal(ui.$("history-page-number").textContent, "Halaman 2");
+    assert.equal(ui.$("history-page-number").textContent, "2");
     assert.equal(ui.$("history-next").disabled, true);
     assert.equal(ui.$("history-prev").disabled, false);
     assert.equal(ui.$("history-list-body").children.length, 1);
     assert.equal(ui.$("history-list-body").children[0].children[4].textContent, "22012");
     await ui.$("history-prev").fire("click");
-    assert.equal(ui.$("history-page-number").textContent, "Halaman 1");
+    assert.equal(ui.$("history-page-number").textContent, "1");
     assert.equal(ui.calls.filter((c) => c.url === `${api}?limit=50`).length, 2);
     await ui.$("history-refresh").fire("click");
-    assert.equal(ui.$("history-page-number").textContent, "Halaman 1");
+    assert.equal(ui.$("history-page-number").textContent, "1");
 });
 
 test("history detail loads SQL only after click and renders hostile strings as text", async () => {
@@ -219,13 +219,13 @@ test("draft pages follow next_after cursor and retain exact string IDs, includin
     assert.equal(ui.$("draft-list-body").children.length, 50);
     assert.equal(ui.$("draft-next").disabled, false);
     await ui.$("draft-next").fire("click");
-    assert.equal(ui.$("draft-page-number").textContent, "Halaman 2");
+    assert.equal(ui.$("draft-page-number").textContent, "2");
     assert.equal(ui.$("draft-list-body").children.length, 1);
     assert.equal(ui.$("draft-list-body").children[0].children[0].textContent, String(v0 + 50n));
     assert.equal(ui.$("draft-next").disabled, true);
     await ui.$("draft-prev").fire("click");
     assert.equal(ui.$("draft-list-body").children.length, 50);
-    assert.equal(ui.$("draft-page-number").textContent, "Halaman 1");
+    assert.equal(ui.$("draft-page-number").textContent, "1");
 });
 
 test("draft pagination errors are displayed without opening imaginary rows", async () => {

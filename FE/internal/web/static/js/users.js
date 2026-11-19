@@ -47,6 +47,23 @@ function validPasswordBytes(password) {
     return len >= 12 && len <= 1024;
 }
 
+function makeBadge(text, modifier) {
+    const span = document.createElement("span");
+    span.className = `user-badge user-badge--${modifier}`;
+    span.textContent = text;
+    return span;
+}
+
+function makeMetaItem(label, value) {
+    const span = document.createElement("span");
+    span.className = "users-meta-item";
+    span.textContent = `${label}: `;
+    const strong = document.createElement("strong");
+    strong.textContent = String(value);
+    span.appendChild(strong);
+    return span;
+}
+
 function renderUserRow(item) {
     const row = document.createElement("li");
     row.className = "users-list-item";
@@ -54,18 +71,40 @@ function renderUserRow(item) {
     const details = document.createElement("div");
     details.className = "users-list-details";
 
+    const header = document.createElement("div");
+    header.className = "users-item-header";
+
     const name = document.createElement("strong");
+    name.className = "users-item-name";
     name.textContent = item.username;
 
-    const role = document.createElement("p");
-    role.textContent = `${item.is_platform_admin ? "Platform Admin" : "User"} · ${item.is_active ? "Aktif" : "Nonaktif"}`;
+    const badges = document.createElement("div");
+    badges.className = "users-item-badges";
+    if (item.is_platform_admin) {
+        badges.appendChild(makeBadge("Platform Admin", "admin"));
+    } else {
+        badges.appendChild(makeBadge("User", "user"));
+    }
+    if (item.is_active) {
+        badges.appendChild(makeBadge("Aktif", "active"));
+    } else {
+        badges.appendChild(makeBadge("Nonaktif", "inactive"));
+    }
 
-    const meta = document.createElement("p");
-    const groupCount = Array.isArray(item.group_ids) ? item.group_ids.length : "-";
-    meta.textContent = `ID ${item.id} · Group: ${groupCount} · Dibuat: ${formatDate(item.created_at)}`;
+    header.appendChild(name);
+    header.appendChild(badges);
 
-    details.appendChild(name);
-    details.appendChild(role);
+    const meta = document.createElement("div");
+    meta.className = "users-item-meta";
+    let groupCount = "-";
+    if (Array.isArray(item.group_ids)) {
+        groupCount = item.group_ids.length;
+    }
+    meta.appendChild(makeMetaItem("ID", item.id));
+    meta.appendChild(makeMetaItem("Group", groupCount));
+    meta.appendChild(makeMetaItem("Dibuat", formatDate(item.created_at)));
+
+    details.appendChild(header);
     details.appendChild(meta);
 
     const editButton = document.createElement("button");

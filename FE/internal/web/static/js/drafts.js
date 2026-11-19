@@ -75,7 +75,7 @@ let nextCursor = null;
 
 function updatePagination() {
     pagination.hidden = workspace.hidden;
-    pageNumber.textContent = `Halaman ${currentPage + 1}`;
+    pageNumber.textContent = String(currentPage + 1);
     prevButton.disabled = busy || currentPage === 0;
     nextButton.disabled = busy || !hasMore;
 }
@@ -359,7 +359,7 @@ async function executeDraft() {
                 "Periksa SQL tersimpan di bagian Detail Draft. Eksekusi mengubah database target. " +
                 "SQL gagal akan di-rollback oleh backend. Lanjutkan?",
             confirmLabel: "Execute Migration",
-            tone: "danger"
+            tone: "warning"
         });
         if (!confirmed) {
             setBanner(executionMessage, "Eksekusi dibatalkan. Tidak ada SQL dijalankan.");
