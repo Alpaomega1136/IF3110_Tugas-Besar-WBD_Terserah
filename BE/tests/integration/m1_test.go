@@ -24,6 +24,7 @@ import (
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/database"
 	"terserah/backend/internal/httpapi"
+	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/runner"
 	"terserah/backend/internal/secretbox"
 	"terserah/backend/internal/viewer"
@@ -104,6 +105,7 @@ func newM1App(t *testing.T) *m1App {
 		runner.New(db, app.targets, app.key).Register(mux, sessions)
 		adminapi.NewService(adminapi.NewPostgresStore(db), app.clock.Now).Register(mux, sessions)
 		approval.NewService(approval.NewPostgresStore(db), app.clock.Now).Register(mux, sessions)
+		jobs.New(db).Register(mux, sessions)
 	})
 	hash, err := auth.HashPassword(testPassword)
 	if err != nil {

@@ -182,6 +182,16 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 	if hasPending {
 		return "", nil, false, errConflict
 	}
+	// Prevent synchronous re-execution of queued work during the asynchronous rollout.
+	var queued bool
+	err = meta.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs WHERE database_id=$1
+ AND ((draft_id=$2 AND draft_revision=$3) OR status IN ('running','unknown')))`, dbID, draftID, revision).Scan(&queued)
+	if err != nil {
+		return "", nil, false, err
+	}
+	if queued {
+		return "", nil, false, errConflict
+	}
 	if _, err = approval.EnsureApprovedTx(ctx, meta, dbID, draftID, revision, "up"); err != nil {
 		return "", nil, false, err
 	}

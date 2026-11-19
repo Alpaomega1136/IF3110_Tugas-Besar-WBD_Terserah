@@ -17,6 +17,7 @@ import (
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/database"
 	"terserah/backend/internal/httpapi"
+	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/runner"
 	"terserah/backend/internal/viewer"
 )
@@ -58,6 +59,7 @@ func run() error {
 		runner.New(pool, targets, cfg.SecretKey).Register(mux, sessions)
 		admin.NewService(admin.NewPostgresStore(pool), nil).Register(mux, sessions)
 		approval.NewService(approval.NewPostgresStore(pool), nil).Register(mux, sessions)
+		jobs.New(pool).Register(mux, sessions)
 	})
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	result := make(chan error, 1)
