@@ -73,9 +73,20 @@ function renderGrants() {
             const row = document.createElement("tr");
             addCell(row, group.name);
             addCell(row, connectionName(id));
-            addCell(row, grant.access_level === "edit" ? "View + Edit" : "View Only");
+
+            const accessCell = document.createElement("td");
+            const badge = document.createElement("span");
+            badge.className = "access-badge access-badge--view";
+            badge.textContent = "View Only";
+            if (grant.access_level === "edit") {
+                badge.className = "access-badge access-badge--edit";
+                badge.textContent = "View + Edit";
+            }
+            accessCell.appendChild(badge);
+            row.appendChild(accessCell);
 
             const actions = document.createElement("td");
+            actions.className = "grant-actions";
             const edit = document.createElement("button");
             edit.type = "button";
             edit.className = "grant-action";

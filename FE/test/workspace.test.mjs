@@ -73,7 +73,7 @@ async function setupGrants({ admin = true, connections = [connection], groups = 
 async function setupDashboard({ admin = false, databases = [{ ...connection, access: "view" }], custom } = {}) {
     clearAuthState();
     const ui = installDOM([
-        "dashboard-status", "dashboard-content", "welcome-username", "account-role", "admin-nav", "logout-button", "navigation-status",
+        "dashboard-status", "dashboard-content", "welcome-username", "admin-nav", "logout-button", "navigation-status",
         "databases-status", "databases-error", "databases-empty", "databases-table", "databases-body"
     ]);
     const calls = [];

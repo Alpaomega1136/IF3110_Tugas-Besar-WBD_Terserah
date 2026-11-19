@@ -5,7 +5,6 @@ import { byId, addCell } from "./ui.js";
 const status = byId("dashboard-status");
 const content = byId("dashboard-content");
 const username = byId("welcome-username");
-const role = byId("account-role");
 const databasesStatus = byId("databases-status");
 const databasesError = byId("databases-error");
 const databasesEmpty = byId("databases-empty");
@@ -137,7 +136,6 @@ async function loadDashboard() {
         const user = await requireAuthenticatedUser();
         if (!user) return;
         username.textContent = user.username;
-        role.textContent = user.is_platform_admin ? "Platform Admin" : "Pengguna";
         if (adminShortcuts) adminShortcuts.hidden = !user.is_platform_admin;
         content.hidden = false;
         status.hidden = true;

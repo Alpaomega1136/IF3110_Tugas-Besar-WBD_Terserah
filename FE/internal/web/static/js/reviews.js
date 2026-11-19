@@ -234,7 +234,7 @@ async function loadReviews(index = currentPage, reset = false) {
             nextCursor = pageResult.nextCursor;
             cursors = cursors.slice(0, index + 1);
             pagination.hidden = false;
-            pageNumber.textContent = `Halaman ${currentPage + 1}`;
+            pageNumber.textContent = String(currentPage + 1);
         } else {
             const result = await authenticatedRequest("/api/v1/reviews");
             if (!Array.isArray(result?.reviews)) {

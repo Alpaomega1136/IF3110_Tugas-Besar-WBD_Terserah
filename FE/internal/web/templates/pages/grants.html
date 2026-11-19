@@ -2,19 +2,8 @@
 <div class="app-shell">
     {{template "navigation" .}}
 
-    <main class="app-main">
+    <main class="app-main grants-page">
         <h1>Database Access Grants</h1>
-
-        <p>
-            Atur izin database untuk group:
-            View Only atau View + Edit.
-        </p>
-
-        <p class="grant-note">
-            Pilih koneksi PostgreSQL yang telah didaftarkan di
-            <a href="/admin/databases">Connections</a>.
-            ID target diambil langsung dari backend, bukan diketik manual.
-        </p>
 
         <p id="grants-status"
            role="status"
@@ -34,14 +23,11 @@
         </p>
 
         <div id="grants-panel" hidden>
-            <div class="grant-toolbar">
-                <button type="button" id="grants-refresh" class="button-secondary">Muat Ulang Koneksi</button>
-            </div>
             <p id="grants-no-databases" role="status" hidden>
                 Belum ada koneksi target. <a href="/admin/databases">Daftarkan koneksi dahulu</a>
                 sebelum memberikan grant.
             </p>
-            <div class="users-layout">
+            <div class="users-layout grants-layout">
             <section class="dashboard-panel"
                      aria-labelledby="grant-form-heading">
                 <h2 id="grant-form-heading">
@@ -96,9 +82,15 @@
 
             <section class="dashboard-panel admin-directory"
                      aria-labelledby="grant-list-heading">
-                <h2 id="grant-list-heading">
-                    Grant yang Terdaftar
-                </h2>
+                <div class="grants-list-header">
+                    <h2 id="grant-list-heading">Grant yang Terdaftar</h2>
+                    <button type="button" id="grants-refresh" class="button-secondary grants-refresh-btn" aria-label="Muat Ulang Koneksi" title="Muat Ulang Koneksi">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                            <polyline points="21 3 21 9 15 9" />
+                        </svg>
+                    </button>
+                </div>
 
                 <p id="grants-empty" hidden>
                     Belum ada grant pada group yang tersedia.
