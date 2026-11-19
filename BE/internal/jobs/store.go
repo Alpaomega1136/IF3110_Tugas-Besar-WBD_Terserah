@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"terserah/backend/internal/approval"
 	"terserah/backend/internal/auth"
+	"terserah/backend/internal/batch"
 	"terserah/backend/internal/policy"
 	"terserah/backend/internal/telemetry"
 )
@@ -117,6 +118,9 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 	}
 	if actual != revision {
 		return Job{}, false, ErrConflict
+	}
+	if config, err := batch.Parse(sql); err != nil || config != nil {
+		return Job{}, false, ErrUnsupported
 	}
 	var executed bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3)`, dbID, draftID, revision).Scan(&executed); err != nil {

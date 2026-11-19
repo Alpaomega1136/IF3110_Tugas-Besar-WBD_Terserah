@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"terserah/backend/internal/batch"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/telemetry"
 )
@@ -36,9 +37,10 @@ type Draft struct {
 }
 
 type draftInput struct {
-	Title    string `json:"title"`
-	SQL      string `json:"sql"`
-	Revision int64  `json:"revision,string"`
+	Title    string        `json:"title"`
+	SQL      string        `json:"sql"`
+	Revision int64         `json:"revision,string"`
+	Batch    *batch.Config `json:"batch,omitempty"`
 }
 
 type Result struct {

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"terserah/backend/internal/approval"
 	"terserah/backend/internal/auth"
+	"terserah/backend/internal/batch"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/httpx"
 	"terserah/backend/internal/jobs"
@@ -129,7 +130,18 @@ func (s *Service) draft(w http.ResponseWriter, r *http.Request) {
 		fail(w, connections.ErrInvalid)
 		return
 	}
-	if _, err := statements(in.SQL); err != nil {
+	if in.Batch != nil {
+		if in.SQL != "" {
+			fail(w, errSQL)
+			return
+		}
+		in.SQL, err = batch.Encode(*in.Batch)
+		if err != nil {
+			fail(w, errSQL)
+			return
+		}
+	}
+	if err := validateDraftSQL(in.SQL); err != nil {
 		fail(w, err)
 		return
 	}
@@ -179,7 +191,7 @@ func (s *Service) execute(w http.ResponseWriter, r *http.Request) {
 		fail(w, errConflict)
 		return
 	}
-	if _, err = statements(draft.SQL); err != nil {
+	if err = validateDraftSQL(draft.SQL); err != nil {
 		fail(w, err)
 		return
 	}
@@ -194,6 +206,18 @@ func (s *Service) execute(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", "/api/v1/databases/"+strconv.FormatInt(dbID, 10)+"/jobs/"+strconv.FormatInt(job.ID, 10))
 	httpx.JSON(w, code, map[string]any{"job": job, "replayed": replayed})
+}
+
+func validateDraftSQL(sql string) error {
+	c, err := batch.Parse(sql)
+	if err != nil {
+		return errSQL
+	}
+	if c != nil {
+		return nil
+	}
+	_, err = statements(sql)
+	return err
 }
 
 func (s *Service) explain(w http.ResponseWriter, r *http.Request) {
