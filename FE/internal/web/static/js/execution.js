@@ -17,7 +17,10 @@ export function parseExecutionResult(result) {
 export function parseJobResponse(response, databaseID) {
     const job = response?.job;
     if (!job || !validVersion(job.id) || job.database_id !== databaseID ||
-        !["queued", "running", "success", "failed", "unknown", "partial", "recovering", "retry_wait"].includes(job.status) || !validProgress(job) ||
+        !["queued", "running", "success", "failed", "unknown", "partial", "recovering", "retry_wait", "resumed"].includes(job.status) || !validProgress(job) ||
+        ["parent_job_id", "resumed_by_job_id"].some((field) => job[field] != null && !validVersion(job[field])) ||
+        (job.status === "resumed" && !validVersion(job.resumed_by_job_id)) ||
+        (job.target_execution_id != null && (typeof job.target_execution_id !== "string" || !job.target_execution_id)) ||
         (job.available_at != null && (typeof job.available_at !== "string" || !Number.isFinite(Date.parse(job.available_at)))) ||
         ["attempt_count", "max_attempts"].some((field) => job[field] != null && (!Number.isSafeInteger(job[field]) || job[field] < (field === "max_attempts" ? 1 : 0))) ||
         (job.error_code != null && typeof job.error_code !== "string")) {
@@ -34,7 +37,8 @@ export function executionFeedback(status) {
         case "partial": return { message: "Sebagian batch sudah di-commit. Batch yang gagal dibatalkan; batch sebelumnya tetap tersimpan. Target ditahan sampai pemulihan yang disetujui. Jangan Execute ulang.", isError: true };
         case "running": return { message: "Migration masih berjalan (belum final). Periksa History; jangan mengirim Execute lagi.", isError: false };
         case "recovering": return { message: "Worker memeriksa receipt dan checkpoint di target sebelum menentukan retry. Batch yang sudah committed tetap tersimpan. Jangan Execute ulang.", isError: false };
-        case "retry_wait": return { message: "Kegagalan sementara sudah diverifikasi. Job menunggu jadwal retry otomatis dengan attempt baru; batch yang committed akan dilewati. Jangan Execute ulang.", isError: false };
+        case "retry_wait": return { message: "Job menunggu jadwal retry atau resume yang disetujui. Percobaan berikutnya memiliki execution ID baru; batch yang committed akan dilewati. Jangan Execute ulang.", isError: false };
+        case "resumed": return { message: "Pemulihan dialihkan ke job resume terkait. History percobaan lama tetap tersimpan; periksa job resume untuk hasil kelanjutannya.", isError: false };
         case "unknown": return { message: "Hasil eksekusi belum pasti. Periksa History dan lakukan reconcile bila diperlukan; jangan menjalankan ulang.", isError: true };
         default: throw new Error("Status migration tidak dikenal.");
     }

@@ -1245,7 +1245,8 @@ button:focus-visible {
 
 .migration-status--pending_review,
 .migration-status--queued,
-.migration-status--retry_wait {
+.migration-status--retry_wait,
+.migration-status--resumed {
     background: #fef3c7;
     color: #92400e;
 }

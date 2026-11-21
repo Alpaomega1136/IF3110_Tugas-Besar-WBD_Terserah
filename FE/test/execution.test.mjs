@@ -149,6 +149,25 @@ test("job polling failure preserves uncertainty and never resubmits SQL", async 
     assert.match(ui.$("draft-execution-message").textContent, /Jangan retry otomatis/);
 });
 
+test("replayed Execute preserves a resumed job handoff instead of claiming SQL success", async () => {
+    const job = { id: "12", database_id: databaseID, status: "resumed", resumed_by_job_id: "19",
+        committed_batches: "1", committed_rows: "2" };
+    assert.equal(parseJobResponse({ job }, databaseID).resumed_by_job_id, "19");
+    for (const changed of [{ resumed_by_job_id: null }, { resumed_by_job_id: 19 }, { parent_job_id: "0" }, { target_execution_id: 3 }]) {
+        assert.throws(() => parseJobResponse({ job: { ...job, ...changed } }, databaseID), /tidak valid/);
+    }
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job, replayed: true });
+        if (url.endsWith("/jobs/12")) return reply({ job, attempts: [{ execution_id: "old-partial", version: "9" }] });
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(executeCalls(ui).length, 1);
+    assert.equal(ui.$("draft-result-status").textContent, "resumed");
+    assert.match(ui.$("draft-execution-message").textContent, /Job resume: 19/);
+    assert.doesNotMatch(ui.$("draft-execution-message").textContent, /berhasil di-commit|tidak valid|transaksi telah di-rollback/);
+});
+
 test("partial batch keeps exact committed counts and never claims a full rollback", async () => {
     const job = { id: "12", database_id: databaseID, status: "partial", error_code: "23514",
         committed_batches: "2", committed_rows: "9007199254740993" };

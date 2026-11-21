@@ -333,7 +333,8 @@ function displayExecutionResult(result) {
         ? ` Attempt: ${result.attempt_count}/${result.max_attempts}.` : "";
     const next = ["retry_wait", "recovering"].includes(result.status) && result.available_at
         ? ` Pemeriksaan/percobaan berikutnya paling cepat: ${formatDate(result.available_at)}.` : "";
-    setBanner(executionMessage, feedback.message + progress + attempts + next, feedback.isError);
+    const handoff = result.resumed_by_job_id ? ` Job resume: ${result.resumed_by_job_id}.` : "";
+    setBanner(executionMessage, feedback.message + progress + attempts + next + handoff, feedback.isError);
 }
 
 async function followJob(response) {
@@ -347,6 +348,10 @@ async function followJob(response) {
         const current = parseJobResponse(response, databaseId);
         if (current.id !== job.id) throw new Error("Identitas job berubah. Periksa History.");
         job = current;
+        if (job.status === "resumed") {
+            displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
+            return;
+        }
         const attempt = response.attempts?.at(-1);
         if (attempt?.version && !pending.includes(job.status)) {
             displayExecutionResult(parseExecutionResult({
