@@ -30,6 +30,7 @@ const (
 	Success Status = "success"
 	Failed  Status = "failed"
 	Unknown Status = "unknown"
+	Partial Status = "partial"
 )
 
 type Job struct {
@@ -107,5 +108,5 @@ func validOutcome(out Outcome) bool {
 	if out.Status == Success {
 		return out.ErrorCode == ""
 	}
-	return (out.Status == Failed || out.Status == Unknown) && codePattern.MatchString(out.ErrorCode)
+	return (out.Status == Failed || out.Status == Unknown || out.Status == Partial) && codePattern.MatchString(out.ErrorCode)
 }

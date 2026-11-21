@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"terserah/backend/internal/approval"
 	"terserah/backend/internal/auth"
+	"terserah/backend/internal/batch"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/telemetry"
@@ -48,6 +49,9 @@ func (s *Service) ExecuteJob(ctx context.Context, c *jobs.Claim) (Result, error)
 	}
 	lockSpan.End()
 	telemetry.Event(ctx, "target_lock_acquired", "job_id", c.Job.ID, "database_id", c.Job.DatabaseID, "wait_ms", time.Since(started).Milliseconds())
+	if c.Job.ExecutionMode == "batch" {
+		return s.runBatch(ctx, pool, conn, c)
+	}
 	targetTx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return s.preflightFailure(ctx, c, err)
@@ -56,7 +60,7 @@ func (s *Service) ExecuteJob(ctx context.Context, c *jobs.Claim) (Result, error)
 	path, err := internalSearchPath(ctx, targetTx)
 	// Transaction locks cannot be released by migration SQL calling pg_advisory_unlock_all.
 	if err == nil {
-		_, err = targetTx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003)`)
+		_, err = targetTx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003); SELECT pg_catalog.pg_advisory_xact_lock(3110004)`)
 	}
 	if err == nil {
 		err = protectedHistory(ctx, targetTx)
@@ -110,7 +114,7 @@ func (s *Service) reserveJob(ctx context.Context, c *jobs.Claim) (Result, error)
 		return result, err
 	}
 	var pending bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history WHERE database_id=$1 AND status IN ('running','unknown'))`, c.Job.DatabaseID).Scan(&pending); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history WHERE database_id=$1 AND status IN ('running','unknown','partial'))`, c.Job.DatabaseID).Scan(&pending); err != nil {
 		return result, err
 	}
 	if pending {
@@ -166,7 +170,11 @@ func (s *Service) validateJob(ctx context.Context, target pgx.Tx, c *jobs.Claim)
 	if err != nil {
 		return err
 	}
-	if review.ID != c.Job.ReviewID || review.SQLSnapshot != c.SQL || c.Job.ActionType != "up" || c.Job.ExecutionMode != "normal" {
+	config, parseErr := batch.Parse(c.SQL)
+	if parseErr != nil || (c.Job.ExecutionMode == "batch") != (config != nil) {
+		return errConflict
+	}
+	if review.ID != c.Job.ReviewID || review.SQLSnapshot != c.SQL || c.Job.ActionType != "up" || (c.Job.ExecutionMode != "normal" && c.Job.ExecutionMode != "batch") {
 		return errConflict
 	}
 	return tx.Commit(ctx)
@@ -178,6 +186,16 @@ func executionCode(err error) string {
 		return pgerr.Code
 	}
 	switch {
+	case errors.Is(err, errBatchSetup):
+		return "target_batch_unprotected"
+	case errors.Is(err, errBatchTable):
+		return "unsupported_batch_table"
+	case errors.Is(err, errBatchScope):
+		return "batch_scope_changed"
+	case errors.Is(err, errBatchPayload):
+		return "batch_payload_too_large"
+	case errors.Is(err, errBatchEvidence):
+		return "batch_evidence_invalid"
 	case errors.Is(err, connections.ErrForbidden), errors.Is(err, auth.ErrUnauthenticated):
 		return "access_revoked"
 	case errors.Is(err, approval.ErrNotApproved), errors.Is(err, approval.ErrLeaderMissing):

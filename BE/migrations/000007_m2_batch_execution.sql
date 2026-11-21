@@ -1,0 +1,10 @@
+ALTER TABLE migration_jobs DROP CONSTRAINT migration_jobs_execution_mode_check;
+ALTER TABLE migration_jobs ADD CONSTRAINT migration_jobs_execution_mode_check CHECK (execution_mode IN ('normal','batch'));
+ALTER TABLE migration_jobs DROP CONSTRAINT migration_jobs_status_check;
+ALTER TABLE migration_jobs ADD CONSTRAINT migration_jobs_status_check CHECK (status IN ('queued','running','success','failed','unknown','partial'));
+ALTER TABLE migration_job_attempts DROP CONSTRAINT migration_job_attempts_status_check;
+ALTER TABLE migration_job_attempts ADD CONSTRAINT migration_job_attempts_status_check CHECK (status IN ('running','success','failed','unknown','partial'));
+ALTER TABLE migration_history DROP CONSTRAINT migration_history_status_check;
+ALTER TABLE migration_history ADD CONSTRAINT migration_history_status_check CHECK (status IN ('running','success','failed','unknown','partial'));
+DROP INDEX migration_jobs_active_database_idx;
+CREATE UNIQUE INDEX migration_jobs_active_database_idx ON migration_jobs(database_id) WHERE status IN ('running','unknown','partial');

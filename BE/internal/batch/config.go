@@ -61,7 +61,7 @@ func (c Config) Query() string {
 		column := pgx.Identifier{name}.Sanitize()
 		sets = append(sets, column+" = patch."+column)
 	}
-	return "UPDATE " + c.Relation() + " AS target SET " + strings.Join(sets, ", ") + "\nFROM pg_catalog.jsonb_populate_record(NULL::" + c.Relation() + ", $2::jsonb) AS patch\nWHERE target." + pgx.Identifier{c.Key}.Sanitize() + " = ANY($1::bigint[])\nRETURNING target." + pgx.Identifier{c.Key}.Sanitize() + ", pg_catalog.to_jsonb(target)"
+	return "UPDATE " + c.Relation() + " AS target SET " + strings.Join(sets, ", ") + "\nFROM pg_catalog.jsonb_populate_record(NULL::" + c.Relation() + ", $2::jsonb) AS patch\nWHERE target." + pgx.Identifier{c.Key}.Sanitize() + " = ANY($1::bigint[])\nRETURNING target." + pgx.Identifier{c.Key}.Sanitize() + ", CASE WHEN pg_catalog.octet_length(pg_catalog.to_jsonb(target)::text)<=8388608 THEN pg_catalog.to_jsonb(target) ELSE NULL END"
 }
 
 func Encode(c Config) (string, error) {

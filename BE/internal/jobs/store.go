@@ -119,8 +119,9 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 	if actual != revision {
 		return Job{}, false, ErrConflict
 	}
-	if config, err := batch.Parse(sql); err != nil || config != nil {
-		return Job{}, false, ErrUnsupported
+	config, err := batch.Parse(sql)
+	if err != nil {
+		return Job{}, false, ErrInvalid
 	}
 	var executed bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3)`, dbID, draftID, revision).Scan(&executed); err != nil {
@@ -138,6 +139,9 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 	}
 	j := Job{DatabaseID: dbID, ReviewID: reviewID, DraftID: draftID, DraftRevision: revision,
 		ActionType: action, ExecutionMode: "normal", RequestedBy: p.ID}
+	if config != nil {
+		j.ExecutionMode = "batch"
+	}
 	j, err = scanJob(tx.QueryRow(ctx, `INSERT INTO migration_jobs
  (database_id,review_id,draft_id,draft_revision,action_type,execution_mode,sql_snapshot,snapshot_hash,requested_by,trace_parent)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+jobColumns,
@@ -246,8 +250,8 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	var dbID int64
 	err = tx.QueryRow(ctx, `SELECT d.id FROM database_connections d
  WHERE EXISTS(SELECT 1 FROM migration_jobs q WHERE q.database_id=d.id AND q.status='queued' AND q.available_at<=now() AND q.attempt_count<q.max_attempts)
- AND NOT EXISTS(SELECT 1 FROM migration_jobs a WHERE a.database_id=d.id AND a.status IN ('running','unknown'))
- AND NOT EXISTS(SELECT 1 FROM migration_history h WHERE h.database_id=d.id AND h.status IN ('running','unknown'))
+ AND NOT EXISTS(SELECT 1 FROM migration_jobs a WHERE a.database_id=d.id AND a.status IN ('running','unknown','partial'))
+ AND NOT EXISTS(SELECT 1 FROM migration_history h WHERE h.database_id=d.id AND h.status IN ('running','unknown','partial'))
  ORDER BY (SELECT min(q.id) FROM migration_jobs q WHERE q.database_id=d.id AND q.status='queued' AND q.available_at<=now()),d.id
  LIMIT 1 FOR UPDATE OF d SKIP LOCKED`).Scan(&dbID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -258,8 +262,8 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	}
 	// The dispatch query's snapshot may predate another claimant's commit.
 	var blocked bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs WHERE database_id=$1 AND status IN ('running','unknown'))
- OR EXISTS(SELECT 1 FROM migration_history WHERE database_id=$1 AND status IN ('running','unknown'))`, dbID).Scan(&blocked)
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs WHERE database_id=$1 AND status IN ('running','unknown','partial'))
+ OR EXISTS(SELECT 1 FROM migration_history WHERE database_id=$1 AND status IN ('running','unknown','partial'))`, dbID).Scan(&blocked)
 	if err != nil {
 		return nil, err
 	}
@@ -336,6 +340,24 @@ func (s *Service) Heartbeat(ctx context.Context, c *Claim, lease time.Duration) 
  WHERE j.id=$1 AND j.status='running' AND j.worker_id=$2 AND j.lease_token_hash=$3 AND j.lease_expires_at>clock_timestamp()
  AND EXISTS(SELECT 1 FROM migration_job_attempts a WHERE a.job_id=j.id AND a.attempt_no=j.attempt_count AND a.execution_id=$4 AND a.status='running')`,
 		c.Job.ID, c.WorkerID, leaseHash(c.LeaseToken), c.ExecutionID, lease.Milliseconds())
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// ReportProgress publishes only target-committed counts while the worker still owns its lease.
+func (s *Service) ReportProgress(ctx context.Context, c *Claim, batches, rows int64) error {
+	if !validClaim(c) || batches < 0 || rows < 0 || rows < batches {
+		return ErrInvalid
+	}
+	result, err := s.db.Exec(ctx, `UPDATE migration_jobs j SET committed_batches=$5,committed_rows=$6
+ WHERE j.id=$1 AND j.status='running' AND j.worker_id=$2 AND j.lease_token_hash=$3 AND j.lease_expires_at>clock_timestamp()
+ AND j.committed_batches<=$5 AND j.committed_rows<=$6
+ AND EXISTS(SELECT 1 FROM migration_job_attempts a WHERE a.job_id=j.id AND a.attempt_no=j.attempt_count AND a.execution_id=$4 AND a.status='running')`, c.Job.ID, c.WorkerID, leaseHash(c.LeaseToken), c.ExecutionID, batches, rows)
 	if err != nil {
 		return err
 	}

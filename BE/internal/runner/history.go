@@ -142,7 +142,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	}
 	// Acquiring the same advisory lock used by `run` proves no in-flight runner
 	// transaction can still commit a pending attempt while we inspect receipts.
-	if _, err = tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003)`); err != nil {
+	if _, err = tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003); SELECT pg_catalog.pg_advisory_xact_lock(3110004)`); err != nil {
 		return nil, err
 	}
 	if err = protectedHistory(ctx, tx); err != nil {
@@ -168,6 +168,13 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	}
 	if err = bindTarget(ctx, meta, tx, dbID); err != nil {
 		return nil, err
+	}
+	var batchPending bool
+	if err = meta.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs WHERE database_id=$1 AND execution_mode='batch' AND status IN ('running','unknown','partial'))`, dbID).Scan(&batchPending); err != nil {
+		return nil, err
+	}
+	if batchPending {
+		return nil, errBatchRecovery
 	}
 
 	rows, err := meta.Query(ctx, `
