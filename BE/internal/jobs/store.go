@@ -242,6 +242,18 @@ func (s *Service) Get(ctx context.Context, p auth.Principal, dbID, jobID int64) 
 		return Job{}, nil, err
 	}
 	rows.Close()
+	if j.Status == Partial && j.ExecutionMode == "batch" && len(items) > 0 {
+		var review ReviewReference
+		err = tx.QueryRow(ctx, `SELECT id,status,target_execution_id FROM migration_reviews
+ WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3 AND action_type='resume' AND target_execution_id=$4
+ ORDER BY id DESC LIMIT 1`, dbID, j.DraftID, j.DraftRevision, items[len(items)-1].ExecutionID).Scan(&review.ID, &review.Status, &review.TargetExecutionID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return Job{}, nil, err
+		}
+		if err == nil {
+			j.ResumeReview = &review
+		}
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return Job{}, nil, err
 	}
