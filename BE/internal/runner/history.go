@@ -118,6 +118,7 @@ type pendingExecution struct {
 	actor     int64
 	format    int
 	isBatch   bool
+	root      string
 }
 
 // reconcilePending checks `_terserah.migration_receipts` on the target DB for any
@@ -182,7 +183,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	}
 	rows, err := meta.Query(ctx, `
 		SELECT h.execution_id,h.version,h.sql,h.executed_by,h.receipt_version,
- EXISTS(SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id WHERE a.execution_id=h.execution_id AND j.execution_mode='batch')
+ EXISTS(SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id WHERE a.execution_id=h.execution_id AND j.execution_mode='batch'),COALESCE(h.batch_root_execution_id,'')
 		FROM migration_history h
 		WHERE h.database_id = $1 AND h.status IN ('running', 'unknown','partial')
  AND NOT EXISTS(SELECT 1 FROM migration_job_attempts sealed WHERE sealed.execution_id=h.execution_id AND sealed.retry_scheduled)
@@ -196,7 +197,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	items := []pendingExecution{}
 	for rows.Next() {
 		var item pendingExecution
-		if err = rows.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format, &item.isBatch); err != nil {
+		if err = rows.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format, &item.isBatch, &item.root); err != nil {
 			break
 		}
 		items = append(items, item)
@@ -215,7 +216,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 		var finished *time.Time
 		var progress batch.Checkpoint
 		if item.isBatch {
-			out, finished, progress, err = s.verifyBatchPending(ctx, tx, dbID, item)
+			out, finished, progress, err = s.verifyBatchAttempt(ctx, tx, dbID, item, item.root)
 		} else {
 			out, finished, err = s.verifyPendingAttempt(ctx, tx, dbID, item)
 		}

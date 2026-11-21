@@ -24,6 +24,8 @@ type Row struct {
 type Checkpoint struct {
 	BatchNo, LastKey, RowCount, CommittedRows int64
 	RowHash, PreviousSignature, Signature     string
+	AttemptExecutionID                        string `json:",omitempty"`
+	AttemptVersion                            int64  `json:",omitempty"`
 }
 
 func ManifestSignature(key []byte, m Manifest) string {

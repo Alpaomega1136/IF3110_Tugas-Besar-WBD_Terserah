@@ -55,9 +55,10 @@ func (s *Service) verifyBatchPending(ctx context.Context, tx pgx.Tx, dbID int64,
 		return Result{}, nil, progress, err
 	}
 	previous := signature
+	verifiedAttempts := map[string]int64{}
 	for next := int64(1); ; next++ {
 		var cp batch.Checkpoint
-		err = tx.QueryRow(ctx, `SELECT batch_no,last_key,row_count,committed_rows,row_hash,previous_signature,signature FROM _terserah.batch_checkpoints WHERE execution_id=$1 AND batch_no=$2`, m.ExecutionID, next).Scan(&cp.BatchNo, &cp.LastKey, &cp.RowCount, &cp.CommittedRows, &cp.RowHash, &cp.PreviousSignature, &cp.Signature)
+		err = tx.QueryRow(ctx, `SELECT batch_no,last_key,row_count,committed_rows,row_hash,previous_signature,signature,COALESCE(attempt_execution_id,''),COALESCE(attempt_version,0) FROM _terserah.batch_checkpoints WHERE execution_id=$1 AND batch_no=$2`, m.ExecutionID, next).Scan(&cp.BatchNo, &cp.LastKey, &cp.RowCount, &cp.CommittedRows, &cp.RowHash, &cp.PreviousSignature, &cp.Signature, &cp.AttemptExecutionID, &cp.AttemptVersion)
 		if errors.Is(err, pgx.ErrNoRows) {
 			break
 		}
@@ -65,6 +66,22 @@ func (s *Service) verifyBatchPending(ctx context.Context, tx pgx.Tx, dbID int64,
 			return Result{}, nil, progress, err
 		}
 		if cp.PreviousSignature != previous || cp.RowCount < 1 || cp.RowCount > int64(config.Size) || cp.CommittedRows != progress.CommittedRows+cp.RowCount || cp.CommittedRows > m.ScopeCount || !hmac.Equal([]byte(cp.Signature), []byte(batch.CheckpointSignature(s.key, signature, cp))) {
+			return Result{}, nil, progress, errBatchEvidence
+		}
+		if cp.AttemptExecutionID != "" && cp.AttemptVersion < 1 {
+			return Result{}, nil, progress, errBatchEvidence
+		}
+		if cp.AttemptExecutionID != "" && verifiedAttempts[cp.AttemptExecutionID] != cp.AttemptVersion {
+			var valid bool
+			err = s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history WHERE execution_id=$1 AND version=$2 AND database_id=$3 AND sql=$4 AND executed_by=$5 AND batch_root_execution_id=$6)`, cp.AttemptExecutionID, cp.AttemptVersion, dbID, m.SQL, m.ActorID, m.ExecutionID).Scan(&valid)
+			if err != nil {
+				return Result{}, nil, progress, err
+			}
+			if !valid {
+				return Result{}, nil, progress, errBatchEvidence
+			}
+			verifiedAttempts[cp.AttemptExecutionID] = cp.AttemptVersion
+		} else if cp.AttemptExecutionID == "" && cp.AttemptVersion != 0 {
 			return Result{}, nil, progress, errBatchEvidence
 		}
 		var cursor *int64

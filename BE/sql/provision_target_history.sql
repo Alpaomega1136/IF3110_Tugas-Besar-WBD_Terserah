@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS _terserah.batch_checkpoints (
     PRIMARY KEY(execution_id,batch_no)
 );
 -- Transfer legacy M3 objects to the trusted administrator executing this script.
+ALTER TABLE _terserah.batch_checkpoints ADD COLUMN IF NOT EXISTS attempt_execution_id text;
+ALTER TABLE _terserah.batch_checkpoints ADD COLUMN IF NOT EXISTS attempt_version bigint;
 ALTER SCHEMA _terserah OWNER TO CURRENT_USER;
 ALTER TABLE _terserah.migration_receipts OWNER TO CURRENT_USER;
 ALTER TABLE _terserah.target_identity OWNER TO CURRENT_USER;

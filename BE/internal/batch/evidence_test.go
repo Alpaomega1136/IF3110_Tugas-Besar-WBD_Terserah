@@ -44,3 +44,23 @@ func TestEvidenceBindsRecoveryDataAndCheckpointChain(t *testing.T) {
 		t.Fatal("malformed evidence accepted")
 	}
 }
+
+func TestCheckpointBindsRetryIdentityAndPreservesLegacySignatures(t *testing.T) {
+	c := Checkpoint{BatchNo: 1, LastKey: 2, RowCount: 2, CommittedRows: 2, RowHash: "rows", PreviousSignature: "root"}
+	legacy := `{"BatchNo":1,"LastKey":2,"RowCount":2,"CommittedRows":2,"RowHash":"rows","PreviousSignature":"root","Signature":""}`
+	encoded, err := json.Marshal(c)
+	if err != nil || string(encoded) != legacy {
+		t.Fatal("legacy signed payload changed", string(encoded), err)
+	}
+	key := []byte("test-key")
+	c.AttemptExecutionID, c.AttemptVersion = "retry-1", 2
+	sig := CheckpointSignature(key, "manifest", c)
+	c.AttemptExecutionID = "retry-2"
+	if sig == CheckpointSignature(key, "manifest", c) {
+		t.Fatal("attempt ID not protected")
+	}
+	c.AttemptExecutionID, c.AttemptVersion = "retry-1", 3
+	if sig == CheckpointSignature(key, "manifest", c) {
+		t.Fatal("attempt version not protected")
+	}
+}

@@ -27,7 +27,7 @@ func protectedBatchHistory(ctx context.Context, tx pgx.Tx) error {
 		`SELECT execution_id,database_id,version,executed_by,sql,table_oid,scope_count,scope_hash,signature FROM _terserah.batch_runs LIMIT 0`,
 		`SELECT execution_id,row_key FROM _terserah.batch_scope LIMIT 0`,
 		`SELECT execution_id,batch_no,row_key,before_data,after_data FROM _terserah.batch_rows LIMIT 0`,
-		`SELECT execution_id,batch_no,last_key,row_count,committed_rows,row_hash,previous_signature,signature FROM _terserah.batch_checkpoints LIMIT 0`,
+		`SELECT execution_id,batch_no,last_key,row_count,committed_rows,row_hash,previous_signature,signature,attempt_execution_id,attempt_version FROM _terserah.batch_checkpoints LIMIT 0`,
 	} {
 		rows, err := tx.Query(ctx, query)
 		if err != nil {

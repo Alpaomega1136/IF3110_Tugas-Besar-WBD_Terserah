@@ -59,13 +59,29 @@ func (s *Service) runBatch(ctx context.Context, pool *pgxpool.Pool, guard *pgx.C
 		rollback(tx)
 		return s.finishBatch(ctx, result, "failed", executionCode(err)), nil
 	}
-	manifest := batch.Manifest{ExecutionID: c.ExecutionID, DatabaseID: c.Job.DatabaseID, Version: result.Version, ActorID: c.Job.RequestedBy, SQL: c.SQL, TableOID: oid}
-	if err = s.freezeBatchScope(ctx, tx, *config, &manifest); err != nil {
+	item := pendingExecution{execution: &c.ExecutionID, version: result.Version, sql: c.SQL, actor: c.Job.RequestedBy, format: 1, isBatch: true}
+	root, err := s.batchRoot(ctx, c.Job.DatabaseID, item, c.RootExecutionID)
+	if err != nil {
+		return s.finishBatch(ctx, result, "failed", executionCode(err)), nil
+	}
+	manifest, exists, err := loadBatchManifest(ctx, tx, c.RootExecutionID)
+	var previous batch.Checkpoint
+	if err == nil && exists {
+		var verified Result
+		verified, _, previous, err = s.verifyBatchAttempt(ctx, tx, c.Job.DatabaseID, item, c.RootExecutionID)
+		if err == nil && (verified.Status == "success" || manifest.TableOID != oid) {
+			err = errBatchEvidence
+		}
+	} else if err == nil {
+		manifest = batch.Manifest{ExecutionID: c.RootExecutionID, DatabaseID: c.Job.DatabaseID, Version: root.version, ActorID: c.Job.RequestedBy, SQL: c.SQL, TableOID: oid}
+		err = s.freezeBatchScope(ctx, tx, *config, &manifest)
+	}
+	if err != nil {
 		rollback(tx)
 		return s.finishBatch(ctx, result, "failed", executionCode(err)), nil
 	}
 	if manifest.ScopeCount == 0 {
-		err = s.appendBatchReceipt(ctx, tx, c, result.Version)
+		err = s.completeBatch(ctx, tx, c, manifest)
 	}
 	if err == nil {
 		err = s.batchLease(ctx, guard, c)
@@ -81,7 +97,9 @@ func (s *Service) runBatch(ctx context.Context, pool *pgxpool.Pool, guard *pgx.C
 	if manifest.ScopeCount == 0 {
 		return s.finishBatch(ctx, result, "success", ""), nil
 	}
-	previous := batch.Checkpoint{PreviousSignature: batch.ManifestSignature(s.key, manifest), Signature: batch.ManifestSignature(s.key, manifest)}
+	if previous.BatchNo == 0 {
+		previous.Signature = batch.ManifestSignature(s.key, manifest)
+	}
 	for {
 		cp, last, err := s.executeBatch(ctx, pool, guard, c, *config, manifest, previous)
 		if err != nil {
@@ -140,7 +158,7 @@ func (s *Service) freezeBatchScope(ctx context.Context, tx pgx.Tx, config batch.
 }
 
 func (s *Service) executeBatch(ctx context.Context, pool *pgxpool.Pool, guard *pgx.Conn, c *jobs.Claim, config batch.Config, m batch.Manifest, previous batch.Checkpoint) (checkpoint batch.Checkpoint, isLast bool, returnErr error) {
-	cp := batch.Checkpoint{BatchNo: previous.BatchNo + 1, PreviousSignature: previous.Signature}
+	cp := batch.Checkpoint{BatchNo: previous.BatchNo + 1, PreviousSignature: previous.Signature, AttemptExecutionID: c.ExecutionID, AttemptVersion: c.Version}
 	ctx, span := telemetry.Start(ctx, "migration.batch", trace.WithAttributes(attribute.Int64("batch.number", cp.BatchNo)))
 	defer func() {
 		if returnErr != nil {
@@ -166,7 +184,7 @@ func (s *Service) executeBatch(ctx context.Context, pool *pgxpool.Pool, guard *p
 	if previous.BatchNo > 0 {
 		cursor = &previous.LastKey
 	}
-	keys, err := batchKeys(ctx, tx, c.ExecutionID, cursor, config.Size+1)
+	keys, err := batchKeys(ctx, tx, m.ExecutionID, cursor, config.Size+1)
 	if err != nil {
 		return cp, false, err
 	}
@@ -237,24 +255,24 @@ func (s *Service) executeBatch(ctx context.Context, pool *pgxpool.Pool, guard *p
 	cp.Signature = batch.CheckpointSignature(s.key, batch.ManifestSignature(s.key, m), cp)
 	_, err = tx.CopyFrom(ctx, pgx.Identifier{"_terserah", "batch_rows"}, []string{"execution_id", "batch_no", "row_key", "before_data", "after_data"}, pgx.CopyFromSlice(len(recovery), func(i int) ([]any, error) {
 		r := recovery[i]
-		return []any{c.ExecutionID, cp.BatchNo, r.Key, r.Before, r.After}, nil
+		return []any{m.ExecutionID, cp.BatchNo, r.Key, r.Before, r.After}, nil
 	}))
 	if err != nil {
 		return cp, false, err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO _terserah.batch_checkpoints(execution_id,batch_no,last_key,row_count,committed_rows,row_hash,previous_signature,signature) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, c.ExecutionID, cp.BatchNo, cp.LastKey, cp.RowCount, cp.CommittedRows, cp.RowHash, cp.PreviousSignature, cp.Signature)
+	_, err = tx.Exec(ctx, `INSERT INTO _terserah.batch_checkpoints(execution_id,batch_no,last_key,row_count,committed_rows,row_hash,previous_signature,signature,attempt_execution_id,attempt_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, m.ExecutionID, cp.BatchNo, cp.LastKey, cp.RowCount, cp.CommittedRows, cp.RowHash, cp.PreviousSignature, cp.Signature, cp.AttemptExecutionID, cp.AttemptVersion)
 	if err != nil {
 		return cp, false, err
 	}
 	if last {
 		var scopeCount int64
-		if err = tx.QueryRow(ctx, `SELECT count(*) FROM _terserah.batch_scope WHERE execution_id=$1`, c.ExecutionID).Scan(&scopeCount); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT count(*) FROM _terserah.batch_scope WHERE execution_id=$1`, m.ExecutionID).Scan(&scopeCount); err != nil {
 			return cp, false, err
 		}
 		if scopeCount != m.ScopeCount {
 			return cp, false, errBatchScope
 		}
-		if err = s.appendBatchReceipt(ctx, tx, c, m.Version); err != nil {
+		if err = s.completeBatch(ctx, tx, c, m); err != nil {
 			return cp, false, err
 		}
 	}
@@ -365,6 +383,18 @@ func safeBatchCode(err error) string {
 func (s *Service) appendBatchReceipt(ctx context.Context, tx pgx.Tx, c *jobs.Claim, version int64) error {
 	_, err := tx.Exec(ctx, `INSERT INTO _terserah.migration_receipts(execution_id,version,sql,executed_by,signature) VALUES($1,$2,$3,$4,$5)`, c.ExecutionID, version, c.SQL, c.Job.RequestedBy, s.signature(c.Job.DatabaseID, c.ExecutionID, version, c.SQL, c.Job.RequestedBy))
 	return err
+}
+
+func (s *Service) completeBatch(ctx context.Context, tx pgx.Tx, c *jobs.Claim, m batch.Manifest) error {
+	root := *c
+	root.ExecutionID = m.ExecutionID
+	if err := s.appendBatchReceipt(ctx, tx, &root, m.Version); err != nil {
+		return err
+	}
+	if c.ExecutionID != m.ExecutionID {
+		return s.appendBatchReceipt(ctx, tx, c, c.Version)
+	}
+	return nil
 }
 
 func (s *Service) finishBatch(ctx context.Context, result Result, status, code string) Result {

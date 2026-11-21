@@ -67,7 +67,7 @@ func (s *Service) RecoverJob(ctx context.Context, r *jobs.Recovery) error {
 	var out Result
 	var progress batch.Checkpoint
 	if item.isBatch {
-		out, _, progress, err = s.verifyBatchPending(ctx, tx, r.Job.DatabaseID, item)
+		out, _, progress, err = s.verifyBatchAttempt(ctx, tx, r.Job.DatabaseID, item, r.RootExecutionID)
 	} else if r.Version == 0 {
 		var exists bool
 		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM _terserah.migration_receipts WHERE execution_id=$1)`, r.ExecutionID).Scan(&exists)
@@ -94,10 +94,6 @@ func (s *Service) RecoverJob(ctx context.Context, r *jobs.Recovery) error {
 	cause := ""
 	if out.Status != "success" {
 		cause = jobs.RetryCause(r)
-	}
-	// Batch retries are enabled when the root-aware executor is integrated.
-	if item.isBatch {
-		cause = ""
 	}
 	if cause != "" && r.Job.AttemptCount < r.Job.MaxAttempts {
 		if err = s.retryAllowed(ctx, r); err != nil {
