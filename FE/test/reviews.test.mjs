@@ -60,7 +60,7 @@ async function setupReviews({ databaseScoped = false, confirm = true, custom } =
         "reviews-list-body", "reviews-pagination", "reviews-prev", "reviews-next", "reviews-page-number",
         "review-detail", "review-detail-status", "review-detail-error", "review-detail-content",
         "review-detail-id", "review-detail-database", "review-detail-draft", "review-detail-revision",
-        "review-detail-action", "review-detail-badge", "review-detail-requester", "review-detail-created",
+        "review-detail-action", "review-detail-target", "review-detail-badge", "review-detail-requester", "review-detail-created",
         "review-detail-decided", "review-detail-rejection", "review-approvals-body", "review-detail-sql",
         "review-decision-panel", "review-decision-note", "review-approve-button", "review-reject-button",
         "review-decision-message"
@@ -154,6 +154,21 @@ test("reviews list renders approval progress and opens detail with safe SQL and 
     assert.equal(ui.$("review-detail-badge").textContent, "Approved");
     assert.equal(ui.$("review-decision-panel").hidden, true);
     assert.match(ui.$("review-decision-message").textContent, /Approved/);
+});
+
+test("resume review shows its exact target execution before approval", async () => {
+    const target = '<script>execution</script>';
+    const ui = await setupReviews({ custom: ({ url }) => {
+        if (url === `/api/v1/databases/${dbID}/reviews/${reviewID}`) {
+            return json({ review: { ...sampleReview, action_type: "resume", target_execution_id: target } });
+        }
+        return undefined;
+    } });
+    await ui.$("reviews-list-body").children[0].children[7].children[0].fire("click");
+    await tick();
+    assert.equal(ui.$("review-detail-action").textContent, "resume");
+    assert.equal(ui.$("review-detail-target").textContent, target);
+    assert.equal(ui.$("review-detail-target").children.length, 0);
 });
 
 test("reject requires a non-empty reason before sending POST", async () => {

@@ -140,6 +140,7 @@ function renderReviewDetail(review) {
         "review-detail-draft": `#${review.draft_id} — ${review.draft_title}`,
         "review-detail-revision": review.draft_revision,
         "review-detail-action": review.action_type,
+        "review-detail-target": review.target_execution_id || "-",
         "review-detail-requester": review.requested_by_username || "-",
         "review-detail-created": formatDate(review.created_at),
         "review-detail-decided": formatDate(review.decided_at),

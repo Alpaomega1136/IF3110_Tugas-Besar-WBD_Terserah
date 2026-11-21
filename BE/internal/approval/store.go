@@ -109,12 +109,25 @@ func (s *PostgresStore) SubmitReview(ctx context.Context, actorID, dbID int64, i
 
 	var sqlSnapshot string
 	var actualRevision int64
-	err = tx.QueryRow(ctx, `
+	if input.ActionType == "resume" {
+		if input.TargetExecutionID == nil || len(*input.TargetExecutionID) != 32 {
+			return ReviewView{}, ErrInvalidInput
+		}
+		err = tx.QueryRow(ctx, `SELECT j.sql_snapshot,j.draft_revision FROM migration_jobs j
+ JOIN migration_job_attempts a ON a.job_id=j.id AND a.attempt_no=j.attempt_count
+ JOIN migration_history h ON h.execution_id=a.execution_id
+ WHERE j.database_id=$1 AND j.draft_id=$2 AND j.draft_revision=$3 AND a.execution_id=$4
+ AND j.execution_mode='batch' AND j.status='partial' AND j.committed_batches>0
+ AND a.status IN ('partial','failed') AND h.status IN ('partial','failed')
+ FOR UPDATE OF j`, dbID, input.DraftID, input.Revision, *input.TargetExecutionID).Scan(&sqlSnapshot, &actualRevision)
+	} else {
+		err = tx.QueryRow(ctx, `
 		SELECT sql, revision
 		FROM migration_drafts
 		WHERE database_id = $1 AND id = $2
 		FOR UPDATE
 	`, dbID, input.DraftID).Scan(&sqlSnapshot, &actualRevision)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ReviewView{}, ErrNotFound
 	}
@@ -129,9 +142,9 @@ func (s *PostgresStore) SubmitReview(ctx context.Context, actorID, dbID int64, i
 	if err != nil {
 		return ReviewView{}, err
 	}
-	_, approvalErr := EnsureApprovedTx(ctx, tx, dbID, input.DraftID, input.Revision, input.ActionType)
+	_, approvalErr := ensureApprovedTx(ctx, tx, dbID, input.DraftID, input.Revision, input.ActionType, 0, input.TargetExecutionID)
 	if errors.Is(approvalErr, ErrNotApproved) {
-		_, err = tx.Exec(ctx, `UPDATE migration_reviews SET status = 'cancelled', decided_at = $5 WHERE database_id = $1 AND draft_id = $2 AND draft_revision = $3 AND action_type = $4 AND status = 'approved'`, dbID, input.DraftID, input.Revision, input.ActionType, now)
+		_, err = tx.Exec(ctx, `UPDATE migration_reviews SET status = 'cancelled', decided_at = $5 WHERE database_id = $1 AND draft_id = $2 AND draft_revision = $3 AND action_type = $4 AND status = 'approved' AND target_execution_id IS NOT DISTINCT FROM $6::text`, dbID, input.DraftID, input.Revision, input.ActionType, now, input.TargetExecutionID)
 		if err != nil {
 			return ReviewView{}, err
 		}
@@ -147,9 +160,10 @@ func (s *PostgresStore) SubmitReview(ctx context.Context, actorID, dbID int64, i
 			  AND draft_id = $2
 			  AND draft_revision = $3
 			  AND action_type = $4
+			  AND target_execution_id IS NOT DISTINCT FROM $5::text
 			  AND status IN ('pending_review', 'approved', 'queued')
 		)
-	`, dbID, input.DraftID, input.Revision, input.ActionType).Scan(&duplicate)
+	`, dbID, input.DraftID, input.Revision, input.ActionType, input.TargetExecutionID).Scan(&duplicate)
 	if err != nil {
 		return ReviewView{}, err
 	}
@@ -462,6 +476,15 @@ func (s *PostgresStore) EnsureApproved(ctx context.Context, dbID, draftID, revis
 
 // EnsureApprovedTx keeps approval and group locks until the caller commits.
 func EnsureApprovedTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision int64, actionType string) (ReviewView, error) {
+	return ensureApprovedTx(ctx, tx, dbID, draftID, revision, actionType, 0, nil)
+}
+
+// EnsureApprovedReviewTx validates the precise approved payload, including its execution target.
+func EnsureApprovedReviewTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision int64, actionType string, reviewID int64, target *string) (ReviewView, error) {
+	return ensureApprovedTx(ctx, tx, dbID, draftID, revision, actionType, reviewID, target)
+}
+
+func ensureApprovedTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision int64, actionType string, requestedID int64, target *string) (ReviewView, error) {
 	groups, err := inspectDatabaseGroups(ctx, tx, dbID)
 	if err != nil {
 		return ReviewView{}, err
@@ -475,11 +498,13 @@ func EnsureApprovedTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision in
 		  AND draft_id = $2
 		  AND draft_revision = $3
 		  AND action_type = $4
+		  AND ($5::bigint=0 OR id=$5)
+		  AND target_execution_id IS NOT DISTINCT FROM $6::text
 		  AND status IN ('approved', 'queued')
 		ORDER BY id DESC
 		LIMIT 1
 		FOR UPDATE
-	`, dbID, draftID, revision, actionType).Scan(&reviewID)
+	`, dbID, draftID, revision, actionType, requestedID, target).Scan(&reviewID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ReviewView{}, ErrNotApproved
 	}
