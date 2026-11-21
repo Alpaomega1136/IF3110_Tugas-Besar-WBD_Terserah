@@ -1983,6 +1983,24 @@ button:focus-visible {
 #history-reconcile-summary { margin-bottom: 12px; line-height: 1.6; }
 #history-reconcile-table { overflow-x: auto; }
 
+/* Durable job monitoring */
+.jobs-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
+.jobs-toolbar h2 { margin-top: 0; }
+.jobs-metadata, #jobs-feedback, .jobs-recovery { overflow-wrap: anywhere; }
+.jobs-recovery { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border, #e5e7eb); }
+.jobs-auto-label { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.jobs-auto-label input { width: 20px; height: 20px; margin: 0; }
+#jobs-page button, #jobs-page .workspace-button { min-height: 44px; }
+#jobs-page .cursor-pagination button { width: auto; min-width: 110px; padding: 8px 12px; }
+#jobs-page .users-table-wrapper { max-width: 100%; overflow-x: auto; }
+#jobs-page .users-table td { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+    .jobs-metadata { grid-template-columns: minmax(0, 1fr); }
+    .jobs-toolbar .database-workspace-links { width: 100%; }
+    .jobs-toolbar .workspace-button { flex: 1 1 90px; }
+    #jobs-page .dashboard-panel { min-width: 0; }
+}
+
 /* One accessible native-dialog */
 .confirm-dialog {
     position: fixed;

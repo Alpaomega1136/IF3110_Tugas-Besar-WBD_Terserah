@@ -67,6 +67,10 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse reviews template: %w", err)
 	}
+	jobsTemplate, err := parsePageTemplate("jobs")
+	if err != nil {
+		return nil, fmt.Errorf("parse jobs template: %w", err)
+	}
 
 	staticFiles, err := fs.Sub(assets, "static")
 	if err != nil {
@@ -121,6 +125,26 @@ func NewHandler(backendURL *url.URL) (http.Handler, error) {
 	mux.HandleFunc("GET /admin/grants", pageHandler(grantsTemplate, PageData{
 		Title: "Database Grants - Terserah",
 	}))
+
+	jobsPage := func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id < 1 {
+			http.Error(w, "ID database tidak valid", http.StatusBadRequest)
+			return
+		}
+		jobID := ""
+		if value := r.PathValue("jobID"); value != "" {
+			parsed, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || parsed < 1 {
+				http.Error(w, "ID job tidak valid", http.StatusBadRequest)
+				return
+			}
+			jobID = strconv.FormatInt(parsed, 10)
+		}
+		pageHandler(jobsTemplate, PageData{Title: "Migration Jobs - Terserah", DatabaseID: strconv.FormatInt(id, 10), JobID: jobID})(w, r)
+	}
+	mux.HandleFunc("GET /databases/{id}/jobs", jobsPage)
+	mux.HandleFunc("GET /databases/{id}/jobs/{jobID}", jobsPage)
 
 	mux.HandleFunc("GET /databases/{id}/viewer", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
