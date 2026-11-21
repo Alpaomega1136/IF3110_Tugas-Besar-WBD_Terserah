@@ -73,8 +73,15 @@ func (s *Service) runBatch(ctx context.Context, pool *pgxpool.Pool, guard *pgx.C
 			err = errBatchEvidence
 		}
 	} else if err == nil {
-		manifest = batch.Manifest{ExecutionID: c.RootExecutionID, DatabaseID: c.Job.DatabaseID, Version: root.version, ActorID: c.Job.RequestedBy, SQL: c.SQL, TableOID: oid}
-		err = s.freezeBatchScope(ctx, tx, *config, &manifest)
+		if c.Job.CommittedBatches > 0 {
+			err = errBatchEvidence
+		} else {
+			manifest = batch.Manifest{ExecutionID: c.RootExecutionID, DatabaseID: c.Job.DatabaseID, Version: root.version, ActorID: root.actor, SQL: c.SQL, TableOID: oid}
+			err = s.freezeBatchScope(ctx, tx, *config, &manifest)
+		}
+	}
+	if previous.BatchNo < c.Job.CommittedBatches || previous.CommittedRows < c.Job.CommittedRows {
+		err = errBatchEvidence
 	}
 	if err != nil {
 		rollback(tx)
@@ -388,6 +395,7 @@ func (s *Service) appendBatchReceipt(ctx context.Context, tx pgx.Tx, c *jobs.Cla
 func (s *Service) completeBatch(ctx context.Context, tx pgx.Tx, c *jobs.Claim, m batch.Manifest) error {
 	root := *c
 	root.ExecutionID = m.ExecutionID
+	root.Job.RequestedBy = m.ActorID
 	if err := s.appendBatchReceipt(ctx, tx, &root, m.Version); err != nil {
 		return err
 	}

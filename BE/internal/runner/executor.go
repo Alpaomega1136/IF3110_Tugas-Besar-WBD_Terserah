@@ -219,15 +219,24 @@ func validateApprovedSnapshot(ctx context.Context, tx pgx.Tx, job jobs.Job, sqlS
 	if !allowed {
 		return connections.ErrForbidden
 	}
-	var revision int64
-	var sql string
-	if err = tx.QueryRow(ctx, `SELECT revision,sql FROM migration_drafts WHERE database_id=$1 AND id=$2 FOR UPDATE`, job.DatabaseID, job.DraftID).Scan(&revision, &sql); err != nil {
-		return err
+	if job.ActionType == "resume" {
+		if err = jobs.ValidateResumeTx(ctx, tx, job, sqlSnapshot); err != nil {
+			if errors.Is(err, jobs.ErrConflict) {
+				return errConflict
+			}
+			return err
+		}
+	} else {
+		var revision int64
+		var sql string
+		if err = tx.QueryRow(ctx, `SELECT revision,sql FROM migration_drafts WHERE database_id=$1 AND id=$2 FOR UPDATE`, job.DatabaseID, job.DraftID).Scan(&revision, &sql); err != nil {
+			return err
+		}
+		if revision != job.DraftRevision || sql != sqlSnapshot {
+			return errConflict
+		}
 	}
-	if revision != job.DraftRevision || sql != sqlSnapshot {
-		return errConflict
-	}
-	review, err := approval.EnsureApprovedTx(ctx, tx, job.DatabaseID, job.DraftID, job.DraftRevision, job.ActionType)
+	review, err := approval.EnsureApprovedReviewTx(ctx, tx, job.DatabaseID, job.DraftID, job.DraftRevision, job.ActionType, job.ReviewID, job.TargetExecutionID)
 	if err != nil {
 		return err
 	}
@@ -235,7 +244,7 @@ func validateApprovedSnapshot(ctx context.Context, tx pgx.Tx, job jobs.Job, sqlS
 	if parseErr != nil || (job.ExecutionMode == "batch") != (config != nil) {
 		return errConflict
 	}
-	if review.ID != job.ReviewID || review.SQLSnapshot != sqlSnapshot || job.ActionType != "up" || (job.ExecutionMode != "normal" && job.ExecutionMode != "batch") {
+	if review.ID != job.ReviewID || review.SQLSnapshot != sqlSnapshot || (job.ActionType != "up" && job.ActionType != "resume") || (job.ExecutionMode != "normal" && job.ExecutionMode != "batch") {
 		return errConflict
 	}
 	return nil

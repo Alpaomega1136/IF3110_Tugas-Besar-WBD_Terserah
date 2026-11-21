@@ -73,7 +73,7 @@ func (s *Service) verifyBatchPending(ctx context.Context, tx pgx.Tx, dbID int64,
 		}
 		if cp.AttemptExecutionID != "" && verifiedAttempts[cp.AttemptExecutionID] != cp.AttemptVersion {
 			var valid bool
-			err = s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history WHERE execution_id=$1 AND version=$2 AND database_id=$3 AND sql=$4 AND executed_by=$5 AND batch_root_execution_id=$6)`, cp.AttemptExecutionID, cp.AttemptVersion, dbID, m.SQL, m.ActorID, m.ExecutionID).Scan(&valid)
+			err = s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history WHERE execution_id=$1 AND version=$2 AND database_id=$3 AND sql=$4 AND batch_root_execution_id=$5)`, cp.AttemptExecutionID, cp.AttemptVersion, dbID, m.SQL, m.ExecutionID).Scan(&valid)
 			if err != nil {
 				return Result{}, nil, progress, err
 			}

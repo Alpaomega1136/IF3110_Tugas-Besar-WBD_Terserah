@@ -19,11 +19,11 @@ func (s *Service) batchRoot(ctx context.Context, dbID int64, current pendingExec
  FROM migration_history h JOIN migration_history child ON child.batch_root_execution_id=h.execution_id
  WHERE h.execution_id=$1 AND h.database_id=$2 AND child.execution_id=$3
  AND child.database_id=h.database_id AND child.draft_id=h.draft_id AND child.draft_revision=h.draft_revision
- AND child.sql=h.sql AND child.executed_by=h.executed_by`, root, dbID, *current.execution).Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format)
+ AND child.sql=h.sql AND child.executed_by=$4`, root, dbID, *current.execution, current.actor).Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format)
 	if err != nil {
 		return item, err
 	}
-	if item.sql != current.sql || item.actor != current.actor {
+	if item.sql != current.sql {
 		return item, errBatchEvidence
 	}
 	item.isBatch = true

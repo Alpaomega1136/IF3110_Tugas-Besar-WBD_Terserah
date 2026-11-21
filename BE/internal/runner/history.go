@@ -16,18 +16,21 @@ import (
 )
 
 type History struct {
-	DatabaseID  int64      `json:"database_id,string"`
-	DraftID     *int64     `json:"draft_id,string"`
-	Revision    *int64     `json:"draft_revision,string"`
-	ExecutionID *string    `json:"execution_id"`
-	Version     int64      `json:"version,string"`
-	SQL         string     `json:"sql,omitempty"`
-	ExecutedBy  int64      `json:"executed_by,string"`
-	Username    string     `json:"username"`
-	StartedAt   time.Time  `json:"started_at"`
-	FinishedAt  *time.Time `json:"finished_at"`
-	Status      string     `json:"status"`
-	ErrorCode   *string    `json:"error_code"`
+	DatabaseID        int64      `json:"database_id,string"`
+	DraftID           *int64     `json:"draft_id,string"`
+	Revision          *int64     `json:"draft_revision,string"`
+	ExecutionID       *string    `json:"execution_id"`
+	Version           int64      `json:"version,string"`
+	SQL               string     `json:"sql,omitempty"`
+	ExecutedBy        int64      `json:"executed_by,string"`
+	Username          string     `json:"username"`
+	StartedAt         time.Time  `json:"started_at"`
+	FinishedAt        *time.Time `json:"finished_at"`
+	Status            string     `json:"status"`
+	ErrorCode         *string    `json:"error_code"`
+	ActionType        string     `json:"action_type"`
+	TargetExecutionID *string    `json:"target_execution_id,omitempty"`
+	JobID             *int64     `json:"job_id,string,omitempty"`
 }
 
 func (s *Service) listHistoryPage(ctx context.Context, dbID, before int64, limit int) ([]History, bool, *string, error) {
@@ -72,7 +75,7 @@ func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64,
 			h.started_at,
 			h.finished_at,
 			h.status,
-			h.error_code
+			h.error_code,h.action_type,h.target_execution_id,h.job_id
 		FROM migration_history h
 		JOIN users u ON u.id = h.executed_by
 		WHERE h.database_id = $1
@@ -102,6 +105,7 @@ func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64,
 			&item.FinishedAt,
 			&item.Status,
 			&item.ErrorCode,
+			&item.ActionType, &item.TargetExecutionID, &item.JobID,
 		)
 		if err != nil {
 			return nil, err
