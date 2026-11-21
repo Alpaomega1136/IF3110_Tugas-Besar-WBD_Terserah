@@ -171,11 +171,21 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	if err = bindTarget(ctx, meta, tx, dbID); err != nil {
 		return nil, err
 	}
+	var live bool
+	err = meta.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id AND a.attempt_no=j.attempt_count
+ JOIN migration_history h ON h.execution_id=a.execution_id WHERE j.database_id=$1 AND j.status='running' AND j.lease_expires_at>clock_timestamp() AND h.status='running')`, dbID).Scan(&live)
+	if err != nil {
+		return nil, err
+	}
+	if live {
+		return nil, errActiveJob
+	}
 	rows, err := meta.Query(ctx, `
 		SELECT h.execution_id,h.version,h.sql,h.executed_by,h.receipt_version,
  EXISTS(SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id WHERE a.execution_id=h.execution_id AND j.execution_mode='batch')
 		FROM migration_history h
 		WHERE h.database_id = $1 AND h.status IN ('running', 'unknown','partial')
+ AND NOT EXISTS(SELECT 1 FROM migration_job_attempts sealed WHERE sealed.execution_id=h.execution_id AND sealed.retry_scheduled)
 		ORDER BY h.version
 		LIMIT 100
 		FOR UPDATE

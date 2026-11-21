@@ -114,15 +114,15 @@ func (s *Service) reserveJob(ctx context.Context, c *jobs.Claim) (Result, error)
 		return result, err
 	}
 	var pending bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history WHERE database_id=$1 AND status IN ('running','unknown','partial'))`, c.Job.DatabaseID).Scan(&pending); err != nil {
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history h WHERE database_id=$1 AND status IN ('running','unknown','partial') AND execution_id IS DISTINCT FROM $2
+ AND NOT EXISTS(SELECT 1 FROM migration_job_attempts a WHERE a.execution_id=h.execution_id AND a.retry_scheduled))`, c.Job.DatabaseID, c.ExecutionID).Scan(&pending)
+	if err != nil {
 		return result, err
 	}
 	if pending {
 		return result, errConflict
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO migration_history(database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id,receipt_version)
- SELECT $1,$2,$3,COALESCE(MAX(version),0)+1,$4,$5,'running',$6,1 FROM migration_history WHERE database_id=$1 RETURNING version`,
-		c.Job.DatabaseID, c.Job.DraftID, c.Job.DraftRevision, c.SQL, c.Job.RequestedBy, c.ExecutionID).Scan(&result.Version)
+	err = tx.QueryRow(ctx, `SELECT version FROM migration_history WHERE execution_id=$1 AND database_id=$2 AND draft_id=$3 AND draft_revision=$4 AND sql=$5 AND executed_by=$6 AND status='running'`, c.ExecutionID, c.Job.DatabaseID, c.Job.DraftID, c.Job.DraftRevision, c.SQL, c.Job.RequestedBy).Scan(&result.Version)
 	if err != nil {
 		return result, err
 	}

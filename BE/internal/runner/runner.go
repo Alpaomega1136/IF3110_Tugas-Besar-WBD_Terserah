@@ -51,6 +51,7 @@ type Result struct {
 }
 
 var errConflict = errors.New("draft revision changed or an unresolved execution exists")
+var errActiveJob = errors.New("a worker still owns a live execution lease")
 
 func rollback(tx pgx.Tx) {
 	if tx == nil {

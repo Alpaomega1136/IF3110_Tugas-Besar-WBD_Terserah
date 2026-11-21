@@ -249,9 +249,9 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	defer rollback(tx)
 	var dbID int64
 	err = tx.QueryRow(ctx, `SELECT d.id FROM database_connections d
- WHERE EXISTS(SELECT 1 FROM migration_jobs q WHERE q.database_id=d.id AND q.status='queued' AND q.available_at<=now() AND q.attempt_count<q.max_attempts)
- AND NOT EXISTS(SELECT 1 FROM migration_jobs a WHERE a.database_id=d.id AND a.status IN ('running','unknown','partial'))
- AND NOT EXISTS(SELECT 1 FROM migration_history h WHERE h.database_id=d.id AND h.status IN ('running','unknown','partial'))
+ WHERE EXISTS(SELECT 1 FROM migration_jobs q WHERE q.database_id=d.id AND q.status IN ('queued','retry_wait') AND q.available_at<=now() AND q.attempt_count<q.max_attempts AND NOT EXISTS(SELECT 1 FROM migration_jobs w WHERE w.database_id=d.id AND w.status='retry_wait' AND w.id<>q.id))
+ AND NOT EXISTS(SELECT 1 FROM migration_jobs a WHERE a.database_id=d.id AND a.status IN ('running','unknown','partial','recovering'))
+ AND NOT EXISTS(SELECT 1 FROM migration_history h WHERE h.database_id=d.id AND h.status IN ('running','unknown','partial') AND NOT EXISTS(SELECT 1 FROM migration_job_attempts sealed WHERE sealed.execution_id=h.execution_id AND sealed.retry_scheduled))
  ORDER BY (SELECT min(q.id) FROM migration_jobs q WHERE q.database_id=d.id AND q.status='queued' AND q.available_at<=now()),d.id
  LIMIT 1 FOR UPDATE OF d SKIP LOCKED`).Scan(&dbID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -262,8 +262,8 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	}
 	// The dispatch query's snapshot may predate another claimant's commit.
 	var blocked bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs WHERE database_id=$1 AND status IN ('running','unknown','partial'))
- OR EXISTS(SELECT 1 FROM migration_history WHERE database_id=$1 AND status IN ('running','unknown','partial'))`, dbID).Scan(&blocked)
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs WHERE database_id=$1 AND status IN ('running','unknown','partial','recovering'))
+ OR EXISTS(SELECT 1 FROM migration_history h WHERE database_id=$1 AND status IN ('running','unknown','partial') AND NOT EXISTS(SELECT 1 FROM migration_job_attempts sealed WHERE sealed.execution_id=h.execution_id AND sealed.retry_scheduled))`, dbID).Scan(&blocked)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +271,8 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 		return nil, nil
 	}
 	j, err := scanJob(tx.QueryRow(ctx, `SELECT `+jobColumns+` FROM migration_jobs
- WHERE database_id=$1 AND status='queued' AND available_at<=now() AND attempt_count<max_attempts
+ WHERE database_id=$1 AND status IN ('queued','retry_wait') AND available_at<=now() AND attempt_count<max_attempts
+ AND NOT EXISTS(SELECT 1 FROM migration_jobs w WHERE w.database_id=$1 AND w.status='retry_wait' AND w.id<>migration_jobs.id)
  ORDER BY id LIMIT 1 FOR UPDATE`, dbID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -297,14 +298,28 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	c := &Claim{ExecutionID: hex.EncodeToString(execution[:]), WorkerID: worker, LeaseToken: hex.EncodeToString(token[:]), SQL: sql, TraceParent: parent}
 	j, err = scanJob(tx.QueryRow(ctx, `UPDATE migration_jobs SET status='running',attempt_count=attempt_count+1,
  worker_id=$2,lease_token_hash=$3,lease_expires_at=clock_timestamp()+$4::bigint*interval '1 millisecond',
- started_at=COALESCE(started_at,clock_timestamp()),error_code=NULL WHERE id=$1 RETURNING `+jobColumns,
-		j.ID, worker, leaseHash(c.LeaseToken), lease.Milliseconds()))
+ started_at=COALESCE(started_at,clock_timestamp()),error_code=NULL,
+ batch_root_execution_id=CASE WHEN execution_mode='batch' THEN COALESCE(batch_root_execution_id,$5) ELSE NULL END WHERE id=$1 RETURNING `+jobColumns,
+		j.ID, worker, leaseHash(c.LeaseToken), lease.Milliseconds(), c.ExecutionID))
 	if err != nil {
 		return nil, err
 	}
 	c.Job = j
 	if _, err = tx.Exec(ctx, `INSERT INTO migration_job_attempts(job_id,execution_id,attempt_no,worker_id,sql_snapshot)
  VALUES($1,$2,$3,$4,$5)`, j.ID, c.ExecutionID, j.AttemptCount, worker, sql); err != nil {
+		return nil, err
+	}
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(batch_root_execution_id,'') FROM migration_jobs WHERE id=$1`, j.ID).Scan(&c.RootExecutionID); err != nil {
+		return nil, err
+	}
+	var root any
+	if c.RootExecutionID != "" {
+		root = c.RootExecutionID
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO migration_history(database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id,receipt_version,batch_root_execution_id)
+ SELECT $1,$2,$3,COALESCE(MAX(version),0)+1,$4,$5,'running',$6,1,$7 FROM migration_history WHERE database_id=$1 RETURNING version`,
+		j.DatabaseID, j.DraftID, j.DraftRevision, sql, j.RequestedBy, c.ExecutionID, root).Scan(&c.Version)
+	if err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -402,6 +417,9 @@ func (s *Service) Finish(ctx context.Context, c *Claim, out Outcome) error {
 			}
 		}
 	}
+	if _, err = tx.Exec(ctx, `UPDATE migration_history SET status=$2,error_code=NULLIF($3,''),finished_at=CASE WHEN $2 IN ('success','failed') THEN clock_timestamp() ELSE NULL END WHERE execution_id=$1 AND status IN ('running','unknown')`, c.ExecutionID, out.Status, out.ErrorCode); err != nil {
+		return err
+	}
 	result, err := tx.Exec(ctx, `UPDATE migration_job_attempts a SET status=$3,error_code=NULLIF($4,''),finished_at=clock_timestamp()
  WHERE job_id=$1 AND execution_id=$2 AND status='running'
  AND attempt_no=(SELECT attempt_count FROM migration_jobs WHERE id=$1)`, c.Job.ID, c.ExecutionID, out.Status, out.ErrorCode)
@@ -432,9 +450,9 @@ func CheckOwnedTx(ctx context.Context, tx pgx.Tx, c *Claim) error {
 	var id int64
 	err := tx.QueryRow(ctx, `SELECT j.id FROM migration_jobs j WHERE j.id=$1 AND j.status='running' AND j.worker_id=$2
  AND j.lease_token_hash=$3 AND j.lease_expires_at>clock_timestamp() AND j.database_id=$5 AND j.review_id=$6
- AND j.draft_id=$7 AND j.draft_revision=$8 AND j.requested_by=$9 AND j.sql_snapshot=$10
+ AND j.draft_id=$7 AND j.draft_revision=$8 AND j.requested_by=$9 AND j.sql_snapshot=$10 AND COALESCE(j.batch_root_execution_id,'')=$11
  AND EXISTS(SELECT 1 FROM migration_job_attempts a WHERE a.job_id=j.id AND a.execution_id=$4 AND a.attempt_no=j.attempt_count AND a.status='running') FOR UPDATE`,
-		c.Job.ID, c.WorkerID, leaseHash(c.LeaseToken), c.ExecutionID, c.Job.DatabaseID, c.Job.ReviewID, c.Job.DraftID, c.Job.DraftRevision, c.Job.RequestedBy, c.SQL).Scan(&id)
+		c.Job.ID, c.WorkerID, leaseHash(c.LeaseToken), c.ExecutionID, c.Job.DatabaseID, c.Job.ReviewID, c.Job.DraftID, c.Job.DraftRevision, c.Job.RequestedBy, c.SQL, c.RootExecutionID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrLeaseLost
 	}

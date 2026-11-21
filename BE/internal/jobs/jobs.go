@@ -25,12 +25,14 @@ var (
 type Status string
 
 const (
-	Queued  Status = "queued"
-	Running Status = "running"
-	Success Status = "success"
-	Failed  Status = "failed"
-	Unknown Status = "unknown"
-	Partial Status = "partial"
+	Queued     Status = "queued"
+	Running    Status = "running"
+	Success    Status = "success"
+	Failed     Status = "failed"
+	Unknown    Status = "unknown"
+	Partial    Status = "partial"
+	Recovering Status = "recovering"
+	RetryWait  Status = "retry_wait"
 )
 
 type Job struct {
@@ -65,12 +67,14 @@ type Attempt struct {
 
 // Claim is server-internal. SQL and fencing credentials never enter job API responses.
 type Claim struct {
-	Job         Job    `json:"-"`
-	ExecutionID string `json:"-"`
-	WorkerID    string `json:"-"`
-	LeaseToken  string `json:"-"`
-	SQL         string `json:"-"`
-	TraceParent string `json:"-"`
+	Job             Job    `json:"-"`
+	ExecutionID     string `json:"-"`
+	WorkerID        string `json:"-"`
+	LeaseToken      string `json:"-"`
+	SQL             string `json:"-"`
+	TraceParent     string `json:"-"`
+	Version         int64  `json:"-"`
+	RootExecutionID string `json:"-"`
 }
 
 type Outcome struct {

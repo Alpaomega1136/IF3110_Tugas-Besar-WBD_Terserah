@@ -51,7 +51,7 @@ func (s *Service) authorize(r *http.Request, write bool) (auth.Principal, int64,
 
 func fail(w http.ResponseWriter, err error) {
 	var pgerr *pgconn.PgError
-	if errors.As(err, &pgerr) && pgerr.Code == "55P03" {
+	if (errors.As(err, &pgerr) && pgerr.Code == "55P03") || errors.Is(err, errActiveJob) {
 		httpx.Error(w, http.StatusConflict, "migration_busy", "A target migration is still active; retry later")
 		return
 	}
