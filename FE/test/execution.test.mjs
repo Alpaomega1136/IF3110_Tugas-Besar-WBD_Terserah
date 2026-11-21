@@ -32,7 +32,7 @@ async function setup({ access = "edit", selected = true, confirm = true, backend
         "draft-detail-updated", "draft-detail-sql", "draft-execution", "draft-execute", "draft-reload",
         "draft-explain", "draft-explain-message", "draft-explain-result",
         "draft-execution-revision", "draft-execution-state", "draft-execution-message",
-        "draft-execution-result", "draft-result-status", "draft-result-version", "draft-result-id", "draft-result-error"
+        "draft-execution-result", "draft-result-status", "draft-result-version", "draft-result-id", "draft-result-error", "draft-job-link"
     ];
     const elements = Object.fromEntries(ids.map((id) => [id, new Element()]));
     const $ = (id) => elements[id];
@@ -104,6 +104,7 @@ test("Execute submits once and polls the job until the worker commits", async ()
     assert.equal(executeCalls(ui).length, 1);
     assert.equal(polls, 1);
     assert.equal(ui.$("draft-result-id").textContent, "worker-execution");
+    assert.equal(ui.$("draft-job-link").href, `/databases/${databaseID}/jobs/${job.id}`);
     assert.match(ui.$("draft-execution-message").textContent, /berhasil di-commit/);
 });
 
@@ -164,6 +165,7 @@ test("replayed Execute preserves a resumed job handoff instead of claiming SQL s
     await ui.$("draft-execute").fire("click");
     assert.equal(executeCalls(ui).length, 1);
     assert.equal(ui.$("draft-result-status").textContent, "resumed");
+    assert.equal(ui.$("draft-job-link").href, `/databases/${databaseID}/jobs/19`);
     assert.match(ui.$("draft-execution-message").textContent, /Job resume: 19/);
     assert.doesNotMatch(ui.$("draft-execution-message").textContent, /berhasil di-commit|tidak valid|transaksi telah di-rollback/);
 });

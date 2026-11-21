@@ -221,19 +221,20 @@ test("refresh retrieves newly registered database without reloading whole page",
     assert.equal(ui.$("grants-no-databases").hidden, true);
 });
 
-test("view-only dashboard offers Viewer and History but not Draft", async () => {
+test("view-only dashboard offers Viewer, History and Jobs but not Draft", async () => {
     const ui = await setupDashboard();
     const links = ui.$("databases-body").children[0].children[4].children;
     assert.deepEqual(links.map((link) => link.href), [
-        `/databases/${big}/viewer`, `/databases/${big}/history`
+        `/databases/${big}/viewer`, `/databases/${big}/history`, `/databases/${big}/jobs`
     ]);
     assert.equal(ui.$("admin-nav").hidden, true);
 });
 
 test("edit dashboard offers all workspace destinations", async () => {
     const ui = await setupDashboard({ databases: [connection] });
-    assert.equal(ui.$("databases-body").children[0].children[4].children.length, 3);
-    assert.equal(ui.$("databases-body").children[0].children[4].children[2].href, `/databases/${big}/drafts`);
+    assert.equal(ui.$("databases-body").children[0].children[4].children.length, 4);
+    assert.equal(ui.$("databases-body").children[0].children[4].children[2].href, `/databases/${big}/jobs`);
+    assert.equal(ui.$("databases-body").children[0].children[4].children[3].href, `/databases/${big}/drafts`);
 });
 
 test("admin without group grant sees empty state rather than target bypass", async () => {

@@ -24,7 +24,7 @@ const ids = [
     "history-detail-status", "history-detail-error", "history-detail-content", "history-detail-sql-section",
     "history-detail-sql", "history-detail-version", "history-detail-execution-id", "history-detail-draft-revision",
     "history-detail-draft-id", "history-detail-result", "history-detail-executor", "history-detail-started",
-    "history-detail-finished", "history-detail-error-code"
+    "history-detail-finished", "history-detail-error-code", "history-detail-action", "history-detail-target", "history-detail-job", "history-detail-no-job"
 ];
 let generation = 0;
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -42,7 +42,7 @@ test("partial history and reconciliation remain visible without rerunning SQL", 
     assert.equal(ui.calls.some((call) => call.url.endsWith("/execute")), false);
 });
 
-async function setupHistory({ access = "edit", confirm = true, custom, firstPage = first, more = true } = {}) {
+async function setupHistory({ access = "edit", confirm = true, search = "", custom, firstPage = first, more = true } = {}) {
     clearAuthState();
     const elements = Object.fromEntries(ids.map((id) => [id, new Element()]));
     const $ = (id) => elements[id];
@@ -53,7 +53,7 @@ async function setupHistory({ access = "edit", confirm = true, custom, firstPage
         "history-detail-error", "history-detail-content", "history-detail-sql-section", "history-drafts-link"]) $(id).hidden = true;
     const redirects = [], confirms = [], calls = [];
     globalThis.document = { getElementById: (id) => $(id), createElement: (tag) => new Element(tag) };
-    globalThis.window = { location: { replace: (path) => redirects.push(path) }, confirm: (text) => { confirms.push(text); return confirm; } };
+    globalThis.window = { location: { search, replace: (path) => redirects.push(path) }, confirm: (text) => { confirms.push(text); return confirm; } };
     globalThis.fetch = async (url, opts = {}) => {
         const method = opts.method || "GET";
         calls.push({ url, method, headers: new Headers(opts.headers), credentials: opts.credentials });
@@ -101,7 +101,7 @@ test("history list uses cursor and returns to previous page; no numeric precisio
     assert.equal(ui.$("history-next").disabled, false);
     assert.match(ui.$("history-list-body").children[0].textContent, /9007199254741199/);
     assert.match(ui.$("history-list-body").children[0].textContent, /exec-0/);
-    assert.match(ui.$("history-pending-notice").textContent, /belum final/);
+    assert.match(ui.$("history-pending-notice").textContent, /Periksa Jobs untuk status pekerjaan terkini/);
     await ui.$("history-next").fire("click");
     assert.equal(ui.$("history-page-number").textContent, "2");
     assert.equal(ui.$("history-next").disabled, true);
@@ -132,6 +132,18 @@ test("view only can read all history but cannot reconcile or open draft", async 
     assert.equal(ui.$("history-drafts-link").hidden, true);
     await ui.$("history-reconcile").fire("click");
     assert.equal(ui.calls.filter((call) => call.method === "POST").length, 0);
+});
+
+test("history deep link opens the exact attempt and links back to its job", async () => {
+    const entry = { ...first[0], job_id: "25", action_type: "resume", target_execution_id: "original-attempt" };
+    const ui = await setupHistory({ firstPage: [entry], more: false, search: `?version=${entry.version}`,
+        custom: ({ url }) => url === `${api}/${entry.version}` ? json({ ...entry, sql: "historical SQL" }) : undefined });
+    assert.equal(ui.$("history-detail-version").textContent, entry.version);
+    assert.equal(ui.$("history-detail-action").textContent, "resume");
+    assert.equal(ui.$("history-detail-target").textContent, "original-attempt");
+    assert.equal(ui.$("history-detail-job").href, `/databases/${db}/jobs/25`);
+    assert.equal(ui.$("history-list-body").children[0].children[8].children[1].href, `/databases/${db}/jobs/25`);
+    assert.equal(ui.calls.some((c) => c.method === "POST"), false);
 });
 
 test("reconcile requires confirmation and POST with CSRF; refreshes history; never executes SQL", async () => {

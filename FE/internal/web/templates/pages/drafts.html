@@ -35,6 +35,7 @@
                         <strong id="draft-access"></strong>
                     </p>
                     <p class="database-workspace-links">
+                        <a class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/jobs">Pantau Jobs</a>
                         <a class="workspace-button" href="/databases/{{.DatabaseID}}/history">
                             Lihat Migration History
                         </a>
@@ -217,6 +218,7 @@
                 <section id="draft-execution-result" class="draft-execution-result"
                          aria-labelledby="draft-execution-result-heading" hidden>
                     <h3 id="draft-execution-result-heading">Hasil Eksekusi</h3>
+                    <a id="draft-job-link" class="workspace-button workspace-button--subtle" hidden>Pantau job</a>
                     <dl class="draft-execution-metadata">
                         <dt>Status</dt><dd><span id="draft-result-status"></span></dd>
                         <dt>Version</dt><dd id="draft-result-version"></dd>

@@ -191,6 +191,13 @@ function renderHistory(entries) {
             button.addEventListener("click", () => openHistory(version));
         }
         actionCell.appendChild(button);
+        if (positiveInt64(entry.job_id)) {
+            const job = document.createElement("a");
+            job.className = "workspace-button workspace-button--subtle";
+            job.textContent = `Job #${entry.job_id}`;
+            job.href = `/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(entry.job_id)}`;
+            actionCell.appendChild(job);
+        }
         row.appendChild(actionCell);
         listBody.appendChild(row);
     }
@@ -202,7 +209,7 @@ function renderHistory(entries) {
     showMessage(
         pendingNotice,
         pendingCount
-            ? `${pendingCount} eksekusi pada halaman ini belum final. ${canEdit ? "Gunakan Reconcile jika diperlukan." : "Mintalah pengguna Edit memeriksa statusnya."}`
+            ? `${pendingCount} catatan pada halaman ini berstatus running, unknown, atau partial. Periksa Jobs untuk status pekerjaan terkini. ${canEdit ? "Gunakan Reconcile jika hasil belum pasti." : "Reconcile memerlukan akses Edit."}`
             : ""
     );
 
@@ -229,6 +236,17 @@ function showHistory(entry, version) {
     for (const [id, value] of Object.entries(fields)) {
         byId(id).textContent = String(value);
     }
+    const action = byId("history-detail-action"), target = byId("history-detail-target");
+    if (action) action.textContent = entry.action_type || "up";
+    if (target) target.textContent = entry.target_execution_id || "-";
+    const job = byId("history-detail-job"), noJob = byId("history-detail-no-job");
+    if (job) {
+        const valid = positiveInt64(entry.job_id);
+        job.hidden = !valid;
+        if (noJob) noJob.hidden = valid;
+        if (valid) { job.href = `/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(entry.job_id)}`; job.textContent = `Pantau Job #${entry.job_id}`; }
+        else job.removeAttribute("href");
+    }
     detailSQL.textContent = entry.sql;
     detailContent.hidden = false;
     detailSQLSection.hidden = false;
@@ -246,6 +264,7 @@ async function openHistory(version) {
 
     try {
         const result = await authenticatedRequest(`${apiPath}/${encodeURIComponent(version)}`);
+        if (page.isConnected === false) return;
         showHistory(result, version);
     } catch (error) {
         handleRequestError(error, detailError);
@@ -388,6 +407,8 @@ async function initialize() {
         workspace.hidden = false;
 
         await loadHistory(0, true);
+        const initialVersion = new URLSearchParams(window.location.search).get("version");
+        if (!workspace.hidden && positiveInt64(initialVersion) && page.isConnected !== false) await openHistory(initialVersion);
     } catch (error) {
         handleRequestError(error, pageError);
     } finally {

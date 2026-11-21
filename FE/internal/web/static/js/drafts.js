@@ -340,6 +340,15 @@ function displayExecutionResult(result) {
 async function followJob(response) {
     const pending = ["queued", "running", "unknown", "recovering", "retry_wait"];
     let job = parseJobResponse(response, databaseId);
+    const monitor = byId("draft-job-link");
+    const showMonitor = () => {
+        if (!monitor) return;
+        const id = job.resumed_by_job_id || job.id;
+        monitor.href = `/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(id)}`;
+        monitor.textContent = `Pantau Job #${id}`;
+        monitor.hidden = false;
+    };
+    showMonitor();
     displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
     for (let poll = 0; poll < 30; poll++) {
         if (executionResult.isConnected === false) return;
@@ -348,6 +357,7 @@ async function followJob(response) {
         const current = parseJobResponse(response, databaseId);
         if (current.id !== job.id) throw new Error("Identitas job berubah. Periksa History.");
         job = current;
+        showMonitor();
         if (job.status === "resumed") {
             displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
             return;
@@ -376,6 +386,8 @@ async function executeDraft() {
     setBusy(true);
     setBanner(executionMessage, "Memeriksa revisi terbaru dan hak akses...");
     executionResult.hidden = true;
+    const monitor = byId("draft-job-link");
+    if (monitor) { monitor.hidden = true; monitor.removeAttribute("href"); }
 
     try {
         // A fresh GET catches stale editor data before asking the user to confirm.

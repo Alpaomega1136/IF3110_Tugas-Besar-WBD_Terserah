@@ -107,6 +107,7 @@ async function loadDatabases(isAdmin) {
             links.className = "database-workspace-links";
             actionLink(links, database.id, "viewer", "Viewer", "secondary");
             actionLink(links, database.id, "history", "History", "secondary");
+            actionLink(links, database.id, "jobs", "Jobs", "secondary");
             if (database.access === "edit") actionLink(links, database.id, "drafts", "Kelola Draft", "primary");
             row.appendChild(links);
             databasesBody.appendChild(row);

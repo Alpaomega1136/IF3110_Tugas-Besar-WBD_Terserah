@@ -25,6 +25,7 @@
                     </p>
                 </div>
                 <div class="history-target-actions">
+                    <a class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/jobs">Pantau Jobs</a>
                     <p class="viewer-access-pill">
                         Hak akses: <strong id="history-access"></strong>
                     </p>
@@ -123,6 +124,9 @@
                     <dt>Mulai</dt><dd id="history-detail-started"></dd>
                     <dt>Selesai</dt><dd id="history-detail-finished"></dd>
                     <dt>Error Code</dt><dd id="history-detail-error-code"></dd>
+                    <dt>Aksi</dt><dd id="history-detail-action"></dd>
+                    <dt>Target execution</dt><dd id="history-detail-target"></dd>
+                    <dt>Job</dt><dd><a id="history-detail-job" hidden>Pantau job</a><span id="history-detail-no-job">-</span></dd>
                 </dl>
 
                 <div id="history-detail-sql-section" hidden>
