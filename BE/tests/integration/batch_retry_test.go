@@ -102,6 +102,67 @@ func TestBatchTransientRetryKeepsScopeAndPriorAttemptHistory(t *testing.T) {
 	}
 }
 
+func TestBatchRetryLimitRetainsPartialTargetGate(t *testing.T) {
+	f := newQueueFixture(t)
+	db, schema := batchTarget(t)
+	ctx := context.Background()
+	relation := pgx.Identifier{schema, "items"}.Sanitize()
+	if _, err := db.Exec(ctx, "CREATE TABLE "+relation+"(id bigint PRIMARY KEY,value int); INSERT INTO "+relation+" SELECT n,0 FROM generate_series(1,5) n"); err != nil {
+		t.Fatal(err)
+	}
+	barrier, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer barrier.Rollback(ctx)
+	if _, err = barrier.Exec(ctx, "SELECT * FROM "+relation+" WHERE id=3 FOR UPDATE"); err != nil {
+		t.Fatal(err)
+	}
+	j := enqueueBatch(t, f, batchConfig(schema))
+	w := queueWorker(t, f)
+	for attempt := 1; attempt <= 3; attempt++ {
+		if _, err = w.ProcessNext(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if attempt < 3 {
+			jobPhase(t, f, j, jobs.Recovering)
+			recoveryDue(t, f, j.ID)
+			if _, err = w.RecoverNext(ctx); err != nil {
+				t.Fatal(err)
+			}
+			jobPhase(t, f, j, jobs.RetryWait)
+			recoveryDue(t, f, j.ID)
+		}
+	}
+	current := jobPhase(t, f, j, jobs.Partial)
+	if current.AttemptCount != 3 || current.CommittedBatches != 1 || current.CommittedRows != 2 {
+		t.Fatal("retry limit lost the committed prefix", current)
+	}
+	if err = barrier.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	queuedJob(t, f, f.first, "SELECT 1")
+	if found, err := w.ProcessNext(ctx); found || err != nil {
+		t.Fatal("exhausted partial job released its target", err)
+	}
+	if found, err := w.RecoverNext(ctx); found || err != nil {
+		t.Fatal("exhausted partial job kept retrying", err)
+	}
+	_, attempts, err := f.service.Get(ctx, f.actor, f.first, j.ID)
+	if err != nil || len(attempts) != 3 {
+		t.Fatal("missing retry history", err)
+	}
+	for _, a := range attempts {
+		if a.Status != jobs.Partial {
+			t.Fatal("partial history was rewritten", a.Status)
+		}
+	}
+	var valid bool
+	if err = db.QueryRow(ctx, `SELECT (SELECT count(*) FROM _terserah.batch_checkpoints WHERE execution_id=$1)=1 AND (SELECT count(*) FROM _terserah.batch_rows WHERE execution_id=$1)=2`, attempts[0].ExecutionID).Scan(&valid); err != nil || !valid {
+		t.Fatal("retry duplicated committed batches", err)
+	}
+}
+
 func TestBatchAutomaticRecoveryVerifiesLostCommitBeforeContinuing(t *testing.T) {
 	for _, scenario := range []struct {
 		name     string
