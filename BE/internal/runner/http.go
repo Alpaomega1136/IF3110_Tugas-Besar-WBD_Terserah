@@ -56,8 +56,8 @@ func fail(w http.ResponseWriter, err error) {
 		return
 	}
 	switch {
-	case errors.Is(err, errBatchRecovery):
-		httpx.Error(w, http.StatusConflict, "batch_recovery_required", "Verify batch checkpoints before retrying or releasing this target")
+	case errors.Is(err, errBatchEvidence):
+		httpx.Error(w, http.StatusConflict, "batch_evidence_invalid", "Batch evidence cannot be verified; the target remains blocked")
 	case errors.Is(err, connections.ErrForbidden), errors.Is(err, jobs.ErrForbidden):
 		httpx.Error(w, http.StatusForbidden, "forbidden", "Database access denied")
 	case errors.Is(err, pgx.ErrNoRows), errors.Is(err, jobs.ErrNotFound):

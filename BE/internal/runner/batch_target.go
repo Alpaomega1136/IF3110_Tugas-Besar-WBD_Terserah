@@ -14,7 +14,6 @@ var (
 	errBatchScope    = errors.New("batch target rows changed outside the frozen scope")
 	errBatchPayload  = errors.New("batch recovery images exceed the bounded memory budget")
 	errBatchEvidence = errors.New("batch commit evidence could not be verified")
-	errBatchRecovery = errors.New("batch checkpoint verification is required before recovery")
 )
 
 func protectedBatchHistory(ctx context.Context, tx pgx.Tx) error {

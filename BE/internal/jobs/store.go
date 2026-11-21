@@ -477,3 +477,26 @@ func ResolveUnknownTx(ctx context.Context, tx pgx.Tx, execution string, out Outc
 	_, err = tx.Exec(ctx, `UPDATE migration_jobs SET status=$2,error_code=NULLIF($3,''),finished_at=clock_timestamp() WHERE id=$1`, jobID, out.Status, out.ErrorCode)
 	return err
 }
+
+// ResolveBatchTx accepts only counts/outcomes proven under both target locks.
+func ResolveBatchTx(ctx context.Context, tx pgx.Tx, execution string, out Outcome, batches, rows int64) error {
+	if !validOutcome(out) || batches < 0 || rows < batches || (out.Status == Partial && batches == 0) {
+		return ErrInvalid
+	}
+	var id, storedBatches, storedRows int64
+	err := tx.QueryRow(ctx, `SELECT j.id,j.committed_batches,j.committed_rows FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id
+ WHERE a.execution_id=$1 AND a.attempt_no=j.attempt_count AND j.execution_mode='batch' FOR UPDATE OF j`, execution).Scan(&id, &storedBatches, &storedRows)
+	if err != nil {
+		return err
+	}
+	if storedBatches > batches || storedRows > rows {
+		return ErrConflict
+	}
+	if _, err = tx.Exec(ctx, `UPDATE migration_job_attempts SET status=$2,error_code=NULLIF($3,''),finished_at=clock_timestamp() WHERE execution_id=$1`, execution, out.Status, out.ErrorCode); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE migration_jobs SET status=$2,error_code=NULLIF($3,''),committed_batches=$4,committed_rows=$5,
+ finished_at=CASE WHEN $2 IN ('success','failed') THEN clock_timestamp() ELSE NULL END,
+ worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL WHERE id=$1`, id, out.Status, out.ErrorCode, batches, rows)
+	return err
+}

@@ -135,7 +135,8 @@ func TestBatchMiddleFailurePreservesCommittedPrefixAndBlocksSuccessor(t *testing
 	if err != nil || nextState.Status != jobs.Queued {
 		t.Fatal("successor did not remain queued", err)
 	}
-	status(t, f.editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/migrations/reconcile", f.first), nil), 409)
+	status(t, f.editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/migrations/reconcile", f.first), nil), 200)
+	assertJob(t, f, j, jobs.Partial, "reconciled_partial")
 }
 
 func TestBatchRejectsUnsafeKeysTablesAndSQLOverrides(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"terserah/backend/internal/auth"
+	"terserah/backend/internal/batch"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/policy"
@@ -116,6 +117,7 @@ type pendingExecution struct {
 	sql       string
 	actor     int64
 	format    int
+	isBatch   bool
 }
 
 // reconcilePending checks `_terserah.migration_receipts` on the target DB for any
@@ -169,19 +171,12 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	if err = bindTarget(ctx, meta, tx, dbID); err != nil {
 		return nil, err
 	}
-	var batchPending bool
-	if err = meta.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs WHERE database_id=$1 AND execution_mode='batch' AND status IN ('running','unknown','partial'))`, dbID).Scan(&batchPending); err != nil {
-		return nil, err
-	}
-	if batchPending {
-		return nil, errBatchRecovery
-	}
-
 	rows, err := meta.Query(ctx, `
-		SELECT execution_id, version, sql, executed_by, receipt_version
-		FROM migration_history
-		WHERE database_id = $1 AND status IN ('running', 'unknown')
-		ORDER BY version
+		SELECT h.execution_id,h.version,h.sql,h.executed_by,h.receipt_version,
+ EXISTS(SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id WHERE a.execution_id=h.execution_id AND j.execution_mode='batch')
+		FROM migration_history h
+		WHERE h.database_id = $1 AND h.status IN ('running', 'unknown','partial')
+		ORDER BY h.version
 		LIMIT 100
 		FOR UPDATE
 	`, dbID)
@@ -191,7 +186,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	items := []pendingExecution{}
 	for rows.Next() {
 		var item pendingExecution
-		if err = rows.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format); err != nil {
+		if err = rows.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format, &item.isBatch); err != nil {
 			break
 		}
 		items = append(items, item)
@@ -206,24 +201,36 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 
 	results := []Result{}
 	for _, item := range items {
-		out, finished, err := s.verifyPendingAttempt(ctx, tx, dbID, item)
+		var out Result
+		var finished *time.Time
+		var progress batch.Checkpoint
+		if item.isBatch {
+			out, finished, progress, err = s.verifyBatchPending(ctx, tx, dbID, item)
+		} else {
+			out, finished, err = s.verifyPendingAttempt(ctx, tx, dbID, item)
+		}
 		if err != nil {
 			return nil, err
 		}
 		_, err = meta.Exec(ctx, `
 			UPDATE migration_history
 			SET status = $1, error_code = $2, finished_at = $3
-			WHERE database_id = $4 AND version = $5 AND status IN ('running', 'unknown')
+			WHERE database_id = $4 AND version = $5 AND status IN ('running', 'unknown','partial')
 		`, out.Status, out.ErrorCode, finished, dbID, item.version)
 		if err != nil {
 			return nil, err
 		}
-		if out.Status == "success" || out.Status == "failed" {
+		if item.isBatch || out.Status == "success" || out.Status == "failed" {
 			outcome := jobs.Outcome{Status: jobs.Status(out.Status)}
 			if out.ErrorCode != nil {
 				outcome.ErrorCode = *out.ErrorCode
 			}
-			if err = jobs.ResolveUnknownTx(ctx, meta, out.ExecutionID, outcome); err != nil {
+			if item.isBatch {
+				err = jobs.ResolveBatchTx(ctx, meta, out.ExecutionID, outcome, progress.BatchNo, progress.CommittedRows)
+			} else {
+				err = jobs.ResolveUnknownTx(ctx, meta, out.ExecutionID, outcome)
+			}
+			if err != nil {
 				return nil, err
 			}
 		}

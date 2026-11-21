@@ -26,12 +26,17 @@ import (
 
 // The fixture relays plaintext PostgreSQL frames and cuts exactly one COMMIT
 // either before forwarding it or after the server confirms durable success.
-func commitProxy(t *testing.T, address string, fault, after bool) int {
+func commitProxy(t *testing.T, address string, fault, after bool, commitNumber ...int) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	cutAt := int32(1)
+	if len(commitNumber) > 0 {
+		cutAt = int32(commitNumber[0])
+	}
+	var observed atomic.Int32
 	var once atomic.Bool
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -91,7 +96,7 @@ func commitProxy(t *testing.T, address string, fault, after bool) int {
 					if err != nil {
 						return
 					}
-					if fault && !after && kind == 'Q' && strings.EqualFold(string(payload), "COMMIT\x00") && once.CompareAndSwap(false, true) {
+					if fault && !after && kind == 'Q' && strings.EqualFold(string(payload), "COMMIT\x00") && observed.Add(1) == cutAt && once.CompareAndSwap(false, true) {
 						return
 					}
 					if err = writeFrame(backend, kind, payload); err != nil {
@@ -109,7 +114,7 @@ func commitProxy(t *testing.T, address string, fault, after bool) int {
 					if err != nil {
 						return
 					}
-					if fault && after && kind == 'C' && string(payload) == "COMMIT\x00" && once.CompareAndSwap(false, true) {
+					if fault && after && kind == 'C' && string(payload) == "COMMIT\x00" && observed.Add(1) == cutAt && once.CompareAndSwap(false, true) {
 						return
 					}
 					if err = writeFrame(client, kind, payload); err != nil {
