@@ -52,6 +52,12 @@ func (w *Worker) Run(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 			for ctx.Err() == nil {
+				if _, err := w.RecoverNext(ctx); err != nil && ctx.Err() == nil {
+					telemetry.Event(ctx, "worker_recovery_failed", "error_code", "recovery_unavailable")
+				}
+				if ctx.Err() != nil {
+					return
+				}
 				found, err := w.ProcessNext(ctx)
 				if err != nil {
 					telemetry.Event(ctx, "worker_dispatch_failed", "error_code", "dispatch_unavailable")
@@ -70,6 +76,22 @@ func (w *Worker) Run(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
+}
+
+func (w *Worker) RecoverNext(ctx context.Context) (bool, error) {
+	r, err := w.queue.RecoveryCandidate(ctx)
+	if err != nil || r == nil {
+		return false, err
+	}
+	ctx, span := telemetry.Start(telemetry.Restore(ctx, r.TraceParent), "migration.recovery", trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(attribute.Int64("job.id", r.Job.ID), attribute.String("execution.id", r.ExecutionID)))
+	defer span.End()
+	ctx, cancel := context.WithTimeout(ctx, w.options.JobTimeout)
+	defer cancel()
+	err = w.executor.RecoverJob(ctx, r)
+	if err != nil {
+		telemetry.Failure(span, "recovery_unavailable")
+	}
+	return true, err
 }
 
 func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {

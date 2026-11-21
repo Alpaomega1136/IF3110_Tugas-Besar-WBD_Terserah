@@ -130,6 +130,8 @@ func (s *Service) commitAndFinalizeLedger(ctx context.Context, targetTx pgx.Tx, 
 		    error_code = $2,
 		    finished_at = CASE WHEN $1 IN ('success', 'failed') THEN now() ELSE NULL END
 		WHERE execution_id = $3 AND status IN ('running', 'unknown')
+ AND EXISTS(SELECT 1 FROM migration_job_attempts a JOIN migration_jobs j ON j.id=a.job_id
+ WHERE a.execution_id=$3 AND a.attempt_no=j.attempt_count AND NOT a.retry_scheduled AND j.status='running' AND j.lease_expires_at>clock_timestamp())
 	`, result.Status, result.ErrorCode, result.ExecutionID)
 	if err != nil || updated.RowsAffected() != 1 {
 		result.Status = "unknown"

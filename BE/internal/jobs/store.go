@@ -429,16 +429,35 @@ func (s *Service) Finish(ctx context.Context, c *Claim, out Outcome) error {
 	if result.RowsAffected() != 1 {
 		return ErrLeaseLost
 	}
-	_, err = tx.Exec(ctx, `UPDATE migration_jobs SET status=$2,error_code=NULLIF($3,''),
+	var batches int64
+	if err = tx.QueryRow(ctx, `SELECT committed_batches FROM migration_jobs WHERE id=$1`, c.Job.ID).Scan(&batches); err != nil {
+		return err
+	}
+	jobState := out.Status
+	if out.Status == Failed && c.Job.ExecutionMode == "batch" && batches > 0 {
+		jobState = Partial
+	}
+	if (out.Status == Failed || out.Status == Partial) && Transient(out.ErrorCode) && c.Job.AttemptCount < c.Job.MaxAttempts {
+		jobState = Recovering
+	}
+	delay := int64(0)
+	if jobState == Unknown || jobState == Recovering {
+		delay = 1000
+	}
+	updated, err := tx.Exec(ctx, `UPDATE migration_jobs SET status=$2,error_code=NULLIF($3,''),
  finished_at=CASE WHEN $2 IN ('success','failed') THEN clock_timestamp() ELSE NULL END,
- worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL WHERE id=$1`, c.Job.ID, out.Status, out.ErrorCode)
+ worker_id=NULL,lease_token_hash=NULL,lease_expires_at=NULL,available_at=clock_timestamp()+$4::bigint*interval '1 millisecond'
+ WHERE id=$1 AND status='running' AND worker_id=$5 AND lease_token_hash=$6 AND lease_expires_at>clock_timestamp()`, c.Job.ID, jobState, out.ErrorCode, delay, c.WorkerID, leaseHash(c.LeaseToken))
 	if err != nil {
 		return err
+	}
+	if updated.RowsAffected() != 1 {
+		return ErrLeaseLost
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return err
 	}
-	telemetry.Event(ctx, "job_finished", "actor_id", c.Job.RequestedBy, "database_id", c.Job.DatabaseID, "job_id", c.Job.ID, "execution_id", c.ExecutionID, "attempt", c.Job.AttemptCount, "status", out.Status, "error_code", out.ErrorCode)
+	telemetry.Event(ctx, "job_finished", "actor_id", c.Job.RequestedBy, "database_id", c.Job.DatabaseID, "job_id", c.Job.ID, "execution_id", c.ExecutionID, "attempt", c.Job.AttemptCount, "status", jobState, "attempt_status", out.Status, "error_code", out.ErrorCode)
 	return nil
 }
 

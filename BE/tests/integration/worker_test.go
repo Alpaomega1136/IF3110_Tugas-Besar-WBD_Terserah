@@ -257,7 +257,11 @@ func TestWorkerShutdownRollsBackAndStops(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("worker shutdown did not finish")
 	}
-	assertJob(t, f, j, jobs.Failed, "execution_timeout")
+	jobPhase(t, f, j, jobs.Recovering)
+	_, attempts, err := f.service.Get(context.Background(), f.actor, j.DatabaseID, j.ID)
+	if err != nil || len(attempts) != 1 || attempts[0].Status != jobs.Failed || attempts[0].ErrorCode == nil || *attempts[0].ErrorCode != "worker_stopped" {
+		t.Fatalf("shutdown must preserve a retryable rolled-back attempt: %+v %v", attempts, err)
+	}
 }
 
 func TestJobFinalizationHonorsConcurrentVerifiedRecovery(t *testing.T) {

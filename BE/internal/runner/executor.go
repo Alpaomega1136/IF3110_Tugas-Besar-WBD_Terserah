@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"net"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -89,6 +90,9 @@ func (s *Service) ExecuteJob(ctx context.Context, c *jobs.Claim) (Result, error)
 }
 
 func (s *Service) preflightFailure(ctx context.Context, c *jobs.Claim, cause error) (Result, error) {
+	if ctx.Err() != nil {
+		cause = ctx.Err()
+	}
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	result, err := s.reserveJob(cleanup, c)
@@ -146,36 +150,11 @@ func (s *Service) validateJob(ctx context.Context, target pgx.Tx, c *jobs.Claim)
 	if err = jobs.CheckOwnedTx(ctx, tx, c); err != nil {
 		return err
 	}
-	var allowed bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users u JOIN user_groups ug ON ug.user_id=u.id
- JOIN group_database_permissions p ON p.group_id=ug.group_id WHERE u.id=$1 AND u.is_active AND p.database_id=$2 AND p.access_level='edit')`, c.Job.RequestedBy, c.Job.DatabaseID).Scan(&allowed)
-	if err != nil {
-		return err
-	}
-	if !allowed {
-		return connections.ErrForbidden
-	}
 	if err = bindTarget(ctx, tx, target, c.Job.DatabaseID); err != nil {
 		return err
 	}
-	var revision int64
-	var sql string
-	if err = tx.QueryRow(ctx, `SELECT revision,sql FROM migration_drafts WHERE database_id=$1 AND id=$2 FOR UPDATE`, c.Job.DatabaseID, c.Job.DraftID).Scan(&revision, &sql); err != nil {
+	if err = validateApprovedSnapshot(ctx, tx, c.Job, c.SQL); err != nil {
 		return err
-	}
-	if revision != c.Job.DraftRevision || sql != c.SQL {
-		return errConflict
-	}
-	review, err := approval.EnsureApprovedTx(ctx, tx, c.Job.DatabaseID, c.Job.DraftID, c.Job.DraftRevision, c.Job.ActionType)
-	if err != nil {
-		return err
-	}
-	config, parseErr := batch.Parse(c.SQL)
-	if parseErr != nil || (c.Job.ExecutionMode == "batch") != (config != nil) {
-		return errConflict
-	}
-	if review.ID != c.Job.ReviewID || review.SQLSnapshot != c.SQL || c.Job.ActionType != "up" || (c.Job.ExecutionMode != "normal" && c.Job.ExecutionMode != "batch") {
-		return errConflict
 	}
 	return tx.Commit(ctx)
 }
@@ -212,13 +191,52 @@ func executionCode(err error) string {
 		return "target_unavailable"
 	case errors.Is(err, jobs.ErrLeaseLost):
 		return "lease_lost"
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.Canceled):
+		return "worker_stopped"
+	case errors.Is(err, context.DeadlineExceeded):
 		return "execution_timeout"
 	default:
+		var network net.Error
+		if errors.As(err, &network) {
+			return "network_error"
+		}
 		return "execution_failed"
 	}
 }
 
 func sqlSpan(ctx context.Context, index int) (context.Context, trace.Span) {
 	return telemetry.Start(ctx, "migration.sql", trace.WithAttributes(attribute.Int("statement.index", index)))
+}
+
+func validateApprovedSnapshot(ctx context.Context, tx pgx.Tx, job jobs.Job, sqlSnapshot string) error {
+	var err error
+	var allowed bool
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users u JOIN user_groups ug ON ug.user_id=u.id
+ JOIN group_database_permissions p ON p.group_id=ug.group_id WHERE u.id=$1 AND u.is_active AND p.database_id=$2 AND p.access_level='edit')`, job.RequestedBy, job.DatabaseID).Scan(&allowed)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return connections.ErrForbidden
+	}
+	var revision int64
+	var sql string
+	if err = tx.QueryRow(ctx, `SELECT revision,sql FROM migration_drafts WHERE database_id=$1 AND id=$2 FOR UPDATE`, job.DatabaseID, job.DraftID).Scan(&revision, &sql); err != nil {
+		return err
+	}
+	if revision != job.DraftRevision || sql != sqlSnapshot {
+		return errConflict
+	}
+	review, err := approval.EnsureApprovedTx(ctx, tx, job.DatabaseID, job.DraftID, job.DraftRevision, job.ActionType)
+	if err != nil {
+		return err
+	}
+	config, parseErr := batch.Parse(sqlSnapshot)
+	if parseErr != nil || (job.ExecutionMode == "batch") != (config != nil) {
+		return errConflict
+	}
+	if review.ID != job.ReviewID || review.SQLSnapshot != sqlSnapshot || job.ActionType != "up" || (job.ExecutionMode != "normal" && job.ExecutionMode != "batch") {
+		return errConflict
+	}
+	return nil
 }

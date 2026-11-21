@@ -359,6 +359,19 @@ func (s *Service) OpenTarget(ctx context.Context, p auth.Principal, id int64, wr
 	return s.open(ctx, c)
 }
 
+// OpenForRecovery is internal to receipt/checkpoint verification after an actor loses access.
+// It must never execute user SQL; execution still requires OpenTarget and fresh authorization.
+func (s *Service) OpenForRecovery(ctx context.Context, id int64) (*pgxpool.Pool, error) {
+	if id < 1 {
+		return nil, ErrInvalid
+	}
+	c, err := scan(s.db.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id=$1", id))
+	if err != nil {
+		return nil, err
+	}
+	return s.open(ctx, c)
+}
+
 func (s *Service) open(ctx context.Context, c Connection) (*pgxpool.Pool, error) {
 	password, err := s.box.Open(c.passwordEncrypted, fmt.Sprintf("target:%d", c.ID))
 	if err != nil {
