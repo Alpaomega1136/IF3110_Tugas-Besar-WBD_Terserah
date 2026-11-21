@@ -119,6 +119,26 @@ test("job polling failure preserves uncertainty and never resubmits SQL", async 
     assert.match(ui.$("draft-execution-message").textContent, /Jangan retry otomatis/);
 });
 
+test("partial batch keeps exact committed counts and never claims a full rollback", async () => {
+    const job = { id: "12", database_id: databaseID, status: "partial", error_code: "23514",
+        committed_batches: "2", committed_rows: "9007199254740993" };
+    assert.equal(parseJobResponse({ job }, databaseID).status, "partial");
+    for (const bad of [-1, "-1", "9223372036854775808", "1.5"]) {
+        assert.throws(() => parseJobResponse({ job: { ...job, committed_rows: bad } }, databaseID), /tidak valid/);
+    }
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job }, 200);
+        if (url.endsWith("/jobs/12")) return reply({ job, attempts: [{ execution_id: "partial-attempt", version: "9" }] });
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(executeCalls(ui).length, 1);
+    assert.equal(ui.$("draft-result-status").textContent, "partial");
+    assert.match(ui.$("draft-execution-message").textContent, /sebelumnya tetap tersimpan/);
+    assert.match(ui.$("draft-execution-message").textContent, /9007199254740993/);
+    assert.doesNotMatch(ui.$("draft-execution-message").textContent, /berhasil di-commit|transaksi telah di-rollback/);
+});
+
 test("a job finishing on the last poll still displays the committed result", async (t) => {
     const timer = globalThis.setTimeout;
     t.mock.method(globalThis, "setTimeout", (fn, delay, ...args) => timer(fn, delay === 1000 ? 0 : delay, ...args));

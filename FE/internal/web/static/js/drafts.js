@@ -327,12 +327,14 @@ function displayExecutionResult(result) {
     executionResult.hidden = false;
 
     const feedback = executionFeedback(result.status);
-    setBanner(executionMessage, feedback.message, feedback.isError);
+    const progress = result.committed_batches != null && result.committed_rows != null
+        ? ` Batch sudah di-commit: ${result.committed_batches}; row sudah di-commit: ${result.committed_rows}.` : "";
+    setBanner(executionMessage, feedback.message + progress, feedback.isError);
 }
 
 async function followJob(response) {
     let job = parseJobResponse(response, databaseId);
-    displayExecutionResult({ status: job.status, version: "-", execution_id: `Job ${job.id}`, error_code: job.error_code });
+    displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
     for (let poll = 0; poll < 30; poll++) {
         if (executionResult.isConnected === false) return;
         response = await authenticatedRequest(`/api/v1/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(job.id)}`);
@@ -344,11 +346,12 @@ async function followJob(response) {
         if (attempt?.version && !["queued", "running"].includes(job.status)) {
             displayExecutionResult(parseExecutionResult({
                 execution_id: attempt.execution_id, version: attempt.version,
-                status: job.status, error_code: job.error_code
+                status: job.status, error_code: job.error_code,
+                committed_batches: job.committed_batches, committed_rows: job.committed_rows
             }));
             return;
         }
-        displayExecutionResult({ status: job.status, version: "-", execution_id: `Job ${job.id}`, error_code: job.error_code });
+        displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
         if (!["queued", "running"].includes(job.status)) return;
         if (poll < 29) await new Promise((resolve) => setTimeout(resolve, 1000));
     }

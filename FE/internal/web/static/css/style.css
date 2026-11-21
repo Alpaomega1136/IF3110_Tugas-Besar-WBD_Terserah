@@ -1236,7 +1236,8 @@ button:focus-visible {
     color: #1d4ed8;
 }
 
-.migration-status--unknown {
+.migration-status--unknown,
+.migration-status--partial {
     background: #fef3c7;
     color: #92400e;
 }

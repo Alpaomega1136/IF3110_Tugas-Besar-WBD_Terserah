@@ -48,7 +48,8 @@ const STATUS_LABELS = {
     running: "Berjalan",
     success: "Berhasil",
     failed: "Gagal",
-    unknown: "Tidak pasti"
+    unknown: "Tidak pasti",
+    partial: "Sebagian committed"
 };
 
 let busy = false;
@@ -71,7 +72,7 @@ const statusLabel = (status) => STATUS_LABELS[status] ?? String(status ?? "-");
 function makeStatus(status) {
     const span = document.createElement("span");
     span.className = "migration-status";
-    if (["running", "success", "failed", "unknown"].includes(status)) {
+    if (["running", "success", "failed", "unknown", "partial"].includes(status)) {
         span.className += ` migration-status--${status}`;
     }
     span.textContent = statusLabel(status);
@@ -138,6 +139,7 @@ function handleRequestError(error, target) {
         target_history_unprotected: "History target atau isolasi executor belum aman. Minta administrator PostgreSQL menjalankan BE/sql/provision_target_history.sql dan menyiapkan executor khusus database ini.",
         target_identity_conflict: "Identitas target berubah atau bentrok. Periksa konfigurasi koneksi.",
         target_unavailable: "Database target tidak dapat dijangkau. Pulihkan koneksi, lalu coba kembali secara manual.",
+        batch_evidence_invalid: "Bukti checkpoint batch tidak dapat diverifikasi. Target tetap ditahan; jangan menjalankan ulang SQL atau mengubah bukti target.",
         migration_unavailable: "Layanan migration belum tersedia. Periksa backend/target dan coba kembali secara manual."
     };
     const msg = error.status === 404
@@ -196,7 +198,7 @@ function renderHistory(entries) {
     listEmpty.hidden = entries.length !== 0;
     listTable.hidden = entries.length === 0;
 
-    const pendingCount = entries.filter((item) => ["running", "unknown"].includes(item.status)).length;
+    const pendingCount = entries.filter((item) => ["running", "unknown", "partial"].includes(item.status)).length;
     showMessage(
         pendingNotice,
         pendingCount
@@ -300,7 +302,7 @@ async function loadHistory(index = currentPage, reset = false) {
 
 function renderReconciled(items) {
     reconcileBody.replaceChildren();
-    const counts = { success: 0, failed: 0, running: 0, unknown: 0 };
+    const counts = { success: 0, failed: 0, running: 0, unknown: 0, partial: 0 };
     for (const item of items) {
         counts[item.status]++;
         const row = document.createElement("tr");
@@ -315,8 +317,8 @@ function renderReconciled(items) {
     reconcileResult.hidden = false;
     reconcileTable.hidden = items.length === 0;
     reconcileSummary.textContent = items.length === 0
-        ? "Tidak ada eksekusi running/unknown yang perlu direconcile. Tidak ada SQL yang dijalankan."
-        : `${items.length} eksekusi diperiksa: ${counts.success} success, ${counts.failed} failed, ${counts.unknown} unknown, ${counts.running} running. Tidak ada SQL yang dijalankan ulang.`;
+        ? "Tidak ada eksekusi running/unknown/partial yang perlu direconcile. Tidak ada SQL yang dijalankan."
+        : `${items.length} eksekusi diperiksa: ${counts.success} success, ${counts.failed} failed, ${counts.unknown} unknown, ${counts.running} running, ${counts.partial} partial. Tidak ada SQL yang dijalankan ulang.`;
 }
 
 async function reconcileHistory() {

@@ -30,6 +30,18 @@ let generation = 0;
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const fail = (status, code) => json({ error: { code, message: code } }, status);
 
+test("partial history and reconciliation remain visible without rerunning SQL", async () => {
+    const entry = { ...first[0], status: "partial", error_code: "reconciled_partial" };
+    assert.equal(parseReconcileResult({ reconciled: [entry] })[0].status, "partial");
+    const ui = await setupHistory({ more: false, firstPage: [entry], custom: ({ url }) =>
+        url.endsWith("/reconcile") ? json({ reconciled: [entry] }) : undefined });
+    assert.equal(ui.$("history-pending-notice").hidden, false);
+    assert.match(ui.$("history-list-body").textContent, /Sebagian committed/);
+    await ui.$("history-reconcile").fire("click");
+    assert.match(ui.$("history-reconcile-summary").textContent, /1 partial/);
+    assert.equal(ui.calls.some((call) => call.url.endsWith("/execute")), false);
+});
+
 async function setupHistory({ access = "edit", confirm = true, custom, firstPage = first, more = true } = {}) {
     clearAuthState();
     const elements = Object.fromEntries(ids.map((id) => [id, new Element()]));
