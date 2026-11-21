@@ -135,20 +135,32 @@ func TestRecoveryVerifiesUnknownCommitBeforeRetry(t *testing.T) {
 func TestRecoveryCannotStealExpiredWorkerTargetLock(t *testing.T) {
 	f := newQueueFixture(t)
 	db, schema := batchTarget(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	relation := pgx.Identifier{schema, "counter"}.Sanitize()
 	if _, err := db.Exec(ctx, "CREATE TABLE "+relation+"(id int PRIMARY KEY,value int); INSERT INTO "+relation+" VALUES(1,0)"); err != nil {
 		t.Fatal(err)
 	}
-	j := queuedJob(t, f, f.first, "UPDATE "+relation+" SET value=value+1; SELECT pg_sleep(2)")
+	barrier, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer barrier.Rollback(context.Background())
+	if _, err = barrier.Exec(ctx, `SELECT pg_advisory_xact_lock(3110201)`); err != nil {
+		t.Fatal(err)
+	}
+	gate := pgx.Identifier{schema, "wait_for_recovery_probe"}.Sanitize()
+	if _, err = db.Exec(ctx, "CREATE FUNCTION "+gate+"() RETURNS void LANGUAGE sql SET lock_timeout='30s' AS 'SELECT pg_catalog.pg_advisory_xact_lock(3110201)'"); err != nil {
+		t.Fatal(err)
+	}
+	j := queuedJob(t, f, f.first, "UPDATE "+relation+" SET value=value+1; SELECT "+gate+"()")
 	old := queueWorker(t, f)
 	done := make(chan error, 1)
 	go func() { _, err := old.ProcessNext(ctx); done <- err }()
 	deadline := time.Now().Add(4 * time.Second)
 	for {
 		var locked bool
-		if err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=3110003 AND granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))`).Scan(&locked); err != nil {
+		if err := db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=3110201 AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))`).Scan(&locked); err != nil {
 			t.Fatal(err)
 		}
 		if locked {
@@ -167,6 +179,9 @@ func TestRecoveryCannotStealExpiredWorkerTargetLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	jobPhase(t, f, j, jobs.Running)
+	if err = barrier.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := <-done; !errors.Is(err, jobs.ErrLeaseLost) {
 		t.Fatal("expired worker finalized metadata", err)
 	}
