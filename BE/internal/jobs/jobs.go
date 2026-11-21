@@ -33,27 +33,31 @@ const (
 	Partial    Status = "partial"
 	Recovering Status = "recovering"
 	RetryWait  Status = "retry_wait"
+	Resumed    Status = "resumed"
 )
 
 type Job struct {
-	ID               int64      `json:"id,string"`
-	DatabaseID       int64      `json:"database_id,string"`
-	ReviewID         int64      `json:"review_id,string"`
-	DraftID          int64      `json:"draft_id,string"`
-	DraftRevision    int64      `json:"draft_revision,string"`
-	ActionType       string     `json:"action_type"`
-	ExecutionMode    string     `json:"execution_mode"`
-	RequestedBy      int64      `json:"requested_by,string"`
-	Status           Status     `json:"status"`
-	AttemptCount     int        `json:"attempt_count"`
-	MaxAttempts      int        `json:"max_attempts"`
-	CreatedAt        time.Time  `json:"created_at"`
-	AvailableAt      time.Time  `json:"available_at"`
-	StartedAt        *time.Time `json:"started_at"`
-	FinishedAt       *time.Time `json:"finished_at"`
-	ErrorCode        *string    `json:"error_code"`
-	CommittedBatches int64      `json:"committed_batches,string"`
-	CommittedRows    int64      `json:"committed_rows,string"`
+	ID                int64      `json:"id,string"`
+	DatabaseID        int64      `json:"database_id,string"`
+	ReviewID          int64      `json:"review_id,string"`
+	DraftID           int64      `json:"draft_id,string"`
+	DraftRevision     int64      `json:"draft_revision,string"`
+	ActionType        string     `json:"action_type"`
+	ExecutionMode     string     `json:"execution_mode"`
+	RequestedBy       int64      `json:"requested_by,string"`
+	Status            Status     `json:"status"`
+	AttemptCount      int        `json:"attempt_count"`
+	MaxAttempts       int        `json:"max_attempts"`
+	CreatedAt         time.Time  `json:"created_at"`
+	AvailableAt       time.Time  `json:"available_at"`
+	StartedAt         *time.Time `json:"started_at"`
+	FinishedAt        *time.Time `json:"finished_at"`
+	ErrorCode         *string    `json:"error_code"`
+	CommittedBatches  int64      `json:"committed_batches,string"`
+	CommittedRows     int64      `json:"committed_rows,string"`
+	ParentJobID       *int64     `json:"parent_job_id,string,omitempty"`
+	TargetExecutionID *string    `json:"target_execution_id,omitempty"`
+	ResumedByJobID    *int64     `json:"resumed_by_job_id,string,omitempty"`
 }
 
 type Attempt struct {
@@ -100,6 +104,11 @@ func traceParent(value string) string {
 }
 
 func snapshotHash(j Job, sql string) string {
+	if j.ActionType == "resume" {
+		data, _ := json.Marshal([]any{"terserah-resume-job-v1", j.DatabaseID, j.ReviewID, j.DraftID, j.DraftRevision, j.ActionType, j.ExecutionMode, j.RequestedBy, sql, j.ParentJobID, j.TargetExecutionID})
+		hash := sha256.Sum256(data)
+		return hex.EncodeToString(hash[:])
+	}
 	data, _ := json.Marshal([]any{"terserah-job-v1", j.DatabaseID, j.ReviewID, j.DraftID, j.DraftRevision, j.ActionType, j.ExecutionMode, j.RequestedBy, sql})
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])

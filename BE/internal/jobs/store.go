@@ -19,13 +19,13 @@ import (
 )
 
 const jobColumns = `id,database_id,review_id,draft_id,draft_revision,action_type,execution_mode,
- requested_by,status,attempt_count,max_attempts,created_at,started_at,finished_at,error_code,committed_batches,committed_rows,available_at`
+ requested_by,status,attempt_count,max_attempts,created_at,started_at,finished_at,error_code,committed_batches,committed_rows,available_at,parent_job_id,target_execution_id,resumed_by_job_id`
 
 func scanJob(row pgx.Row) (Job, error) {
 	var j Job
 	err := row.Scan(&j.ID, &j.DatabaseID, &j.ReviewID, &j.DraftID, &j.DraftRevision, &j.ActionType, &j.ExecutionMode,
 		&j.RequestedBy, &j.Status, &j.AttemptCount, &j.MaxAttempts, &j.CreatedAt, &j.StartedAt, &j.FinishedAt, &j.ErrorCode,
-		&j.CommittedBatches, &j.CommittedRows, &j.AvailableAt)
+		&j.CommittedBatches, &j.CommittedRows, &j.AvailableAt, &j.ParentJobID, &j.TargetExecutionID, &j.ResumedByJobID)
 	return j, err
 }
 
@@ -103,6 +103,17 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 	}
 	if err != nil {
 		return Job{}, false, err
+	}
+	if action == "resume" {
+		j, err := enqueueResumeTx(ctx, tx, p.ID, dbID, reviewID, draftID, revision, status, targetExecution, parent)
+		if err != nil {
+			return Job{}, false, err
+		}
+		if err = tx.Commit(ctx); err != nil {
+			return Job{}, false, err
+		}
+		telemetry.Event(ctx, "resume_queued", "actor_id", p.ID, "database_id", dbID, "job_id", j.ID, "parent_job_id", *j.ParentJobID, "review_id", reviewID, "status", j.Status)
+		return j, false, nil
 	}
 	if action != "up" || targetExecution != nil {
 		return Job{}, false, ErrUnsupported
@@ -316,9 +327,9 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	if c.RootExecutionID != "" {
 		root = c.RootExecutionID
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO migration_history(database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id,receipt_version,batch_root_execution_id)
- SELECT $1,$2,$3,COALESCE(MAX(version),0)+1,$4,$5,'running',$6,1,$7 FROM migration_history WHERE database_id=$1 RETURNING version`,
-		j.DatabaseID, j.DraftID, j.DraftRevision, sql, j.RequestedBy, c.ExecutionID, root).Scan(&c.Version)
+	err = tx.QueryRow(ctx, `INSERT INTO migration_history(database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id,receipt_version,batch_root_execution_id,action_type,target_execution_id,job_id)
+ SELECT $1,$2,$3,COALESCE(MAX(version),0)+1,$4,$5,'running',$6,1,$7,$8,$9,$10 FROM migration_history WHERE database_id=$1 RETURNING version`,
+		j.DatabaseID, j.DraftID, j.DraftRevision, sql, j.RequestedBy, c.ExecutionID, root, j.ActionType, j.TargetExecutionID, j.ID).Scan(&c.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -470,8 +481,9 @@ func CheckOwnedTx(ctx context.Context, tx pgx.Tx, c *Claim) error {
 	err := tx.QueryRow(ctx, `SELECT j.id FROM migration_jobs j WHERE j.id=$1 AND j.status='running' AND j.worker_id=$2
  AND j.lease_token_hash=$3 AND j.lease_expires_at>clock_timestamp() AND j.database_id=$5 AND j.review_id=$6
  AND j.draft_id=$7 AND j.draft_revision=$8 AND j.requested_by=$9 AND j.sql_snapshot=$10 AND COALESCE(j.batch_root_execution_id,'')=$11
+ AND j.parent_job_id IS NOT DISTINCT FROM $12::bigint AND j.target_execution_id IS NOT DISTINCT FROM $13::text
  AND EXISTS(SELECT 1 FROM migration_job_attempts a WHERE a.job_id=j.id AND a.execution_id=$4 AND a.attempt_no=j.attempt_count AND a.status='running') FOR UPDATE`,
-		c.Job.ID, c.WorkerID, leaseHash(c.LeaseToken), c.ExecutionID, c.Job.DatabaseID, c.Job.ReviewID, c.Job.DraftID, c.Job.DraftRevision, c.Job.RequestedBy, c.SQL, c.RootExecutionID).Scan(&id)
+		c.Job.ID, c.WorkerID, leaseHash(c.LeaseToken), c.ExecutionID, c.Job.DatabaseID, c.Job.ReviewID, c.Job.DraftID, c.Job.DraftRevision, c.Job.RequestedBy, c.SQL, c.RootExecutionID, c.Job.ParentJobID, c.Job.TargetExecutionID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrLeaseLost
 	}

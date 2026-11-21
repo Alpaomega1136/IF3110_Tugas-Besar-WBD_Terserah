@@ -39,6 +39,26 @@ func TestSnapshotBindsApprovedExecution(t *testing.T) {
 	}
 }
 
+func TestResumeSnapshotBindsParentAndTargetExecution(t *testing.T) {
+	parent, target := int64(10), "original-execution"
+	j := Job{DatabaseID: 1, ReviewID: 2, DraftID: 3, DraftRevision: 4, ActionType: "resume", ExecutionMode: "batch", RequestedBy: 5, ParentJobID: &parent, TargetExecutionID: &target}
+	hash := snapshotHash(j, "approved SQL")
+	otherParent, otherTarget := int64(11), "different-execution"
+	j.ParentJobID = &otherParent
+	if hash == snapshotHash(j, "approved SQL") {
+		t.Fatal("parent job not bound")
+	}
+	j.ParentJobID, j.TargetExecutionID = &parent, &otherTarget
+	if hash == snapshotHash(j, "approved SQL") {
+		t.Fatal("target execution not bound")
+	}
+	j.TargetExecutionID = &target
+	j.Status, j.AttemptCount = Running, 1
+	if hash != snapshotHash(j, "approved SQL") {
+		t.Fatal("resume lifecycle changed snapshot identity")
+	}
+}
+
 func TestTraceParentValidation(t *testing.T) {
 	valid := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
 	if traceParent(valid) != valid {
