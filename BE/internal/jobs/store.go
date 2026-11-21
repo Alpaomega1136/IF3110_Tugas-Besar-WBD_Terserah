@@ -19,13 +19,13 @@ import (
 )
 
 const jobColumns = `id,database_id,review_id,draft_id,draft_revision,action_type,execution_mode,
- requested_by,status,attempt_count,max_attempts,created_at,started_at,finished_at,error_code,committed_batches,committed_rows`
+ requested_by,status,attempt_count,max_attempts,created_at,started_at,finished_at,error_code,committed_batches,committed_rows,available_at`
 
 func scanJob(row pgx.Row) (Job, error) {
 	var j Job
 	err := row.Scan(&j.ID, &j.DatabaseID, &j.ReviewID, &j.DraftID, &j.DraftRevision, &j.ActionType, &j.ExecutionMode,
 		&j.RequestedBy, &j.Status, &j.AttemptCount, &j.MaxAttempts, &j.CreatedAt, &j.StartedAt, &j.FinishedAt, &j.ErrorCode,
-		&j.CommittedBatches, &j.CommittedRows)
+		&j.CommittedBatches, &j.CommittedRows, &j.AvailableAt)
 	return j, err
 }
 

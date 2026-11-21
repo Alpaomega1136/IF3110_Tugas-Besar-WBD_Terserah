@@ -1231,7 +1231,8 @@ button:focus-visible {
     color: #991b1b;
 }
 
-.migration-status--running {
+.migration-status--running,
+.migration-status--recovering {
     background: #dbeafe;
     color: #1d4ed8;
 }
@@ -1243,7 +1244,8 @@ button:focus-visible {
 }
 
 .migration-status--pending_review,
-.migration-status--queued {
+.migration-status--queued,
+.migration-status--retry_wait {
     background: #fef3c7;
     color: #92400e;
 }

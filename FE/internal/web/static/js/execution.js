@@ -17,7 +17,9 @@ export function parseExecutionResult(result) {
 export function parseJobResponse(response, databaseID) {
     const job = response?.job;
     if (!job || !validVersion(job.id) || job.database_id !== databaseID ||
-        !["queued", "running", "success", "failed", "unknown", "partial"].includes(job.status) || !validProgress(job) ||
+        !["queued", "running", "success", "failed", "unknown", "partial", "recovering", "retry_wait"].includes(job.status) || !validProgress(job) ||
+        (job.available_at != null && (typeof job.available_at !== "string" || !Number.isFinite(Date.parse(job.available_at)))) ||
+        ["attempt_count", "max_attempts"].some((field) => job[field] != null && (!Number.isSafeInteger(job[field]) || job[field] < (field === "max_attempts" ? 1 : 0))) ||
         (job.error_code != null && typeof job.error_code !== "string")) {
         throw new Error("Respons job tidak valid. Periksa History sebelum mengirim ulang.");
     }
@@ -31,6 +33,8 @@ export function executionFeedback(status) {
         case "failed": return { message: "Migration gagal dan transaksi telah di-rollback. Lihat error code dan History sebelum memperbaiki draft.", isError: true };
         case "partial": return { message: "Sebagian batch sudah di-commit. Batch yang gagal dibatalkan; batch sebelumnya tetap tersimpan. Target ditahan sampai pemulihan yang disetujui. Jangan Execute ulang.", isError: true };
         case "running": return { message: "Migration masih berjalan (belum final). Periksa History; jangan mengirim Execute lagi.", isError: false };
+        case "recovering": return { message: "Worker memeriksa receipt dan checkpoint di target sebelum menentukan retry. Batch yang sudah committed tetap tersimpan. Jangan Execute ulang.", isError: false };
+        case "retry_wait": return { message: "Kegagalan sementara sudah diverifikasi. Job menunggu jadwal retry otomatis dengan attempt baru; batch yang committed akan dilewati. Jangan Execute ulang.", isError: false };
         case "unknown": return { message: "Hasil eksekusi belum pasti. Periksa History dan lakukan reconcile bila diperlukan; jangan menjalankan ulang.", isError: true };
         default: throw new Error("Status migration tidak dikenal.");
     }

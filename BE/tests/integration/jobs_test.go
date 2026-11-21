@@ -106,7 +106,7 @@ func TestJobsAPI(t *testing.T) {
 		Job      jobs.Job `json:"job"`
 		Replayed bool     `json:"replayed"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &queued); err != nil || queued.Job.ID < 1 || queued.Job.Status != jobs.Queued || queued.Replayed || queued.Job.AttemptCount != 0 {
+	if err := json.Unmarshal(w.Body.Bytes(), &queued); err != nil || queued.Job.ID < 1 || queued.Job.Status != jobs.Queued || queued.Replayed || queued.Job.AttemptCount != 0 || queued.Job.AvailableAt.IsZero() {
 		t.Fatal("invalid queue response")
 	}
 	jobPath := fmt.Sprintf("%s/%d", base, queued.Job.ID)

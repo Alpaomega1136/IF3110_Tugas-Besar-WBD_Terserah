@@ -107,6 +107,36 @@ test("Execute submits once and polls the job until the worker commits", async ()
     assert.match(ui.$("draft-execution-message").textContent, /berhasil di-commit/);
 });
 
+test("job polling follows recovery and backoff without submitting SQL again", async (t) => {
+    const timer = globalThis.setTimeout;
+    t.mock.method(globalThis, "setTimeout", (fn, delay, ...args) => timer(fn, delay === 1000 ? 0 : delay, ...args));
+    const job = { id: "12", database_id: databaseID, status: "queued", attempt_count: 1, max_attempts: 3,
+        available_at: "2026-11-21T10:00:00Z", committed_batches: "1", committed_rows: "2" };
+    for (const status of ["recovering", "retry_wait"]) {
+        assert.equal(parseJobResponse({ job: { ...job, status } }, databaseID).status, status);
+        assert.doesNotMatch(executionFeedback(status).message, /berhasil di-commit|transaksi telah di-rollback/);
+    }
+    for (const changed of [{ available_at: "bad" }, { available_at: 1 }, { attempt_count: -1 }, { max_attempts: 0 }]) {
+        assert.throws(() => parseJobResponse({ job: { ...job, ...changed } }, databaseID), /tidak valid/);
+    }
+    let polls = 0;
+    const states = ["unknown", "recovering", "retry_wait", "running", "success"];
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job }, 202);
+        if (url.endsWith("/jobs/12")) {
+            const status = states[polls++];
+            return reply({ job: { ...job, status, attempt_count: polls > 3 ? 2 : 1 },
+                attempts: [{ execution_id: "retry-execution", version: "10" }] });
+        }
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(polls, 5);
+    assert.equal(executeCalls(ui).length, 1);
+    assert.equal(ui.$("draft-result-id").textContent, "retry-execution");
+    assert.match(ui.$("draft-execution-message").textContent, /berhasil di-commit/);
+});
+
 test("job polling failure preserves uncertainty and never resubmits SQL", async () => {
     const ui = await setup({ backend: ({ url }) => {
         if (url.endsWith("/execute")) return reply({ job: { id: "12", database_id: databaseID, status: "queued" } }, 202);

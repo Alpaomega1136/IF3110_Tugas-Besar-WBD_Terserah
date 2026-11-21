@@ -329,10 +329,15 @@ function displayExecutionResult(result) {
     const feedback = executionFeedback(result.status);
     const progress = result.committed_batches != null && result.committed_rows != null
         ? ` Batch sudah di-commit: ${result.committed_batches}; row sudah di-commit: ${result.committed_rows}.` : "";
-    setBanner(executionMessage, feedback.message + progress, feedback.isError);
+    const attempts = result.attempt_count != null && result.max_attempts != null
+        ? ` Attempt: ${result.attempt_count}/${result.max_attempts}.` : "";
+    const next = ["retry_wait", "recovering"].includes(result.status) && result.available_at
+        ? ` Pemeriksaan/percobaan berikutnya paling cepat: ${formatDate(result.available_at)}.` : "";
+    setBanner(executionMessage, feedback.message + progress + attempts + next, feedback.isError);
 }
 
 async function followJob(response) {
+    const pending = ["queued", "running", "unknown", "recovering", "retry_wait"];
     let job = parseJobResponse(response, databaseId);
     displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
     for (let poll = 0; poll < 30; poll++) {
@@ -343,7 +348,7 @@ async function followJob(response) {
         if (current.id !== job.id) throw new Error("Identitas job berubah. Periksa History.");
         job = current;
         const attempt = response.attempts?.at(-1);
-        if (attempt?.version && !["queued", "running"].includes(job.status)) {
+        if (attempt?.version && !pending.includes(job.status)) {
             displayExecutionResult(parseExecutionResult({
                 execution_id: attempt.execution_id, version: attempt.version,
                 status: job.status, error_code: job.error_code,
@@ -352,7 +357,7 @@ async function followJob(response) {
             return;
         }
         displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
-        if (!["queued", "running"].includes(job.status)) return;
+        if (!pending.includes(job.status)) return;
         if (poll < 29) await new Promise((resolve) => setTimeout(resolve, 1000));
     }
     setBanner(executionMessage, `Job ${job.id} masih ${job.status}. Pekerjaan berlanjut di worker; periksa History untuk hasil akhir.`);

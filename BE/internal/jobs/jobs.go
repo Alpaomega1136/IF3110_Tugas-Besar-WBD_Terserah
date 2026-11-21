@@ -48,6 +48,7 @@ type Job struct {
 	AttemptCount     int        `json:"attempt_count"`
 	MaxAttempts      int        `json:"max_attempts"`
 	CreatedAt        time.Time  `json:"created_at"`
+	AvailableAt      time.Time  `json:"available_at"`
 	StartedAt        *time.Time `json:"started_at"`
 	FinishedAt       *time.Time `json:"finished_at"`
 	ErrorCode        *string    `json:"error_code"`
