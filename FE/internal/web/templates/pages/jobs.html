@@ -26,14 +26,14 @@
                     <dt>Aksi / mode</dt><dd id="jobs-detail-mode"></dd>
                     <dt>Draft / revisi</dt><dd id="jobs-detail-draft"></dd>
                     <dt>Attempt / batas</dt><dd id="jobs-detail-attempts"></dd>
-                    <dt>Batch committed</dt><dd id="jobs-detail-batches"></dd>
-                    <dt>Row committed</dt><dd id="jobs-detail-rows"></dd>
+                    <dt id="jobs-batch-label">Batch committed</dt><dd id="jobs-detail-batches"></dd>
+                    <dt id="jobs-row-label">Row committed</dt><dd id="jobs-detail-rows"></dd>
                     <dt>Jadwal paling cepat</dt><dd id="jobs-detail-next"></dd>
                     <dt>Mulai / selesai</dt><dd id="jobs-detail-times"></dd>
                     <dt>Error code</dt><dd id="jobs-detail-error"></dd>
                     <dt>Approval eksekusi</dt><dd><a id="jobs-detail-review">Buka review</a></dd>
                     <dt>Job asal</dt><dd><a id="jobs-detail-parent" hidden></a><span id="jobs-detail-no-parent">-</span></dd>
-                    <dt>Job resume</dt><dd><a id="jobs-detail-child" hidden></a><span id="jobs-detail-no-child">-</span></dd>
+                    <dt>Job pemulihan</dt><dd><a id="jobs-detail-child" hidden></a><span id="jobs-detail-no-child">-</span></dd>
                 </dl>
                 <h3 id="jobs-attempts-heading">Riwayat Attempt</h3>
                 <p id="jobs-attempts-empty" hidden>Worker belum memulai attempt.</p>
@@ -49,7 +49,14 @@
                     <button type="button" id="jobs-request-resume">Ajukan review resume</button>
                     <p id="jobs-resume-permission" class="form-help" hidden>Pengajuan resume memerlukan akses Edit.</p>
                     <p id="jobs-resume-review" hidden><a id="jobs-resume-review-link"></a></p>
-                    <p class="form-help">Pembatalan batch committed belum tersedia.</p>
+
+                </div>
+                <div class="jobs-recovery" id="jobs-compensation-panel" hidden>
+                    <h3>Batalkan batch committed</h3>
+                    <p>Pulihkan nilai sebelum migration mulai dari batch terakhir. Perubahan data di luar migration akan diperiksa sebelum pembatalan. Setiap kelanjutan memerlukan approval seluruh leader.</p>
+                    <button type="button" id="jobs-request-compensation" class="button-secondary">Ajukan review pembatalan batch</button>
+                    <p id="jobs-compensation-permission" class="form-help" hidden>Pengajuan pembatalan memerlukan akses Edit.</p>
+                    <p id="jobs-compensation-review" hidden><a id="jobs-compensation-review-link"></a></p>
                 </div>
                 <p id="jobs-action-message" role="status" aria-live="polite" hidden></p>
             </section>

@@ -14,6 +14,7 @@ const body = byId("jobs-list-body"), attemptsBody = byId("jobs-attempts-body");
 const refreshButton = byId("jobs-refresh"), auto = byId("jobs-auto");
 const previousButton = byId("jobs-prev"), nextButton = byId("jobs-next");
 const resumeButton = byId("jobs-request-resume");
+const compensationButton = byId("jobs-request-compensation");
 const controller = new AbortController();
 const options = { signal: controller.signal };
 const listRows = new Map(), attemptRows = new Map();
@@ -33,6 +34,7 @@ function controls() {
     nextButton.disabled = busy || !hasMore;
     auto.disabled = acting;
     resumeButton.disabled = busy || failed;
+    compensationButton.disabled = busy || failed;
 }
 
 function stopTimer() { if (timer !== null) clearTimeout(timer); timer = null; }
@@ -73,7 +75,7 @@ function failure(error) {
         listRows.clear(); attemptRows.clear(); current = null;
         byId("jobs-detail").hidden = true;
         ["jobs-database-name", "jobs-access", "jobs-feedback", "jobs-detail-id", "jobs-detail-state", "jobs-detail-mode", "jobs-detail-draft", "jobs-detail-attempts", "jobs-detail-batches", "jobs-detail-rows", "jobs-detail-next", "jobs-detail-times", "jobs-detail-error"].forEach((id) => text(id, ""));
-        ["jobs-detail-review", "jobs-detail-parent", "jobs-detail-child", "jobs-resume-review-link"].forEach((id) => byId(id).removeAttribute("href"));
+        ["jobs-detail-review", "jobs-detail-parent", "jobs-detail-child", "jobs-resume-review-link", "jobs-compensation-review-link"].forEach((id) => byId(id).removeAttribute("href"));
         workspace.hidden = true;
         setBanner(byId("jobs-page-error"), "Job atau database tidak tersedia untuk akun ini. Periksa kembali hak akses.", true);
         byId("jobs-page-retry").hidden = false;
@@ -141,11 +143,17 @@ function reference(id, emptyID, value) {
     if (value) { a.href = jobPath(value); a.textContent = `Job #${value}`; }
 }
 
-const activeReview = (job) => ["pending_review", "approved", "queued"].includes(job.resume_review?.status);
+const activeReview = (job) => [job.resume_review, job.compensation_review].some((r) => ["pending_review", "approved", "queued"].includes(r?.status));
 function canResume(detail) {
     const last = detail?.attempts.at(-1), j = detail?.job;
     return canEdit && j?.status === "partial" && j.execution_mode === "batch" && BigInt(j.committed_batches) > 0n &&
         ["partial", "failed"].includes(last?.status) && positiveInt64(last?.version) && !activeReview(j);
+}
+
+function canCompensate(detail) {
+    const j = detail?.job, last = detail?.attempts.at(-1);
+    return canEdit && j?.can_compensate === true && j.execution_mode === "batch" &&
+        ["partial", "success", "partially_reverted"].includes(j.status) && positiveInt64(last?.version) && !activeReview(j);
 }
 
 function renderDetail(detail) {
@@ -156,11 +164,13 @@ function renderDetail(detail) {
     text("jobs-detail-mode", `${j.action_type} / ${j.execution_mode}`);
     text("jobs-detail-draft", `#${j.draft_id} / ${j.draft_revision}`);
     text("jobs-detail-attempts", `${j.attempt_count}/${j.max_attempts}`);
+    text("jobs-batch-label", j.action_type === "compensate" ? "Batch dipulihkan" : "Batch committed");
+    text("jobs-row-label", j.action_type === "compensate" ? "Row dipulihkan" : "Row committed");
     text("jobs-detail-batches", j.committed_batches); text("jobs-detail-rows", j.committed_rows);
     text("jobs-detail-next", ["queued", "retry_wait", "recovering"].includes(j.status) ? formatDate(j.available_at) : "-");
     text("jobs-detail-times", `${formatDate(j.started_at)} / ${formatDate(j.finished_at)}`);
     text("jobs-detail-error", j.error_code || "-");
-    text("jobs-feedback", `${executionFeedback(j.status).message} Batch committed: ${j.committed_batches}; row committed: ${j.committed_rows}.`);
+    text("jobs-feedback", `${executionFeedback(j.status).message} ${j.action_type === "compensate" ? "Batch dipulihkan" : "Batch committed"}: ${j.committed_batches}; row: ${j.committed_rows}.`);
     byId("jobs-detail-review").href = reviewPath(j.authorization_review_id ?? j.review_id);
     reference("jobs-detail-parent", "jobs-detail-no-parent", j.parent_job_id);
     reference("jobs-detail-child", "jobs-detail-no-child", j.resumed_by_job_id);
@@ -176,6 +186,15 @@ function renderDetail(detail) {
     byId("jobs-resume-panel").hidden = !partial;
     resumeButton.hidden = !canResume(detail);
     byId("jobs-resume-permission").hidden = canEdit;
+    byId("jobs-compensation-panel").hidden = !j.can_compensate;
+    compensationButton.hidden = !canCompensate(detail);
+    byId("jobs-compensation-permission").hidden = canEdit;
+    const cr = j.compensation_review;
+    byId("jobs-compensation-review").hidden = !cr;
+    if (cr) {
+        byId("jobs-compensation-review-link").href = reviewPath(cr.id);
+        byId("jobs-compensation-review-link").textContent = `Review pembatalan #${cr.id} ? ${cr.status}`;
+    }
     const r = j.resume_review;
     byId("jobs-resume-review").hidden = !r;
     if (r) {
@@ -218,8 +237,10 @@ async function refresh({ index = currentPage } = {}) {
     finally { loading = false; if (alive()) { byId("jobs-page-status").hidden = true; controls(); schedule(); } }
 }
 
-async function requestResume() {
-    if (!alive() || loading || acting || failed || !canResume(current)) return;
+async function requestResume(kind = "resume") {
+    const eligible = kind === "compensate" ? canCompensate : canResume;
+    const trigger = kind === "compensate" ? compensationButton : resumeButton;
+    if (!alive() || loading || acting || failed || !eligible(current)) return;
     let cancelled = false;
     acting = true; stopTimer(); controls();
     try {
@@ -229,18 +250,18 @@ async function requestResume() {
         if (!alive()) return;
         assertJobAdvance(current.job, fresh.job);
         current = fresh; renderDetail(fresh);
-        if (!canResume(fresh)) { setBanner(byId("jobs-action-message"), "Job, akses, atau review sudah berubah. Gunakan detail terbaru sebelum mengambil tindakan.", true); return; }
+        if (!eligible(fresh)) { setBanner(byId("jobs-action-message"), "Job, akses, atau review sudah berubah. Gunakan detail terbaru sebelum mengambil tindakan.", true); return; }
         const j = fresh.job, execution = fresh.attempts.at(-1).execution_id;
-        const confirmed = await confirmAction({ title: "Ajukan review resume?", confirmLabel: "Ajukan review",
-            message: `Ajukan resume Job #${j.id}, draft #${j.draft_id} revisi ${j.draft_revision}, execution ${execution}?\n\n${j.committed_batches} batch / ${j.committed_rows} row sudah committed. SQL historis dan scope awal dipertahankan. Worker menunggu persetujuan seluruh leader sebelum melanjutkan.` });
+        const confirmed = await confirmAction({ title: kind === "compensate" ? "Ajukan pembatalan batch?" : "Ajukan review resume?", confirmLabel: "Ajukan review",
+            message: kind === "compensate" ? `Ajukan pembatalan Job #${j.id}, draft #${j.draft_id} revisi ${j.draft_revision}, execution ${execution}?\n\nSQL Down asli akan memulihkan batch committed dalam urutan terbalik. Batch yang sudah dipulihkan akan dilewati saat dilanjutkan. Perubahan dari luar migration dapat menyebabkan pembatalan ditolak.` : `Ajukan resume Job #${j.id}, draft #${j.draft_id} revisi ${j.draft_revision}, execution ${execution}?\n\n${j.committed_batches} batch / ${j.committed_rows} row sudah committed. SQL historis dan scope awal dipertahankan. Worker menunggu persetujuan seluruh leader sebelum melanjutkan.` });
         if (!confirmed || !alive()) { cancelled = !confirmed; return; }
         const result = await authenticatedRequest(`/api/v1/databases/${encodeURIComponent(databaseID)}/reviews`, {
             ...options, method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ draft_id: j.draft_id, revision: j.draft_revision, action_type: "resume", target_execution_id: execution })
+            body: JSON.stringify({ draft_id: j.draft_id, revision: j.draft_revision, action_type: kind, target_execution_id: execution })
         });
         if (!alive()) return;
         const r = result?.review;
-        if (!r || !positiveInt64(r.id) || r.database_id !== databaseID || r.action_type !== "resume" || r.target_execution_id !== execution || r.draft_id !== j.draft_id || r.draft_revision !== j.draft_revision) {
+        if (!r || !positiveInt64(r.id) || r.database_id !== databaseID || r.action_type !== kind || r.target_execution_id !== execution || r.draft_id !== j.draft_id || r.draft_revision !== j.draft_revision) {
             throw new Error("Hasil pengajuan review belum dapat dipastikan.");
         }
         navigateTo(reviewPath(r.id));
@@ -253,7 +274,7 @@ async function requestResume() {
         acting = false;
         if (alive()) {
             controls(); schedule();
-            if (cancelled && !resumeButton.hidden && !resumeButton.disabled) resumeButton.focus();
+            if (cancelled && !trigger.hidden && !trigger.disabled) trigger.focus();
         }
     }
 }
@@ -265,7 +286,8 @@ nextButton.addEventListener("click", () => {
     if (!loading && !acting && hasMore && positiveInt64(nextCursor)) { cursors[currentPage + 1] = nextCursor; return refresh({ index: currentPage + 1 }); }
 });
 auto.addEventListener("change", () => { stopTimer(); text("jobs-read-status", auto.checked && !failed ? "Pembaruan otomatis aktif." : "Pembaruan otomatis dijeda."); schedule(); });
-resumeButton.addEventListener("click", requestResume);
+resumeButton.addEventListener("click", () => requestResume("resume"));
+compensationButton.addEventListener("click", () => requestResume("compensate"));
 
 if (!positiveInt64(databaseID) || (jobID && !positiveInt64(jobID))) {
     failure(new Error("Identitas database atau job tidak valid."));

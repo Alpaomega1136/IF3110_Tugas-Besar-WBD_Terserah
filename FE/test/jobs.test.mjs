@@ -115,6 +115,37 @@ test("polling refreshes edit controls when current database access changes", asy
     assert.equal(ui.timers.size, 1);
 });
 
+test("partially reverted jobs request compensation approval for the exact latest attempt", async (t) => {
+    const job = jobFixture({ status: "partially_reverted", action_type: "compensate", parent_job_id: "2", target_execution_id: "b".repeat(32), can_compensate: true });
+    const attempt = attemptFixture({ status: "partially_reverted" });
+    const ui = await setup(t, { job, attempts: [attempt], backend: ({ url, method, body }) => {
+        if (url.endsWith("/reviews") && method === "POST") return json({ review: {
+            id: "91", database_id: dbID, draft_id: job.draft_id, draft_revision: job.draft_revision,
+            action_type: "compensate", target_execution_id: attempt.execution_id
+        } }, 201);
+    } });
+    assert.equal(ui.$("jobs-compensation-panel").hidden, false);
+    assert.equal(ui.$("jobs-request-compensation").hidden, false);
+    await ui.$("jobs-request-compensation").fire("click");
+    const request = ui.calls.find((c) => c.url.endsWith("/reviews") && c.method === "POST");
+    assert.deepEqual(request.body, { draft_id: job.draft_id, revision: job.draft_revision, action_type: "compensate", target_execution_id: attempt.execution_id });
+    assert.equal(request.headers.get("X-CSRF-Token"), "jobs-csrf");
+    assert.deepEqual(ui.navigations, [`/databases/${dbID}/reviews/91`]);
+});
+
+test("compensation respects revoked edit access and cancelled confirmation", async (t) => {
+    const job = jobFixture({ status: "partially_reverted", action_type: "compensate", parent_job_id: "2", target_execution_id: "b".repeat(32), can_compensate: true });
+    const attempt = attemptFixture({ status: "partially_reverted" });
+    const ui = await setup(t, { job, attempts: [attempt], confirm: false });
+    await ui.$("jobs-request-compensation").fire("click");
+    assert.equal(ui.calls.some((c) => c.method === "POST"), false);
+    assert.equal(document.activeElement, ui.$("jobs-request-compensation"));
+    ui.state.access = "view"; await ui.poll();
+    assert.equal(ui.$("jobs-request-compensation").hidden, true);
+    await ui.$("jobs-request-compensation").fire("click");
+    assert.equal(ui.calls.some((c) => c.method === "POST"), false);
+});
+
 test("read failure pauses automatic requests and manual refresh recovers", async (t) => {
     let offline = false;
     const ui = await setup(t, { backend: ({ url }) => offline && url.includes("/jobs?") ? json({ error: { code: "offline", message: "Backend unavailable" } }, 503) : undefined });
