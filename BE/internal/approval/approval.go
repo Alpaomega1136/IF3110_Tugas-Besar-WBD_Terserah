@@ -80,19 +80,25 @@ type SubmitInput struct {
 	TargetExecutionID *string
 }
 
-// EvaluateCompleteness checks whether all groups that currently hold view or edit
-// access to the target database have approved the review, or if any group rejected it.
+// EvaluateCompleteness memeriksa persetujuan seluruh group yang saat ini
+// memiliki akses view atau edit terhadap database target.
 func EvaluateCompleteness(requiredGroupIDs []int64, approvals []GroupApprovalView) (allApproved bool, anyRejected bool) {
-	for _, a := range approvals {
-		if a.Decision == DecisionRejected {
-			return false, true
-		}
-	}
 	if len(requiredGroupIDs) == 0 {
 		return false, false
 	}
+	// Keputusan group yang aksesnya telah dicabut tidak lagi memengaruhi review.
+	required := make(map[int64]bool, len(requiredGroupIDs))
+	for _, gid := range requiredGroupIDs {
+		required[gid] = true
+	}
 	byGroup := make(map[int64]GroupApprovalView, len(approvals))
 	for _, a := range approvals {
+		if !required[a.GroupID] {
+			continue
+		}
+		if a.Decision == DecisionRejected {
+			return false, true
+		}
 		byGroup[a.GroupID] = a
 	}
 	for _, gid := range requiredGroupIDs {
