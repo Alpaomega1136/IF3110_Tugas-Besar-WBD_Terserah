@@ -206,7 +206,7 @@ const draftIds = [
     "draft-target-name", "draft-access", "draft-list-status", "draft-list-error", "draft-list-empty",
     "draft-list-table", "draft-list-body", "draft-new", "draft-pagination", "draft-prev", "draft-next",
     "draft-page-number", "draft-form", "draft-editor-heading", "draft-current-id", "draft-title",
-    "draft-sql", "draft-sql-down", "draft-irreversible", "draft-reason", "draft-down-group", "draft-reason-group", "draft-immutable-note",
+    "draft-sql", "draft-sql-down", "draft-batch-down", "draft-irreversible", "draft-reason", "draft-down-group", "draft-reason-group", "draft-immutable-note",
     "draft-title-error", "draft-sql-error", "draft-sql-down-error", "draft-reason-error", "draft-save", "draft-save-message", "draft-detail",
     "draft-detail-author", "draft-detail-created", "draft-detail-updated", "draft-detail-sql", "draft-detail-down", "draft-detail-down-section", "draft-detail-irreversible",
     "draft-execution", "draft-execute", "draft-reload", "draft-execution-revision", "draft-execution-state",
@@ -267,6 +267,20 @@ test("draft pagination errors are displayed without opening imaginary rows", asy
         ? json({ drafts: draftsPage1, has_more: true, next_after: 9007199254740993 }) : undefined });
     assert.match(ui.$("draft-list-error").textContent, /Cursor/);
     assert.equal(ui.$("draft-next").disabled, true);
+});
+
+test("batch Down generation previews server SQL without saving or executing a draft", async () => {
+    const sql = "-- terserah-batch-v1 structured-config\nUPDATE scoped_data";
+    const down = "-- terserah-compensation-v1 structured-config\nUPDATE verified_images";
+    const ui = await setupDrafts({ custom: ({ url, method }) => url.endsWith("/batch-down-preview") ? json({ sql_down: down }) :
+        url === "/api/v1/auth/csrf" ? json({ csrf_token: "preview-csrf" }) : undefined });
+    ui.$("draft-sql").value = sql;
+    await ui.$("draft-sql").fire("input");
+    assert.equal(ui.$("draft-batch-down").hidden, false);
+    await ui.$("draft-batch-down").fire("click");
+    assert.equal(ui.$("draft-sql-down").value, down);
+    assert.equal(ui.calls.filter((c) => c.method === "POST").length, 1);
+    assert.equal(ui.calls.some((c) => c.url.endsWith("/execute")), false);
 });
 
 

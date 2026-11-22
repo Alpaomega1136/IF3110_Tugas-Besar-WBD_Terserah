@@ -164,6 +164,11 @@ function updateExecutionControls() {
     const modified = saved && isDirty();
     const immutable = Boolean(selectedDraft?.immutable);
     const locked = saved && lockedExecution === executionKey(selectedDraft);
+	const batchDown = byId("draft-batch-down");
+	if (batchDown) {
+		batchDown.hidden = !sqlInput.value.trimStart().startsWith("-- terserah-batch-v1 ");
+		batchDown.disabled = busy || immutable;
+	}
 
     executionPanel.hidden = !saved;
     executeButton.disabled = busy || !saved || modified || locked || immutable;
@@ -182,6 +187,25 @@ function updateExecutionControls() {
             ? "Ada perubahan belum disimpan. Simpan perubahan sebelum Execute."
             : "SQL tersimpan sudah siap ditinjau. Pastikan target dan revisi benar sebelum Execute.";
 }
+
+byId("draft-batch-down")?.addEventListener("click", async () => {
+    if (busy || selectedDraft?.immutable) return;
+    if (downInput.value.trim() && !(await confirmAction({ title: "Ganti SQL Down?", confirmLabel: "Siapkan SQL Down",
+        message: "SQL Down pada editor akan diganti dengan pemulihan nilai sebelum batch. Periksa hasilnya sebelum menyimpan draft." }))) return;
+    if (busy || page.isConnected === false) return;
+    setBusy(true);
+    try {
+        const result = await authenticatedRequest(`${apiPath}/batch-down-preview`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql: sqlInput.value })
+        });
+        if (page.isConnected === false) return;
+        if (typeof result?.sql_down !== "string" || !result.sql_down.startsWith("-- terserah-compensation-v1 ")) throw new Error("Format SQL Down batch tidak valid.");
+        downInput.value = result.sql_down;
+        irreversibleInput.checked = false; reasonInput.value = "";
+        setBanner(saveMessage, "SQL Down batch sudah disiapkan. Periksa dan simpan draft untuk membekukan definisinya saat dieksekusi.");
+    } catch (error) { handleError(error); }
+    finally { setBusy(false); }
+});
 
 function resetExecutionFeedback() {
     lockedExecution = null;
