@@ -51,6 +51,12 @@ type migrationQueryer interface {
 // Saat dipakai untuk memutuskan eksekusi, pemanggil wajib mengunci database_connections
 // dalam transaksi metadata agar posisi tidak berubah di antara pemeriksaan dan pencatatan.
 func bacaPosisiMigration(ctx context.Context, db migrationQueryer, dbID int64) (migrationState, error) {
+	return bacaPosisiMigrationTanpaAttempt(ctx, db, dbID, "")
+}
+
+// bacaPosisiMigrationTanpaAttempt mengabaikan hanya attempt yang sedang
+// direvalidasi worker. Attempt pending lain tetap memblokir eksekusi.
+func bacaPosisiMigrationTanpaAttempt(ctx context.Context, db migrationQueryer, dbID int64, ownExecutionID string) (migrationState, error) {
 	rows, err := db.Query(ctx, `
 		SELECT h.draft_id, h.draft_revision, h.execution_id, h.version, h.status,
 		       pair.applied_execution_id,
@@ -61,8 +67,9 @@ func bacaPosisiMigration(ctx context.Context, db migrationQueryer, dbID int64) (
 		LEFT JOIN migration_revision_snapshots snap
 		  ON snap.draft_id = h.draft_id AND snap.revision = h.draft_revision
 		WHERE h.database_id = $1
+		  AND ($2::text = '' OR h.execution_id IS DISTINCT FROM $2)
 		ORDER BY h.version
-	`, dbID)
+	`, dbID, ownExecutionID)
 	if err != nil {
 		return migrationState{}, err
 	}
