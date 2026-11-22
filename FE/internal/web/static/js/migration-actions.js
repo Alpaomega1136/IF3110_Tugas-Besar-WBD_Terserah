@@ -9,7 +9,7 @@ export function migrationAction(state, entry) {
     const id = entry.execution_id;
     if (entry.status === "success") {
         if (state.next_rollback?.execution_id === id && state.next_rollback.can_rollback) {
-            return { type: "rollback", target: id, label: "Rollback" };
+            return entry.execution_mode === "batch" ? { type: "compensate", target: id, label: "Batalkan batch" } : { type: "rollback", target: id, label: "Rollback" };
         }
         if (state.next_forward?.rollback_execution_id === id) {
             return { type: "forward", target: id, label: "Forward" };

@@ -7,7 +7,7 @@ const validProgress = (item) => ["committed_batches", "committed_rows"].every((f
 export function parseExecutionResult(result) {
     if (!result || typeof result.execution_id !== "string" || !result.execution_id ||
         !validVersion(result.version) ||
-        !["success", "failed", "running", "unknown", "partial"].includes(result.status) || !validProgress(result) ||
+        !["success", "failed", "running", "unknown", "partial", "partially_reverted"].includes(result.status) || !validProgress(result) ||
         (result.error_code != null && typeof result.error_code !== "string")) {
         throw new Error("Respons eksekusi tidak valid. Hasil tidak dapat dipastikan; periksa History.");
     }
@@ -17,7 +17,7 @@ export function parseExecutionResult(result) {
 export function parseJobResponse(response, databaseID) {
     const job = response?.job;
     if (!job || !validVersion(job.id) || job.database_id !== databaseID ||
-        !["queued", "running", "success", "failed", "unknown", "partial", "recovering", "retry_wait", "resumed"].includes(job.status) || !validProgress(job) ||
+        !["queued", "running", "success", "failed", "unknown", "partial", "recovering", "retry_wait", "resumed", "partially_reverted"].includes(job.status) || !validProgress(job) ||
         ["parent_job_id", "resumed_by_job_id"].some((field) => job[field] != null && !validVersion(job[field])) ||
         (job.status === "resumed" && !validVersion(job.resumed_by_job_id)) ||
         (job.target_execution_id != null && (typeof job.target_execution_id !== "string" || !job.target_execution_id)) ||
@@ -34,11 +34,12 @@ export function executionFeedback(status) {
         case "queued": return { message: "Migration masuk antrean. SQL belum dinyatakan berhasil; worker akan memprosesnya.", isError: false };
         case "success": return { message: "Migration berhasil di-commit. Periksa Viewer dan History untuk memastikan perubahan.", isError: false };
         case "failed": return { message: "Migration gagal dan transaksi telah di-rollback. Lihat error code dan History sebelum memperbaiki draft.", isError: true };
+        case "partially_reverted": return { message: "Pembatalan batch belum selesai. Periksa jumlah batch/row yang sudah dipulihkan; target ditahan sampai kompensasi dilanjutkan dengan approval baru.", isError: true };
         case "partial": return { message: "Sebagian batch sudah di-commit. Batch yang gagal dibatalkan; batch sebelumnya tetap tersimpan. Target ditahan sampai pemulihan yang disetujui. Jangan Execute ulang.", isError: true };
         case "running": return { message: "Migration masih berjalan (belum final). Periksa History; jangan mengirim Execute lagi.", isError: false };
         case "recovering": return { message: "Worker memeriksa receipt dan checkpoint di target sebelum menentukan retry. Batch yang sudah committed tetap tersimpan. Jangan Execute ulang.", isError: false };
         case "retry_wait": return { message: "Job menunggu jadwal retry atau resume yang disetujui. Percobaan berikutnya memiliki execution ID baru; batch yang committed akan dilewati. Jangan Execute ulang.", isError: false };
-        case "resumed": return { message: "Pemulihan dialihkan ke job resume terkait. History percobaan lama tetap tersimpan; periksa job resume untuk hasil kelanjutannya.", isError: false };
+        case "resumed": return { message: "Pemulihan dialihkan ke job terkait. History percobaan lama tetap tersimpan; periksa job pemulihan untuk hasil kelanjutannya.", isError: false };
         case "unknown": return { message: "Hasil eksekusi belum pasti. Periksa History dan lakukan reconcile bila diperlukan; jangan menjalankan ulang.", isError: true };
         default: throw new Error("Status migration tidak dikenal.");
     }

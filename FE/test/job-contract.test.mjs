@@ -7,10 +7,20 @@ test("normal rollback and forward jobs preserve their exact execution target", (
     for (const action_type of ["rollback", "forward"]) {
         const job = jobFixture({ action_type, execution_mode: "normal", parent_job_id: null, target_execution_id: "b".repeat(32) });
         assert.equal(parseJob(job, dbID).target_execution_id, job.target_execution_id);
-        for (const change of [{ target_execution_id: null }, { execution_mode: "batch" }, { parent_job_id: "8" }]) {
+        for (const change of [{ target_execution_id: null }, { parent_job_id: "8" }, ...(action_type === "rollback" ? [{ execution_mode: "batch" }] : [])]) {
             assert.throws(() => parseJob({ ...job, ...change }, dbID));
         }
     }
+});
+
+test("compensation jobs retain their parent and accept partially reverted attempts", () => {
+    const job = jobFixture({ action_type: "compensate", execution_mode: "batch", status: "partially_reverted",
+        parent_job_id: "8", target_execution_id: "b".repeat(32), can_compensate: true });
+    assert.equal(parseJobDetail({ job, attempts: [attemptFixture({ status: "partially_reverted" })] }, dbID, job.id).job.status, "partially_reverted");
+    for (const change of [{ parent_job_id: null }, { target_execution_id: null }, { execution_mode: "normal" }, { can_compensate: "true" }]) {
+        assert.throws(() => parseJob({ ...job, ...change }, dbID));
+    }
+    assert.equal(parseJob({ ...job, action_type: "forward", parent_job_id: null }, dbID).execution_mode, "batch");
 });
 
 test("job detail preserves string IDs and committed counts beyond Number precision", () => {

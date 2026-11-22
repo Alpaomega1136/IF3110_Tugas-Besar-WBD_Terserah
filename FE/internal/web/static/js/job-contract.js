@@ -4,16 +4,16 @@ import { positiveInt64, parseCursorPage } from "./pagination.js";
 export const jobLabels = {
     queued: "Dalam antrean", running: "Berjalan", success: "Berhasil", failed: "Gagal",
     unknown: "Hasil belum pasti", partial: "Sebagian committed", recovering: "Memeriksa bukti",
-    retry_wait: "Menunggu retry / resume", resumed: "Dialihkan ke job resume"
+    retry_wait: "Menunggu retry / resume", resumed: "Dialihkan ke job pemulihan", partially_reverted: "Pembatalan belum selesai"
 };
 
 const date = (v) => typeof v === "string" && Number.isFinite(Date.parse(v));
-const executionStates = ["running", "success", "failed", "unknown", "partial"];
+const executionStates = ["running", "success", "failed", "unknown", "partial", "partially_reverted"];
 
 export function parseJob(job, databaseID) {
     parseJobResponse({ job }, databaseID);
     if (!["review_id", "draft_id", "draft_revision", "requested_by"].every((key) => positiveInt64(job[key])) ||
-        !["up", "resume", "rollback", "forward"].includes(job.action_type) || !["normal", "batch"].includes(job.execution_mode) ||
+        !["up", "resume", "rollback", "forward", "compensate"].includes(job.action_type) || !["normal", "batch"].includes(job.execution_mode) ||
         !Number.isInteger(job.max_attempts) || job.max_attempts < 1 || job.max_attempts > 10 ||
         !Number.isInteger(job.attempt_count) || job.attempt_count < 0 || job.attempt_count > job.max_attempts ||
         typeof job.committed_batches !== "string" || typeof job.committed_rows !== "string" ||
@@ -22,7 +22,10 @@ export function parseJob(job, databaseID) {
         ["started_at", "finished_at"].some((key) => job[key] != null && !date(job[key])) ||
         (job.authorization_review_id != null && !positiveInt64(job.authorization_review_id)) ||
         (job.action_type === "resume" && (!positiveInt64(job.parent_job_id) || !job.target_execution_id)) ||
-        (["rollback", "forward"].includes(job.action_type) && (job.execution_mode !== "normal" || !job.target_execution_id || job.parent_job_id != null))) {
+        (job.action_type === "rollback" && job.execution_mode !== "normal") ||
+        (["rollback", "forward"].includes(job.action_type) && (!job.target_execution_id || job.parent_job_id != null)) ||
+        (job.action_type === "compensate" && (job.execution_mode !== "batch" || !positiveInt64(job.parent_job_id) || !job.target_execution_id)) ||
+        (job.can_compensate != null && typeof job.can_compensate !== "boolean")) {
         throw new Error("Detail job dari backend tidak valid. Muat ulang sebelum mengambil tindakan.");
     }
     return job;
@@ -61,6 +64,11 @@ export function parseJobDetail(payload, databaseID, jobID) {
         !["pending_review", "approved", "rejected", "queued", "cancelled"].includes(r.status) ||
         r.target_execution_id !== payload.attempts.at(-1)?.execution_id || job.status !== "partial")) {
         throw new Error("Review resume tidak sesuai execution job.");
+    }
+    const c = job.compensation_review;
+    if (c != null && (!positiveInt64(c.id) || !["pending_review", "approved", "rejected", "queued", "cancelled"].includes(c.status) ||
+        c.target_execution_id !== payload.attempts.at(-1)?.execution_id || job.execution_mode !== "batch")) {
+        throw new Error("Review kompensasi tidak sesuai execution job.");
     }
     return { job, attempts: payload.attempts };
 }

@@ -87,7 +87,7 @@ const statusLabel = (status) => STATUS_LABELS[status] ?? String(status ?? "-");
 function makeStatus(status) {
     const span = document.createElement("span");
     span.className = "migration-status";
-    if (["running", "success", "failed", "unknown", "partial"].includes(status)) {
+    if (["running", "success", "failed", "unknown", "partial", "partially_reverted"].includes(status)) {
         span.className += ` migration-status--${status}`;
     }
     span.textContent = statusLabel(status);
@@ -232,11 +232,11 @@ function renderHistory(entries) {
     listEmpty.hidden = entries.length !== 0;
     listTable.hidden = entries.length === 0;
 
-    const pendingCount = entries.filter((item) => ["running", "unknown", "partial"].includes(item.status)).length;
+    const pendingCount = entries.filter((item) => ["running", "unknown", "partial", "partially_reverted"].includes(item.status)).length;
     showMessage(
         pendingNotice,
         pendingCount
-            ? `${pendingCount} catatan pada halaman ini berstatus running, unknown, atau partial. Periksa Jobs untuk status pekerjaan terkini. ${canEdit ? "Gunakan Reconcile jika hasil belum pasti." : "Reconcile memerlukan akses Edit."}`
+            ? `${pendingCount} catatan pada halaman ini berstatus running, unknown, partial, atau partially reverted. Periksa Jobs untuk status pekerjaan terkini. ${canEdit ? "Gunakan Reconcile jika hasil belum pasti." : "Reconcile memerlukan akses Edit."}`
             : ""
     );
 
@@ -351,7 +351,7 @@ async function loadHistory(index = currentPage, reset = false) {
 
 function renderReconciled(items) {
     reconcileBody.replaceChildren();
-    const counts = { success: 0, failed: 0, running: 0, unknown: 0, partial: 0 };
+    const counts = { success: 0, failed: 0, running: 0, unknown: 0, partial: 0, partially_reverted: 0 };
     for (const item of items) {
         counts[item.status]++;
         const row = document.createElement("tr");
@@ -367,7 +367,7 @@ function renderReconciled(items) {
     reconcileTable.hidden = items.length === 0;
     reconcileSummary.textContent = items.length === 0
         ? "Tidak ada eksekusi running/unknown/partial yang perlu direconcile. Tidak ada SQL yang dijalankan."
-        : `${items.length} eksekusi diperiksa: ${counts.success} success, ${counts.failed} failed, ${counts.unknown} unknown, ${counts.running} running, ${counts.partial} partial. Tidak ada SQL yang dijalankan ulang.`;
+        : `${items.length} eksekusi diperiksa: ${counts.success} success, ${counts.failed} failed, ${counts.unknown} unknown, ${counts.running} running, ${counts.partial} partial, ${counts.partially_reverted} partially reverted. Tidak ada SQL yang dijalankan ulang.`;
 }
 
 async function reconcileHistory() {
@@ -418,10 +418,10 @@ async function refreshAction() {
         // Preview SQL berasal dari definisi immutable, bukan SQL pada attempt sebelumnya.
         const draft = await authenticatedRequest(`${base}/drafts/${encodeURIComponent(selectedHistory.draft_id)}`);
         if (!draft?.immutable || draft.revision !== selectedHistory.draft_revision ||
-            typeof draft.sql !== "string" || (selectedAction.type.includes("rollback") && typeof draft.sql_down !== "string")) {
+            typeof draft.sql !== "string" || ((selectedAction.type.includes("rollback") || selectedAction.type === "compensate") && typeof draft.sql_down !== "string")) {
             throw new Error("Definisi immutable tidak tersedia atau revisinya berubah. Periksa backend sebelum menjalankan aksi.");
         }
-        const isRollback = selectedAction.type.includes("rollback");
+        const isRollback = selectedAction.type.includes("rollback") || selectedAction.type === "compensate";
         actionSQLHeading.textContent = isRollback ? "SQL Down Immutable (Rollback)" : "SQL Up Immutable (Forward/Retry)";
         actionSQL.textContent = isRollback ? draft.sql_down : draft.sql;
         actionSQLSection.hidden = false;
