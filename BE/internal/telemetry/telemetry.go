@@ -50,7 +50,38 @@ func Restore(ctx context.Context, parent string) context.Context {
 	return propagation.TraceContext{}.Extract(ctx, propagation.MapCarrier{"traceparent": parent})
 }
 
+type fieldsKey struct{}
+
+// WithFields carries only application IDs/counters, never principals or credentials.
+func WithFields(ctx context.Context, fields ...any) context.Context {
+	values := make(map[string]any)
+	if previous, ok := ctx.Value(fieldsKey{}).(map[string]any); ok {
+		for key, value := range previous {
+			values[key] = value
+		}
+	}
+	for i := 0; i+1 < len(fields); i += 2 {
+		if key, ok := fields[i].(string); ok {
+			values[key] = fields[i+1]
+		}
+	}
+	return context.WithValue(ctx, fieldsKey{}, values)
+}
+
 func Event(ctx context.Context, event string, fields ...any) {
+	if values, ok := ctx.Value(fieldsKey{}).(map[string]any); ok {
+		present := make(map[string]bool)
+		for i := 0; i+1 < len(fields); i += 2 {
+			if key, ok := fields[i].(string); ok {
+				present[key] = true
+			}
+		}
+		for key, value := range values {
+			if !present[key] {
+				fields = append(fields, key, value)
+			}
+		}
+	}
 	sc := trace.SpanContextFromContext(ctx)
 	if sc.IsValid() {
 		fields = append(fields, "trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
@@ -70,7 +101,7 @@ func (logExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpa
 		slog.InfoContext(ctx, "trace_span", "event", "trace_span", "name", span.Name(),
 			"trace_id", span.SpanContext().TraceID().String(), "span_id", span.SpanContext().SpanID().String(),
 			"parent_span_id", span.Parent().SpanID().String(), "duration_ms", span.EndTime().Sub(span.StartTime()).Milliseconds(),
-			"status", span.Status().Code.String(), "attributes", span.Attributes())
+			"status", span.Status().Code.String(), "kind", span.SpanKind().String(), "resource", span.Resource().Attributes(), "attributes", span.Attributes())
 	}
 	return nil
 }
@@ -78,23 +109,43 @@ func (logExporter) Shutdown(context.Context) error { return nil }
 
 type responseStatus struct {
 	http.ResponseWriter
-	code int
+	code    int
+	written bool
 }
 
-func (w *responseStatus) WriteHeader(code int) { w.code = code; w.ResponseWriter.WriteHeader(code) }
+func (w *responseStatus) WriteHeader(code int) {
+	if !w.written && code >= 200 {
+		w.code = code
+		w.written = true
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+func (w *responseStatus) Write(data []byte) (int, error) {
+	if !w.written {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(data)
+}
+func (w *responseStatus) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // HTTP deliberately excludes URL queries, headers, cookies, SQL and request bodies.
 func HTTP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
 		ctx, span := Start(Restore(r.Context(), r.Header.Get("traceparent")), "http.request", trace.WithSpanKind(trace.SpanKindServer))
 		defer span.End()
 		r = r.WithContext(ctx)
 		out := &responseStatus{ResponseWriter: w, code: 200}
 		next.ServeHTTP(out, r)
-		span.SetName(r.Pattern)
+		route := r.Pattern
+		if route == "" {
+			route = "unmatched"
+		}
+		span.SetName(route)
 		span.SetAttributes(attribute.String("http.request.method", r.Method), attribute.String("http.route", r.Pattern), attribute.Int("http.response.status_code", out.code))
 		if out.code >= 500 {
 			Failure(span, "http_server_error")
 		}
+		Event(ctx, "http_completed", "method", r.Method, "route", route, "status", out.code, "duration_ms", time.Since(started).Milliseconds())
 	})
 }

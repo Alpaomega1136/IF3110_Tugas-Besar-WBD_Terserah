@@ -1,8 +1,10 @@
 package telemetry
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,6 +51,21 @@ func TestHTTPTracePropagatesWithoutSensitiveInput(t *testing.T) {
 	}
 	if spans[1].Name != "POST /jobs/{id}" {
 		t.Fatalf("route pattern missing: %s", spans[1].Name)
+	}
+}
+
+func TestHTTPLogsActualStatusWithoutRawURL(t *testing.T) {
+	var output bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	HTTP(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(201)
+		w.WriteHeader(500)
+		_, _ = w.Write([]byte("ok"))
+	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/private-url-marker?password=secret", nil))
+	if !strings.Contains(output.String(), `"status":201`) || strings.Contains(output.String(), "private-url-marker") || strings.Contains(output.String(), "password") {
+		t.Fatal("HTTP status inaccurate or raw URL leaked")
 	}
 }
 
