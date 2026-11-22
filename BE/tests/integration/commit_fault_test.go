@@ -172,7 +172,7 @@ func TestCommitResponseRecovery(t *testing.T) {
 					t.Error(err)
 				}
 			}()
-			w := editor.request("POST", base+"/drafts", map[string]string{"title": "commit fault", "sql": "CREATE SCHEMA " + schema + "; CREATE TABLE " + schema + ".proof(id int); INSERT INTO " + schema + ".proof VALUES(1)"})
+			w := editor.request("POST", base+"/drafts", map[string]string{"title": "commit fault", "sql": "CREATE SCHEMA " + schema + "; CREATE TABLE " + schema + ".proof(id int); INSERT INTO " + schema + ".proof VALUES(1)", "sql_down": "DROP SCHEMA " + schema + " CASCADE"})
 			status(t, w, 201)
 			var d runner.Draft
 			if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
@@ -271,7 +271,7 @@ func TestRecoveryAfterWaitingForCommit(t *testing.T) {
 			editor.login(t, "editor")
 			checker.login(t, "editor")
 			base := fmt.Sprintf("/api/v1/databases/%d", target.ID)
-			w := editor.request("POST", base+"/drafts", map[string]string{"title": "recovery snapshot", "sql": "SELECT pg_catalog.pg_advisory_xact_lock(3110099)"})
+			w := editor.request("POST", base+"/drafts", map[string]string{"title": "recovery snapshot", "sql": "SELECT pg_catalog.pg_advisory_xact_lock(3110099)", "sql_down": "SELECT 1"})
 			status(t, w, 201)
 			var draft runner.Draft
 			if err := json.Unmarshal(w.Body.Bytes(), &draft); err != nil {
