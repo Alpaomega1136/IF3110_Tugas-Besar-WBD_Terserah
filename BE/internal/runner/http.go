@@ -19,6 +19,7 @@ import (
 func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("GET /api/v1/databases/{id}/migrations", sessions.Require(s.history))
 	mux.HandleFunc("GET /api/v1/databases/{id}/migrations/{version}", sessions.Require(s.history))
+	mux.HandleFunc("GET /api/v1/databases/{id}/migration-state", sessions.Require(s.state))
 	mux.HandleFunc("POST /api/v1/databases/{id}/migrations/reconcile", sessions.Require(s.reconcile))
 
 	base := "/api/v1/databases/{id}/drafts"
@@ -59,6 +60,10 @@ func fail(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusNotFound, "not_found", "Database object not found")
 	case errors.Is(err, errDraftLocked):
 		httpx.Error(w, http.StatusConflict, "migration_immutable", err.Error())
+	case errors.Is(err, errMigrationOrder), errors.Is(err, errMigrationIrreversible),
+		errors.Is(err, errMigrationUnresolved), errors.Is(err, errMigrationMustForward),
+		errors.Is(err, errMigrationStateInvalid):
+		httpx.Error(w, http.StatusConflict, "migration_state_conflict", err.Error())
 	case errors.Is(err, errConflict):
 		httpx.Error(w, http.StatusConflict, "execution_conflict", "Reload draft or resolve the pending execution before retrying")
 	case errors.Is(err, approval.ErrNotApproved), errors.Is(err, approval.ErrLeaderMissing):
@@ -242,6 +247,37 @@ func (s *Service) history(w http.ResponseWriter, r *http.Request) {
 		"next_before": next,
 		"has_more":    more,
 	})
+}
+
+// state menyediakan posisi migration dan kandidat rollback/forward bagi frontend.
+// Pemeriksaan permission tetap dilakukan pada backend untuk pengguna View Only.
+func (s *Service) state(w http.ResponseWriter, r *http.Request) {
+	_, dbID, err := s.authorize(r, false)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	defer rollback(tx)
+	var id int64
+	if err := tx.QueryRow(r.Context(), `SELECT id FROM database_connections WHERE id=$1 FOR SHARE`, dbID).Scan(&id); err != nil {
+		fail(w, err)
+		return
+	}
+	position, err := bacaPosisiMigration(r.Context(), tx, dbID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		fail(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, position)
 }
 
 func (s *Service) reconcile(w http.ResponseWriter, r *http.Request) {

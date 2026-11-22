@@ -199,6 +199,15 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 	if hasPending {
 		return "", nil, false, errConflict
 	}
+	// Validasi posisi dilakukan setelah database_connections terkunci dan sebelum
+	// menambah attempt agar tidak ada dua migration aktif dengan definisi sama.
+	state, err := bacaPosisiMigration(ctx, meta, dbID)
+	if err != nil {
+		return "", nil, false, err
+	}
+	if err := state.cekUp(draftID); err != nil {
+		return "", nil, false, err
+	}
 	// Definisi lama yang belum mempunyai Down atau alasan irreversible harus
 	// dilengkapi sebelum attempt pertama; jangan menyimpan snapshot tidak valid.
 	if _, err = validasiDefinisiDraft(draftInput{
