@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"terserah/backend/internal/httpx"
 	"terserah/backend/internal/secretbox"
+	"terserah/backend/internal/telemetry"
 )
 
 const CookieName = "terserah_session"
@@ -219,10 +220,18 @@ func (s *Service) Require(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if r.Method != "GET" && r.Method != "HEAD" && !s.validCSRF(r, p) {
+			telemetry.Event(r.Context(), "access_checked", "actor_id", p.ID, "status", "denied", "error_code", "csrf_rejected")
 			httpx.Error(w, 403, "csrf_rejected", "CSRF validation failed")
 			return
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, p)))
+		ctx = telemetry.WithFields(r.Context(), "actor_id", p.ID)
+		if strings.Contains(r.Pattern, "/api/v1/databases/{id}") {
+			if id, err := strconv.ParseInt(r.PathValue("id"), 10, 64); err == nil && id > 0 {
+				ctx = telemetry.WithFields(ctx, "database_id", id)
+			}
+		}
+		telemetry.Event(ctx, "access_checked", "route", r.Pattern, "status", "authenticated")
+		next(w, r.WithContext(context.WithValue(ctx, principalKey{}, p)))
 	}
 }
 
@@ -321,6 +330,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		passwordHash = s.dummyHash
 	}
 	if !CheckPassword(passwordHash, input.Password) || !active {
+		telemetry.Event(r.Context(), "login_result", "status", "denied", "error_code", "invalid_credentials")
 		httpx.Error(w, 401, "invalid_credentials", "Invalid username or password")
 		return
 	}
@@ -387,6 +397,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 	}
 	s.cookie(w, CookieName, token, absolute)
 	s.cookie(w, preloginCookie, "", now)
+	telemetry.Event(r.Context(), "login_result", "actor_id", p.ID, "status", "success")
 	httpx.JSON(w, 200, p)
 }
 
@@ -397,5 +408,6 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cookie(w, CookieName, "", s.now())
+	telemetry.Event(r.Context(), "logout_result", "actor_id", p.ID, "status", "success")
 	w.WriteHeader(http.StatusNoContent)
 }

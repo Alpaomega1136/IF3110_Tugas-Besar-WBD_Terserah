@@ -16,6 +16,7 @@ import (
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/policy"
 	"terserah/backend/internal/secretbox"
+	"terserah/backend/internal/telemetry"
 )
 
 var (
@@ -390,6 +391,7 @@ func (s *Service) open(ctx context.Context, c Connection) (*pgxpool.Pool, error)
 		return nil, ErrTargetUnavailable
 	}
 	cfg.MaxConns = 3
+	cfg.ConnConfig.Tracer = telemetry.SQLTracer{Role: "target", DatabaseID: c.ID}
 	cfg.ConnConfig.RuntimeParams = map[string]string{"application_name": "terserah-target"}
 
 	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
