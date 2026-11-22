@@ -8,11 +8,13 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const draftColumns = "d.id, d.database_id, d.title, d.sql, d.sql_down, d.irreversible, d.irreversible_reason, d.revision, d.created_by, u.username, d.created_at, d.updated_at"
 
 var errDraftDefinition = errors.New("definisi migration tidak valid")
+var errDraftLocked = errors.New("definisi migration yang pernah dieksekusi tidak dapat diubah; buat migration baru")
 
 // validasiDefinisiDraft memastikan SQL Up/Down dan alasan irreversible konsisten sebelum disimpan.
 func validasiDefinisiDraft(in draftInput) (draftInput, error) {
@@ -151,6 +153,10 @@ func (s *Service) updateDraft(ctx context.Context, dbID, draftID int64, in draft
 	`, in.Title, in.SQL, in.SQLDown, in.Irreversible, in.IrreversibleReason, dbID, draftID, in.Revision))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Draft{}, errConflict
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23514" && pgErr.ConstraintName == "migration_drafts_executed_immutable" {
+		return Draft{}, errDraftLocked
 	}
 	return d, err
 }

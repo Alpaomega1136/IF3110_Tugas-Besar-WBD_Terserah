@@ -57,6 +57,8 @@ func fail(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusForbidden, "forbidden", "Database access denied")
 	case errors.Is(err, pgx.ErrNoRows):
 		httpx.Error(w, http.StatusNotFound, "not_found", "Database object not found")
+	case errors.Is(err, errDraftLocked):
+		httpx.Error(w, http.StatusConflict, "migration_immutable", err.Error())
 	case errors.Is(err, errConflict):
 		httpx.Error(w, http.StatusConflict, "execution_conflict", "Reload draft or resolve the pending execution before retrying")
 	case errors.Is(err, approval.ErrNotApproved), errors.Is(err, approval.ErrLeaderMissing):

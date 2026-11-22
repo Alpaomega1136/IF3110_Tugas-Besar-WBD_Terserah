@@ -147,14 +147,16 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 		return "", nil, false, err
 	}
 
-	var sqlText string
+	var title, sqlText string
+	var sqlDown, irreversibleReason *string
+	var irreversible bool
 	var actualRevision int64
 	err = meta.QueryRow(ctx, `
-		SELECT sql, revision
+		SELECT title, sql, sql_down, irreversible, irreversible_reason, revision
 		FROM migration_drafts
 		WHERE database_id = $1 AND id = $2
 		FOR UPDATE
-	`, dbID, draftID).Scan(&sqlText, &actualRevision)
+	`, dbID, draftID).Scan(&title, &sqlText, &sqlDown, &irreversible, &irreversibleReason, &actualRevision)
 	if err != nil {
 		return "", nil, false, err
 	}
@@ -162,11 +164,13 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 		return "", nil, false, errConflict
 	}
 
-	// Idempotent replay: if this exact (draft_id, draft_revision) already has a history entry, return it.
+	// Replay eksekusi Up mengembalikan attempt awal tanpa mengeksekusi SQL ulang.
 	err = meta.QueryRow(ctx, `
 		SELECT execution_id, version, status, error_code
 		FROM migration_history
 		WHERE database_id = $1 AND draft_id = $2 AND draft_revision = $3
+		ORDER BY version ASC
+		LIMIT 1
 	`, dbID, draftID, revision).Scan(&result.ExecutionID, &result.Version, &result.Status, &result.ErrorCode)
 	if err == nil {
 		return "", nil, true, nil
@@ -175,21 +179,41 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 		return "", nil, false, err
 	}
 
-	var hasPending bool
+	var hasPending, hasOtherRevision bool
 	err = meta.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM migration_history
 			WHERE database_id = $1 AND status IN ('running', 'unknown')
+		), EXISTS(
+			SELECT 1 FROM migration_history
+			WHERE database_id = $1 AND draft_id = $2
+			  AND draft_revision IS DISTINCT FROM $3
 		)
-	`, dbID).Scan(&hasPending)
+	`, dbID, draftID, revision).Scan(&hasPending, &hasOtherRevision)
 	if err != nil {
 		return "", nil, false, err
+	}
+	if hasOtherRevision {
+		return "", nil, false, errDraftLocked
 	}
 	if hasPending {
 		return "", nil, false, errConflict
 	}
-	if _, err = approval.EnsureApprovedTx(ctx, meta, dbID, draftID, revision, "up"); err != nil {
+	// Definisi lama yang belum mempunyai Down atau alasan irreversible harus
+	// dilengkapi sebelum attempt pertama; jangan menyimpan snapshot tidak valid.
+	if _, err = validasiDefinisiDraft(draftInput{
+		Title: title, SQL: sqlText, SQLDown: sqlDown,
+		Irreversible: irreversible, IrreversibleReason: irreversibleReason,
+	}); err != nil {
 		return "", nil, false, err
+	}
+	review, err := approval.EnsureApprovedTx(ctx, meta, dbID, draftID, revision, "up")
+	if err != nil {
+		return "", nil, false, err
+	}
+	// Review yang disetujui tidak boleh digunakan bila SQL Up berubah diam-diam.
+	if review.SQLSnapshot != sqlText {
+		return "", nil, false, approval.ErrNotApproved
 	}
 
 	parts, err := statements(sqlText)
@@ -204,16 +228,8 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 	result.ExecutionID = hex.EncodeToString(token[:])
 	result.Status = "running"
 
-	err = meta.QueryRow(ctx, `
-		INSERT INTO migration_history (
-			database_id, draft_id, draft_revision, version, sql,
-			executed_by, status, execution_id, receipt_version
-		)
-		SELECT $1, $2, $3, COALESCE(MAX(version), 0) + 1, $4, $5, 'running', $6, 1
-		FROM migration_history
-		WHERE database_id = $1
-		RETURNING version
-	`, dbID, draftID, revision, sqlText, userID, result.ExecutionID).Scan(&result.Version)
+	result.Version, err = catatExecutionPertamaTx(ctx, meta, dbID, draftID, revision,
+		userID, result.ExecutionID, sqlText, sqlDown, irreversible, irreversibleReason)
 	if err != nil {
 		return "", nil, false, err
 	}
