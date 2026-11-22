@@ -128,7 +128,7 @@ func (s *Service) Authenticate(w http.ResponseWriter, r *http.Request) (Principa
 	if err != nil {
 		return p, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(r.Context(), tx)
 	var lastSeen, absolute, rotated time.Time
 	var active, adminBefore, rotationRequired bool
 	var encrypted []byte
@@ -339,7 +339,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		s.authError(w, err)
 		return
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(r.Context(), tx)
 	// Recheck the account inside the transaction before creating a session.
 	var latestHash string
 	err = tx.QueryRow(r.Context(), "SELECT is_platform_admin,password_hash FROM users WHERE id=$1 AND is_active=true FOR UPDATE", p.ID).Scan(&p.IsPlatformAdmin, &latestHash)

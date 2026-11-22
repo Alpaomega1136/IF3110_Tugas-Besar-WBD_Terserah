@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"terserah/backend/internal/policy"
+	"terserah/backend/internal/telemetry"
 )
 
 type PostgresStore struct {
@@ -97,7 +98,7 @@ func (s *PostgresStore) SubmitReview(ctx context.Context, actorID, dbID int64, i
 	if err != nil {
 		return ReviewView{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	var lockedDB int64
 	if err := tx.QueryRow(ctx, `SELECT id FROM database_connections WHERE id = $1 FOR UPDATE`, dbID).Scan(&lockedDB); err != nil {
@@ -219,7 +220,7 @@ func (s *PostgresStore) DecideReview(ctx context.Context, actorID, dbID, reviewI
 	if err != nil {
 		return ReviewView{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 	var lockedDB int64
 	if err := tx.QueryRow(ctx, `SELECT id FROM database_connections WHERE id = $1 FOR UPDATE`, dbID).Scan(&lockedDB); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -349,7 +350,7 @@ func (s *PostgresStore) GetReview(ctx context.Context, actorID, dbID, reviewID i
 	if err != nil {
 		return ReviewView{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	return loadReviewTx(ctx, tx, actorID, dbID, reviewID, true)
 }
@@ -367,7 +368,7 @@ func (s *PostgresStore) ListDatabaseReviews(ctx context.Context, actorID, dbID, 
 	if err != nil {
 		return nil, false, nil, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	rows, err := tx.Query(ctx, `
 		SELECT id
@@ -418,7 +419,7 @@ func (s *PostgresStore) ListAssignedReviews(ctx context.Context, actorID int64) 
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	rows, err := tx.Query(ctx, `
 		SELECT DISTINCT r.id, r.database_id
@@ -466,7 +467,7 @@ func (s *PostgresStore) EnsureApproved(ctx context.Context, dbID, draftID, revis
 	if err != nil {
 		return ReviewView{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 	review, err := EnsureApprovedTx(ctx, tx, dbID, draftID, revision, actionType)
 	if err != nil {
 		return ReviewView{}, err

@@ -151,7 +151,7 @@ func (s *Service) Create(ctx context.Context, p auth.Principal, input Input) (Co
 	if err != nil {
 		return Connection{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	c, err := scan(tx.QueryRow(ctx, `
 		INSERT INTO database_connections (name, host, port, database_name, username, password_encrypted, sslmode)
@@ -226,7 +226,7 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, id int64, patch 
 	if err != nil {
 		return Connection{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	c, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id = $1 FOR UPDATE", id))
 	if err != nil {
@@ -298,7 +298,7 @@ func (s *Service) Delete(ctx context.Context, p auth.Principal, id int64) error 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	if _, err = scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id = $1 FOR UPDATE", id)); err != nil {
 		return err

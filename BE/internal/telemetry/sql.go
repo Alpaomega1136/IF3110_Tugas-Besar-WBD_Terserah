@@ -29,6 +29,13 @@ type queryState struct {
 	command string
 }
 
+// Rollback keeps request correlation but must finish cleanup after request cancellation.
+func Rollback(parent context.Context, tx pgx.Tx) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
+	defer cancel()
+	_ = tx.Rollback(ctx)
+}
+
 func (t SQLTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
 	return t.start(ctx, data.SQL, len(data.Args))
 }

@@ -13,6 +13,7 @@ import (
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/httpx"
+	"terserah/backend/internal/telemetry"
 )
 
 type Service struct{ targets *connections.Service }
@@ -122,7 +123,7 @@ func (s *Service) read(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(r.Context(), tx)
 
 	if _, err = tx.Exec(r.Context(), "SET LOCAL statement_timeout='5s'; SET LOCAL search_path=pg_catalog,pg_temp"); err != nil {
 		fail(w, err)
