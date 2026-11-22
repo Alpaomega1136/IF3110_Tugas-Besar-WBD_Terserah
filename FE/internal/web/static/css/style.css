@@ -1996,11 +1996,12 @@ button:focus-visible {
 #jobs-page button, #jobs-page .workspace-button { min-height: 44px; }
 #jobs-page .cursor-pagination button { width: auto; min-width: 110px; padding: 8px 12px; }
 #jobs-page .users-table-wrapper { max-width: 100%; overflow-x: auto; }
+#jobs-page .users-table { min-width: 900px; }
 #jobs-page .users-table-wrapper:focus-visible { outline: 3px solid var(--primary); outline-offset: 2px; }
 #jobs-page .users-table td { overflow-wrap: anywhere; }
 @media (max-width: 600px) {
     .jobs-metadata { grid-template-columns: minmax(0, 1fr); }
-    .jobs-toolbar .database-workspace-links { width: 100%; }
+    .jobs-toolbar .database-workspace-links { width: 100%; flex-direction: row; align-items: stretch; }
     .jobs-toolbar .workspace-button { flex: 1 1 90px; }
     #jobs-page .dashboard-panel { min-width: 0; }
 }
