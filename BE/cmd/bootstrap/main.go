@@ -17,6 +17,7 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	check := flag.Bool("check", false, "print whether a platform admin already exists")
 	flag.Parse()
 	if err := run(*check); err != nil {

@@ -247,8 +247,15 @@ func startAPI(t *testing.T, firstAdminCommand string) (string, string) {
 	}
 	check := exec.CommandContext(cliCtx, filepath.Join(bin, "bootstrap"+suffix), "-check")
 	check.Env = env
+	var checkLogs bytes.Buffer
+	check.Stderr = &checkLogs
 	if output, e := check.Output(); e != nil || strings.TrimSpace(string(output)) != "true" {
 		t.Fatal("bootstrap check must recognize the existing admin")
+	}
+	for _, line := range bytes.Split(bytes.TrimSpace(checkLogs.Bytes()), []byte("\n")) {
+		if !json.Valid(line) {
+			t.Fatal("bootstrap SQL logs must remain JSON on stderr, separate from its boolean stdout")
+		}
 	}
 	for _, name := range []string{"bootstrap", "seed"} {
 		cmd := exec.CommandContext(cliCtx, filepath.Join(bin, name+suffix))

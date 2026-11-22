@@ -12,6 +12,7 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if !run() {
 		os.Exit(1)
 	}
