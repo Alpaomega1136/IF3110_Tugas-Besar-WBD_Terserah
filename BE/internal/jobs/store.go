@@ -108,6 +108,17 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 	if err != nil {
 		return Job{}, false, err
 	}
+	if action == "compensate" {
+		j, err := enqueueCompensationTx(ctx, tx, p.ID, dbID, reviewID, draftID, revision, status, targetExecution, parent)
+		if err != nil {
+			return Job{}, false, err
+		}
+		if err = tx.Commit(ctx); err != nil {
+			return Job{}, false, err
+		}
+		telemetry.Event(ctx, "compensation_queued", "actor_id", p.ID, "database_id", dbID, "job_id", j.ID, "review_id", reviewID, "status", j.Status)
+		return j, false, nil
+	}
 	if action == "resume" {
 		j, err := enqueueResumeTx(ctx, tx, p.ID, dbID, reviewID, draftID, revision, status, targetExecution, parent)
 		if err != nil {
@@ -136,11 +147,11 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 		err = tx.QueryRow(ctx, `SELECT CASE WHEN $4='rollback' THEN snap.sql_down ELSE snap.sql_up END,h.batch_root_execution_id IS NOT NULL
  FROM migration_history h JOIN migration_revision_snapshots snap ON snap.draft_id=h.draft_id AND snap.revision=h.draft_revision
  WHERE h.database_id=$1 AND h.execution_id=$2 AND h.draft_id=$3 AND h.status='success'
- AND (($4='rollback' AND h.action_type IN ('up','forward') AND NOT snap.irreversible) OR ($4='forward' AND h.action_type='rollback'))`, dbID, *targetExecution, draftID, action).Scan(&sql, &targetBatch)
+ AND (($4='rollback' AND h.action_type IN ('up','forward') AND NOT snap.irreversible) OR ($4='forward' AND h.action_type IN ('rollback','compensate')))`, dbID, *targetExecution, draftID, action).Scan(&sql, &targetBatch)
 		if err != nil {
 			return Job{}, false, ErrConflict
 		}
-		if targetBatch {
+		if targetBatch && action == "rollback" {
 			return Job{}, false, ErrUnsupported
 		}
 	}
@@ -287,6 +298,22 @@ func (s *Service) Get(ctx context.Context, p auth.Principal, dbID, jobID int64) 
 			j.ResumeReview = &review
 		}
 	}
+	if j.ExecutionMode == "batch" && len(items) > 0 && (j.Status == Partial || j.Status == Success || j.Status == PartiallyReverted) && (j.ActionType != "compensate" || j.Status == PartiallyReverted) {
+		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_revision_snapshots snap WHERE snap.draft_id=$1 AND snap.revision=$2 AND NOT snap.irreversible AND snap.sql_down IS NOT NULL)
+ AND ($3<>'success' OR COALESCE($4=(SELECT h.execution_id FROM migration_history h WHERE h.database_id=$5 AND h.status='success' AND h.action_type IN ('up','resume','forward')
+ AND NOT EXISTS(SELECT 1 FROM migration_rollback_pairs p WHERE p.applied_execution_id=h.execution_id) ORDER BY h.version DESC LIMIT 1),false))`, j.DraftID, j.DraftRevision, j.Status, items[len(items)-1].ExecutionID, dbID).Scan(&j.CanCompensate)
+		if err != nil {
+			return Job{}, nil, err
+		}
+		var review ReviewReference
+		err = tx.QueryRow(ctx, `SELECT id,status,target_execution_id FROM migration_reviews WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3 AND action_type='compensate' AND target_execution_id=$4 ORDER BY id DESC LIMIT 1`, dbID, j.DraftID, j.DraftRevision, items[len(items)-1].ExecutionID).Scan(&review.ID, &review.Status, &review.TargetExecutionID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return Job{}, nil, err
+		}
+		if err == nil {
+			j.CompensationReview = &review
+		}
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return Job{}, nil, err
 	}
@@ -306,8 +333,8 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	var dbID int64
 	err = tx.QueryRow(ctx, `SELECT d.id FROM database_connections d
  WHERE EXISTS(SELECT 1 FROM migration_jobs q WHERE q.database_id=d.id AND q.status IN ('queued','retry_wait') AND q.available_at<=now() AND q.attempt_count<q.max_attempts AND NOT EXISTS(SELECT 1 FROM migration_jobs w WHERE w.database_id=d.id AND w.status='retry_wait' AND w.id<>q.id))
- AND NOT EXISTS(SELECT 1 FROM migration_jobs a WHERE a.database_id=d.id AND a.status IN ('running','unknown','partial','recovering'))
- AND NOT EXISTS(SELECT 1 FROM migration_history h WHERE h.database_id=d.id AND h.status IN ('running','unknown','partial') AND NOT EXISTS(SELECT 1 FROM migration_job_attempts sealed WHERE sealed.execution_id=h.execution_id AND sealed.retry_scheduled))
+ AND NOT EXISTS(SELECT 1 FROM migration_jobs a WHERE a.database_id=d.id AND a.status IN ('running','unknown','partial','partially_reverted','recovering'))
+ AND NOT EXISTS(SELECT 1 FROM migration_history h WHERE h.database_id=d.id AND h.status IN ('running','unknown','partial','partially_reverted') AND NOT EXISTS(SELECT 1 FROM migration_job_attempts sealed WHERE sealed.execution_id=h.execution_id AND sealed.retry_scheduled))
  ORDER BY (SELECT min(q.id) FROM migration_jobs q WHERE q.database_id=d.id AND q.status='queued' AND q.available_at<=now()),d.id
  LIMIT 1 FOR UPDATE OF d SKIP LOCKED`).Scan(&dbID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -318,8 +345,8 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	}
 	// The dispatch query's snapshot may predate another claimant's commit.
 	var blocked bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs WHERE database_id=$1 AND status IN ('running','unknown','partial','recovering'))
- OR EXISTS(SELECT 1 FROM migration_history h WHERE database_id=$1 AND status IN ('running','unknown','partial') AND NOT EXISTS(SELECT 1 FROM migration_job_attempts sealed WHERE sealed.execution_id=h.execution_id AND sealed.retry_scheduled))`, dbID).Scan(&blocked)
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs WHERE database_id=$1 AND status IN ('running','unknown','partial','partially_reverted','recovering'))
+ OR EXISTS(SELECT 1 FROM migration_history h WHERE database_id=$1 AND status IN ('running','unknown','partial','partially_reverted') AND NOT EXISTS(SELECT 1 FROM migration_job_attempts sealed WHERE sealed.execution_id=h.execution_id AND sealed.retry_scheduled))`, dbID).Scan(&blocked)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +387,8 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	j, err = scanJob(tx.QueryRow(ctx, `UPDATE migration_jobs SET status='running',attempt_count=attempt_count+1,
  worker_id=$2,lease_token_hash=$3,lease_expires_at=clock_timestamp()+$4::bigint*interval '1 millisecond',
  started_at=COALESCE(started_at,clock_timestamp()),error_code=NULL,
- batch_root_execution_id=CASE WHEN execution_mode='batch' THEN COALESCE(batch_root_execution_id,$5) ELSE NULL END WHERE id=$1 RETURNING `+jobColumns,
+ batch_root_execution_id=CASE WHEN execution_mode='batch' THEN COALESCE(batch_root_execution_id,$5) ELSE NULL END,
+ compensation_root_execution_id=CASE WHEN action_type='compensate' THEN COALESCE(compensation_root_execution_id,$5) ELSE NULL END WHERE id=$1 RETURNING `+jobColumns,
 		j.ID, worker, leaseHash(c.LeaseToken), lease.Milliseconds(), c.ExecutionID))
 	if err != nil {
 		return nil, err
@@ -370,7 +398,7 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
  VALUES($1,$2,$3,$4,$5)`, j.ID, c.ExecutionID, j.AttemptCount, worker, sql); err != nil {
 		return nil, err
 	}
-	if err = tx.QueryRow(ctx, `SELECT COALESCE(batch_root_execution_id,'') FROM migration_jobs WHERE id=$1`, j.ID).Scan(&c.RootExecutionID); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(batch_root_execution_id,''),COALESCE(compensation_root_execution_id,'') FROM migration_jobs WHERE id=$1`, j.ID).Scan(&c.RootExecutionID, &c.CompensationRoot); err != nil {
 		return nil, err
 	}
 	var root any
@@ -511,7 +539,7 @@ func (s *Service) Finish(ctx context.Context, c *Claim, out Outcome) error {
 	if out.Status == Failed && c.Job.ExecutionMode == "batch" && batches > 0 {
 		jobState = Partial
 	}
-	if (out.Status == Failed || out.Status == Partial) && Transient(out.ErrorCode) && c.Job.AttemptCount < c.Job.MaxAttempts {
+	if (out.Status == Failed || out.Status == Partial || out.Status == PartiallyReverted) && Transient(out.ErrorCode) && c.Job.AttemptCount < c.Job.MaxAttempts {
 		jobState = Recovering
 	}
 	delay := int64(0)

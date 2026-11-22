@@ -16,6 +16,7 @@ type Recovery struct {
 	Version                                        int64  `json:"-"`
 	HistoryStatus                                  Status `json:"-"`
 	HistoryCode                                    string `json:"-"`
+	CompensationRoot                               string `json:"-"`
 }
 
 func (s *Service) RecoveryCandidate(ctx context.Context) (*Recovery, error) {
@@ -36,9 +37,9 @@ func (s *Service) RecoveryCandidate(ctx context.Context) (*Recovery, error) {
 	var version *int64
 	var state, code *string
 	var hash string
-	err = tx.QueryRow(ctx, `SELECT a.execution_id,j.sql_snapshot,j.trace_parent,COALESCE(j.batch_root_execution_id,''),j.snapshot_hash,h.version,h.status,h.error_code
+	err = tx.QueryRow(ctx, `SELECT a.execution_id,j.sql_snapshot,j.trace_parent,COALESCE(j.batch_root_execution_id,''),j.snapshot_hash,COALESCE(j.compensation_root_execution_id,''),h.version,h.status,h.error_code
  FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id AND a.attempt_no=j.attempt_count
- LEFT JOIN migration_history h ON h.execution_id=a.execution_id WHERE j.id=$1`, j.ID).Scan(&r.ExecutionID, &r.SQL, &r.TraceParent, &r.RootExecutionID, &hash, &version, &state, &code)
+ LEFT JOIN migration_history h ON h.execution_id=a.execution_id WHERE j.id=$1`, j.ID).Scan(&r.ExecutionID, &r.SQL, &r.TraceParent, &r.RootExecutionID, &hash, &r.CompensationRoot, &version, &state, &code)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +81,7 @@ func RetryCause(r *Recovery) string {
 	if r.HistoryStatus == Success {
 		return ""
 	}
-	if r.HistoryStatus == Failed || r.HistoryStatus == Partial {
+	if r.HistoryStatus == Failed || r.HistoryStatus == Partial || r.HistoryStatus == PartiallyReverted {
 		if Transient(r.HistoryCode) {
 			return r.HistoryCode
 		}
@@ -150,7 +151,7 @@ func (s *Service) ResolveRecovery(ctx context.Context, r *Recovery, out Outcome,
 	if state == Success && out.Status != Success {
 		return ErrConflict
 	}
-	if state == Failed || state == Partial {
+	if state == Failed || state == Partial || state == PartiallyReverted {
 		if out.Status == Success {
 			return ErrConflict
 		}

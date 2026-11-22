@@ -91,6 +91,23 @@ func reviewSQLSnapshotTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision
 	if !ValidActionType(action) {
 		return "", ErrInvalidInput
 	}
+	if action == "compensate" {
+		if targetID == nil || len(*targetID) != 32 {
+			return "", ErrInvalidInput
+		}
+		var down string
+		err := tx.QueryRow(ctx, `SELECT snap.sql_down FROM migration_jobs j
+ JOIN migration_job_attempts a ON a.job_id=j.id AND a.attempt_no=j.attempt_count
+ JOIN migration_revision_snapshots snap ON snap.draft_id=j.draft_id AND snap.revision=j.draft_revision
+ WHERE j.database_id=$1 AND j.draft_id=$2 AND j.draft_revision=$3 AND a.execution_id=$4
+ AND j.execution_mode='batch' AND NOT snap.irreversible AND snap.sql_down IS NOT NULL
+ AND j.status IN ('partial','success','partially_reverted')
+ AND ((j.action_type='compensate' AND j.status='partially_reverted') OR j.action_type<>'compensate') FOR UPDATE OF j`, dbID, draftID, revision, *targetID).Scan(&down)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrInvalidInput
+		}
+		return down, err
+	}
 	if action == "resume" {
 		if targetID == nil || len(*targetID) != 32 {
 			return "", ErrInvalidInput
@@ -153,8 +170,17 @@ func reviewSQLSnapshotTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision
 		}
 		return *immutableDown, nil
 	}
-	if previousAction != "rollback" {
+	if previousAction != "rollback" && previousAction != "compensate" {
 		return "", ErrInvalidInput
+	}
+	if previousAction == "compensate" {
+		var paired bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_rollback_pairs WHERE database_id=$1 AND rollback_execution_id=$2)`, dbID, *targetID).Scan(&paired); err != nil {
+			return "", err
+		}
+		if !paired {
+			return "", ErrInvalidInput
+		}
 	}
 	return immutableUp, nil
 }

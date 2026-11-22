@@ -41,7 +41,7 @@ func respondError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrConflict):
 		httpx.Error(w, 409, "execution_conflict", "Review snapshot changed or this revision has already been executed")
 	case errors.Is(err, ErrUnsupported):
-		httpx.Error(w, 409, "unsupported_job_action", "Approved up, batch resume and normal rollback/forward actions are supported; batch cancellation requires checkpoint compensation")
+		httpx.Error(w, 409, "unsupported_job_action", "Batch cancellation requires the immutable compensation Down definition matching the original Up configuration")
 	default:
 		httpx.Error(w, 503, "jobs_unavailable", "Cannot process job request; retry submission with the same review ID")
 	}

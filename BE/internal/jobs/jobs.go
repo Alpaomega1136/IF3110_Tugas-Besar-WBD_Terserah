@@ -25,15 +25,16 @@ var (
 type Status string
 
 const (
-	Queued     Status = "queued"
-	Running    Status = "running"
-	Success    Status = "success"
-	Failed     Status = "failed"
-	Unknown    Status = "unknown"
-	Partial    Status = "partial"
-	Recovering Status = "recovering"
-	RetryWait  Status = "retry_wait"
-	Resumed    Status = "resumed"
+	Queued            Status = "queued"
+	Running           Status = "running"
+	Success           Status = "success"
+	Failed            Status = "failed"
+	Unknown           Status = "unknown"
+	Partial           Status = "partial"
+	Recovering        Status = "recovering"
+	RetryWait         Status = "retry_wait"
+	Resumed           Status = "resumed"
+	PartiallyReverted Status = "partially_reverted"
 )
 
 type Job struct {
@@ -60,6 +61,8 @@ type Job struct {
 	ResumedByJobID        *int64           `json:"resumed_by_job_id,string,omitempty"`
 	ResumeReview          *ReviewReference `json:"resume_review,omitempty"`
 	AuthorizationReviewID *int64           `json:"authorization_review_id,string,omitempty"`
+	CanCompensate         bool             `json:"can_compensate,omitempty"`
+	CompensationReview    *ReviewReference `json:"compensation_review,omitempty"`
 }
 
 type ReviewReference struct {
@@ -80,14 +83,15 @@ type Attempt struct {
 
 // Claim is server-internal. SQL and fencing credentials never enter job API responses.
 type Claim struct {
-	Job             Job    `json:"-"`
-	ExecutionID     string `json:"-"`
-	WorkerID        string `json:"-"`
-	LeaseToken      string `json:"-"`
-	SQL             string `json:"-"`
-	TraceParent     string `json:"-"`
-	Version         int64  `json:"-"`
-	RootExecutionID string `json:"-"`
+	Job              Job    `json:"-"`
+	ExecutionID      string `json:"-"`
+	WorkerID         string `json:"-"`
+	LeaseToken       string `json:"-"`
+	SQL              string `json:"-"`
+	TraceParent      string `json:"-"`
+	Version          int64  `json:"-"`
+	RootExecutionID  string `json:"-"`
+	CompensationRoot string `json:"-"`
 }
 
 type Outcome struct {
@@ -117,7 +121,7 @@ func snapshotHash(j Job, sql string) string {
 		hash := sha256.Sum256(data)
 		return hex.EncodeToString(hash[:])
 	}
-	if j.ActionType == "resume" {
+	if j.ActionType == "resume" || j.ActionType == "compensate" {
 		data, _ := json.Marshal([]any{"terserah-resume-job-v1", j.DatabaseID, j.ReviewID, j.DraftID, j.DraftRevision, j.ActionType, j.ExecutionMode, j.RequestedBy, sql, j.ParentJobID, j.TargetExecutionID})
 		hash := sha256.Sum256(data)
 		return hex.EncodeToString(hash[:])
@@ -135,5 +139,5 @@ func validOutcome(out Outcome) bool {
 	if out.Status == Success {
 		return out.ErrorCode == ""
 	}
-	return (out.Status == Failed || out.Status == Unknown || out.Status == Partial) && codePattern.MatchString(out.ErrorCode)
+	return (out.Status == Failed || out.Status == Unknown || out.Status == Partial || out.Status == PartiallyReverted) && codePattern.MatchString(out.ErrorCode)
 }
