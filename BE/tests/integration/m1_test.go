@@ -54,7 +54,7 @@ type m1App struct {
 	workerOnce sync.Once
 }
 
-func newM1App(t *testing.T) *m1App {
+func newM1App(t *testing.T, tracers ...pgx.QueryTracer) *m1App {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
@@ -84,6 +84,9 @@ func newM1App(t *testing.T) *m1App {
 		t.Fatal("invalid test URL")
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+	if len(tracers) > 0 {
+		cfg.ConnConfig.Tracer = tracers[0]
+	}
 	db, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal("cannot open schema pool")

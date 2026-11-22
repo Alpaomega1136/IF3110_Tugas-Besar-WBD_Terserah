@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"terserah/backend/internal/approval"
 	"terserah/backend/internal/auth"
@@ -27,9 +28,9 @@ type queueFixture struct {
 	actor          auth.Principal
 }
 
-func newQueueFixture(t *testing.T) *queueFixture {
+func newQueueFixture(t *testing.T, tracers ...pgx.QueryTracer) *queueFixture {
 	t.Helper()
-	a := newM1App(t)
+	a := newM1App(t, tracers...)
 	admin := a.browser()
 	admin.login(t, "admin")
 	first := createTarget(t, admin, targetInput(t, "TEST_TARGET_DATABASE_URL", "queue-first"))
