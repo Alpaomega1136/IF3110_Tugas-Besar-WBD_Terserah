@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strconv"
@@ -337,7 +338,11 @@ func TestRecoveryAfterWaitingForCommit(t *testing.T) {
 			if err = barrier.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}
-			status(t, <-executeDone, 202)
+			executed := <-executeDone
+			// The waiting reconcile can finalize the job before executeAndWait polls it.
+			if executed.Code != http.StatusAccepted {
+				status(t, executed, http.StatusOK)
+			}
 			w = <-recoveryDone
 			status(t, w, 200)
 			var out struct {
@@ -345,6 +350,10 @@ func TestRecoveryAfterWaitingForCommit(t *testing.T) {
 			}
 			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || len(out.Items) != 1 || out.Items[0].Status != "success" || out.Items[0].ErrorCode != nil {
 				t.Fatalf("committed migration not recovered after lock wait: %s", w.Body.String())
+			}
+			var observed runner.Result
+			if err := json.Unmarshal(executed.Body.Bytes(), &observed); err != nil || observed.ExecutionID != out.Items[0].ExecutionID || observed.Version != out.Items[0].Version {
+				t.Fatalf("execution and reconcile returned different attempts: %s / %s", executed.Body.String(), w.Body.String())
 			}
 			var count int
 			if err := owner.QueryRow(ctx, "SELECT count(*) FROM _terserah.migration_receipts WHERE execution_id=$1", out.Items[0].ExecutionID).Scan(&count); err != nil || count != 1 {
