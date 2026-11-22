@@ -39,6 +39,9 @@ func (s *Service) RetryExecution(ctx context.Context, p auth.Principal, dbID int
 	if err != nil {
 		return Job{}, false, err
 	}
+	if err = attachAuthorization(ctx, tx, &j); err != nil {
+		return Job{}, false, err
+	}
 	if j.ActionType != action || j.ExecutionMode != "normal" || (target == nil) != (j.TargetExecutionID == nil) || (target != nil && *target != *j.TargetExecutionID) {
 		return Job{}, false, ErrConflict
 	}
@@ -54,7 +57,11 @@ func (s *Service) RetryExecution(ctx context.Context, p auth.Principal, dbID int
 	if state != Failed || j.Status != Failed || number != j.AttemptCount || j.AttemptCount >= j.MaxAttempts {
 		return Job{}, false, ErrConflict
 	}
-	if _, err = approval.EnsureApprovedReviewTx(ctx, tx, dbID, j.DraftID, j.DraftRevision, j.ActionType, j.ReviewID, j.TargetExecutionID); err != nil {
+	reviewID := j.ReviewID
+	if j.AuthorizationReviewID != nil {
+		reviewID = *j.AuthorizationReviewID
+	}
+	if _, err = approval.EnsureApprovedReviewTx(ctx, tx, dbID, j.DraftID, j.DraftRevision, j.ActionType, reviewID, j.TargetExecutionID); err != nil {
 		return Job{}, false, err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE migration_job_attempts SET retry_scheduled=true WHERE execution_id=$1`, execution); err != nil {
@@ -62,6 +69,9 @@ func (s *Service) RetryExecution(ctx context.Context, p auth.Principal, dbID int
 	}
 	j, err = scanJob(tx.QueryRow(ctx, `UPDATE migration_jobs SET status='retry_wait',finished_at=NULL,error_code=NULL,available_at=clock_timestamp() WHERE id=$1 RETURNING `+jobColumns, j.ID))
 	if err != nil {
+		return Job{}, false, err
+	}
+	if err = attachAuthorization(ctx, tx, &j); err != nil {
 		return Job{}, false, err
 	}
 	if err = tx.Commit(ctx); err != nil {

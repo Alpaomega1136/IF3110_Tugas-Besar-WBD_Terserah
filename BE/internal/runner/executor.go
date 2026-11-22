@@ -218,6 +218,9 @@ func sqlSpan(ctx context.Context, index int) (context.Context, trace.Span) {
 }
 
 func validateApprovedSnapshot(ctx context.Context, tx pgx.Tx, job jobs.Job, sqlSnapshot string) error {
+	if job.AuthorizationReviewID != nil {
+		job.ReviewID = *job.AuthorizationReviewID
+	}
 	var err error
 	var allowed bool
 	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users u JOIN user_groups ug ON ug.user_id=u.id

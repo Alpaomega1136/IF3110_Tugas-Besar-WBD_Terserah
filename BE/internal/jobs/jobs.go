@@ -37,28 +37,29 @@ const (
 )
 
 type Job struct {
-	ID                int64            `json:"id,string"`
-	DatabaseID        int64            `json:"database_id,string"`
-	ReviewID          int64            `json:"review_id,string"`
-	DraftID           int64            `json:"draft_id,string"`
-	DraftRevision     int64            `json:"draft_revision,string"`
-	ActionType        string           `json:"action_type"`
-	ExecutionMode     string           `json:"execution_mode"`
-	RequestedBy       int64            `json:"requested_by,string"`
-	Status            Status           `json:"status"`
-	AttemptCount      int              `json:"attempt_count"`
-	MaxAttempts       int              `json:"max_attempts"`
-	CreatedAt         time.Time        `json:"created_at"`
-	AvailableAt       time.Time        `json:"available_at"`
-	StartedAt         *time.Time       `json:"started_at"`
-	FinishedAt        *time.Time       `json:"finished_at"`
-	ErrorCode         *string          `json:"error_code"`
-	CommittedBatches  int64            `json:"committed_batches,string"`
-	CommittedRows     int64            `json:"committed_rows,string"`
-	ParentJobID       *int64           `json:"parent_job_id,string,omitempty"`
-	TargetExecutionID *string          `json:"target_execution_id,omitempty"`
-	ResumedByJobID    *int64           `json:"resumed_by_job_id,string,omitempty"`
-	ResumeReview      *ReviewReference `json:"resume_review,omitempty"`
+	ID                    int64            `json:"id,string"`
+	DatabaseID            int64            `json:"database_id,string"`
+	ReviewID              int64            `json:"review_id,string"`
+	DraftID               int64            `json:"draft_id,string"`
+	DraftRevision         int64            `json:"draft_revision,string"`
+	ActionType            string           `json:"action_type"`
+	ExecutionMode         string           `json:"execution_mode"`
+	RequestedBy           int64            `json:"requested_by,string"`
+	Status                Status           `json:"status"`
+	AttemptCount          int              `json:"attempt_count"`
+	MaxAttempts           int              `json:"max_attempts"`
+	CreatedAt             time.Time        `json:"created_at"`
+	AvailableAt           time.Time        `json:"available_at"`
+	StartedAt             *time.Time       `json:"started_at"`
+	FinishedAt            *time.Time       `json:"finished_at"`
+	ErrorCode             *string          `json:"error_code"`
+	CommittedBatches      int64            `json:"committed_batches,string"`
+	CommittedRows         int64            `json:"committed_rows,string"`
+	ParentJobID           *int64           `json:"parent_job_id,string,omitempty"`
+	TargetExecutionID     *string          `json:"target_execution_id,omitempty"`
+	ResumedByJobID        *int64           `json:"resumed_by_job_id,string,omitempty"`
+	ResumeReview          *ReviewReference `json:"resume_review,omitempty"`
+	AuthorizationReviewID *int64           `json:"authorization_review_id,string,omitempty"`
 }
 
 type ReviewReference struct {

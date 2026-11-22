@@ -45,6 +45,9 @@ func (s *Service) RecoveryCandidate(ctx context.Context) (*Recovery, error) {
 	if snapshotHash(j, r.SQL) != hash {
 		return nil, ErrConflict
 	}
+	if err = attachAuthorization(ctx, tx, &r.Job); err != nil {
+		return nil, err
+	}
 	if version != nil {
 		r.Version = *version
 	}

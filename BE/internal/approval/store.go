@@ -203,6 +203,17 @@ func (s *PostgresStore) SubmitReview(ctx context.Context, actorID, dbID int64, i
 	}
 
 	var duplicate bool
+	// A terminal job may obtain fresh approval without losing its previous decisions.
+	_, err = tx.Exec(ctx, `UPDATE migration_reviews r SET status='cancelled',decided_at=$6
+ WHERE r.database_id=$1 AND r.draft_id=$2 AND r.draft_revision=$3 AND r.action_type=$4
+ AND r.target_execution_id IS NOT DISTINCT FROM $5::text AND r.status='queued'
+ AND EXISTS(SELECT 1 FROM migration_jobs j WHERE (j.review_id=r.id OR EXISTS(
+ SELECT 1 FROM migration_retry_authorizations a WHERE a.job_id=j.id AND a.review_id=r.id))
+ AND j.status='failed' AND j.execution_mode='normal')`,
+		dbID, input.DraftID, input.Revision, input.ActionType, input.TargetExecutionID, now)
+	if err != nil {
+		return ReviewView{}, err
+	}
 	err = tx.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM migration_reviews

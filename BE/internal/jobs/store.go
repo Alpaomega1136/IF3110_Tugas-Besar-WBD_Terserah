@@ -86,8 +86,11 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 	if !allowed {
 		return Job{}, false, ErrForbidden
 	}
-	old, err := scanJob(tx.QueryRow(ctx, `SELECT `+jobColumns+` FROM migration_jobs WHERE database_id=$1 AND review_id=$2`, dbID, reviewID))
+	old, err := scanJob(tx.QueryRow(ctx, `SELECT `+jobColumns+` FROM migration_jobs WHERE database_id=$1 AND (review_id=$2 OR id=(SELECT job_id FROM migration_retry_authorizations WHERE review_id=$2))`, dbID, reviewID))
 	if err == nil {
+		if err = attachAuthorization(ctx, tx, &old); err != nil {
+			return Job{}, false, err
+		}
 		return old, true, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -151,6 +154,19 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 	var executed bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3)`, dbID, draftID, revision).Scan(&executed); err != nil {
 		return Job{}, false, err
+	}
+	if config == nil {
+		retry, found, err := enqueueReauthorizedRetryTx(ctx, tx, p.ID, dbID, reviewID, draftID, revision, action, targetExecution, sql)
+		if err != nil {
+			return Job{}, false, err
+		}
+		if found {
+			if err = tx.Commit(ctx); err != nil {
+				return Job{}, false, err
+			}
+			telemetry.Event(ctx, "job_reauthorized", "actor_id", p.ID, "database_id", dbID, "job_id", retry.ID, "review_id", reviewID, "status", retry.Status)
+			return retry, false, nil
+		}
 	}
 	if executed && action == "up" {
 		return Job{}, false, ErrConflict
@@ -256,6 +272,9 @@ func (s *Service) Get(ctx context.Context, p auth.Principal, dbID, jobID int64) 
 		return Job{}, nil, err
 	}
 	rows.Close()
+	if err = attachAuthorization(ctx, tx, &j); err != nil {
+		return Job{}, nil, err
+	}
 	if j.Status == Partial && j.ExecutionMode == "batch" && len(items) > 0 {
 		var review ReviewReference
 		err = tx.QueryRow(ctx, `SELECT id,status,target_execution_id FROM migration_reviews
@@ -373,6 +392,10 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 			return nil, err
 		}
 	}
+	if err = attachAuthorization(ctx, tx, &j); err != nil {
+		return nil, err
+	}
+	c.Job = j
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
