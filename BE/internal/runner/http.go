@@ -19,6 +19,7 @@ import (
 func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("GET /api/v1/databases/{id}/migrations", sessions.Require(s.history))
 	mux.HandleFunc("GET /api/v1/databases/{id}/migrations/{version}", sessions.Require(s.history))
+	mux.HandleFunc("GET /api/v1/databases/{id}/migration-executions/{executionID}", sessions.Require(s.executionDetail))
 	mux.HandleFunc("GET /api/v1/databases/{id}/migration-state", sessions.Require(s.state))
 	mux.HandleFunc("POST /api/v1/databases/{id}/migrations/reconcile", sessions.Require(s.reconcile))
 
@@ -28,6 +29,7 @@ func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("GET "+base+"/{draftID}", sessions.Require(s.draft))
 	mux.HandleFunc("PATCH "+base+"/{draftID}", sessions.Require(s.draft))
 	mux.HandleFunc("POST "+base+"/{draftID}/execute", sessions.Require(s.execute))
+	mux.HandleFunc("POST "+base+"/{draftID}/retry", sessions.Require(s.retry))
 	mux.HandleFunc("POST "+base+"/{draftID}/explain", sessions.Require(s.explain))
 }
 
@@ -64,6 +66,8 @@ func fail(w http.ResponseWriter, err error) {
 		errors.Is(err, errMigrationUnresolved), errors.Is(err, errMigrationMustForward),
 		errors.Is(err, errMigrationStateInvalid):
 		httpx.Error(w, http.StatusConflict, "migration_state_conflict", err.Error())
+	case errors.Is(err, errRetryInvalid):
+		httpx.Error(w, http.StatusConflict, "retry_invalid", err.Error())
 	case errors.Is(err, errConflict):
 		httpx.Error(w, http.StatusConflict, "execution_conflict", "Reload draft or resolve the pending execution before retrying")
 	case errors.Is(err, approval.ErrNotApproved), errors.Is(err, approval.ErrLeaderMissing):
@@ -183,6 +187,58 @@ func (s *Service) execute(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, code, result)
 }
 
+// retry mewajibkan referensi attempt gagal agar tidak terjadi retry implisit.
+func (s *Service) retry(w http.ResponseWriter, r *http.Request) {
+	p, dbID, err := s.authorize(r, true)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	draftID, err := strconv.ParseInt(r.PathValue("draftID"), 10, 64)
+	var in struct {
+		Revision          int64  `json:"revision,string"`
+		FailedExecutionID string `json:"failed_execution_id"`
+	}
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	if err != nil || draftID < 1 || in.Revision < 1 || in.FailedExecutionID == "" || len(in.FailedExecutionID) > 128 {
+		fail(w, connections.ErrInvalid)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Second)
+	defer cancel()
+	result, err := s.retryFailed(ctx, p, dbID, draftID, in.Revision, in.FailedExecutionID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	code := http.StatusOK
+	if result.Status == "running" || result.Status == "unknown" {
+		code = http.StatusAccepted
+	}
+	httpx.JSON(w, code, result)
+}
+
+func (s *Service) executionDetail(w http.ResponseWriter, r *http.Request) {
+	_, dbID, err := s.authorize(r, false)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	executionID := r.PathValue("executionID")
+	if executionID == "" || len(executionID) > 128 {
+		fail(w, connections.ErrInvalid)
+		return
+	}
+	item, err := s.getHistoryByExecution(r.Context(), dbID, executionID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, item)
+}
+
 func (s *Service) explain(w http.ResponseWriter, r *http.Request) {
 	p, dbID, err := s.authorize(r, true)
 	if err != nil {
@@ -214,7 +270,7 @@ func (s *Service) history(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.PathValue("version") != "" {
-		if r.URL.Query().Has("limit") || r.URL.Query().Has("before") {
+		if r.URL.Query().Has("limit") || r.URL.Query().Has("before") || r.URL.Query().Has("hide_rollback") {
 			fail(w, connections.ErrInvalid)
 			return
 		}
@@ -237,7 +293,15 @@ func (s *Service) history(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	items, more, next, err := s.listHistoryPage(r.Context(), dbID, before, limit)
+	hideRollback := false
+	if r.URL.Query().Has("hide_rollback") {
+		hideRollback, err = strconv.ParseBool(r.URL.Query().Get("hide_rollback"))
+		if err != nil {
+			fail(w, connections.ErrInvalid)
+			return
+		}
+	}
+	items, more, next, err := s.listHistoryPage(r.Context(), dbID, before, limit, hideRollback)
 	if err != nil {
 		fail(w, err)
 		return

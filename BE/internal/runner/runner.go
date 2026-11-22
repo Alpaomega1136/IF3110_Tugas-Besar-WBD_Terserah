@@ -59,6 +59,7 @@ type Result struct {
 }
 
 var errConflict = errors.New("draft revision changed or an unresolved execution exists")
+var errRetryInvalid = errors.New("retry hanya diizinkan untuk execution Up yang telah gagal")
 
 func rollback(tx pgx.Tx) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -72,6 +73,18 @@ func rollback(tx pgx.Tx) {
 //  3. Execute migration SQL statements + insert HMAC receipt in one Target DB transaction.
 //  4. Commit Target DB and update `migration_history` status in Metadata DB.
 func (s *Service) run(ctx context.Context, p auth.Principal, dbID, draftID, revision int64) (Result, error) {
+	return s.runAttempt(ctx, p, dbID, draftID, revision, "")
+}
+
+// retryFailed hanya melakukan ulang SQL Up untuk attempt gagal yang telah dipilih.
+func (s *Service) retryFailed(ctx context.Context, p auth.Principal, dbID, draftID, revision int64, retryOf string) (Result, error) {
+	if retryOf == "" || len(retryOf) > 128 {
+		return Result{}, errRetryInvalid
+	}
+	return s.runAttempt(ctx, p, dbID, draftID, revision, retryOf)
+}
+
+func (s *Service) runAttempt(ctx context.Context, p auth.Principal, dbID, draftID, revision int64, retryOf string) (Result, error) {
 	var result Result
 
 	pool, err := s.targets.OpenTarget(ctx, p, dbID, true)
@@ -86,7 +99,7 @@ func (s *Service) run(ctx context.Context, p auth.Principal, dbID, draftID, revi
 	}
 	defer rollback(targetTx)
 
-	sqlText, parts, replayed, err := s.recordRunningAttempt(ctx, targetTx, p.ID, dbID, draftID, revision, &result)
+	sqlText, parts, replayed, err := s.recordRunningAttempt(ctx, targetTx, p.ID, dbID, draftID, revision, retryOf, &result)
 	if err != nil || replayed {
 		return result, err
 	}
@@ -132,7 +145,7 @@ func (s *Service) lockAndValidateTarget(ctx context.Context, pool *pgxpool.Pool,
 	return tx, userPath, nil
 }
 
-func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, userID, dbID, draftID, revision int64, result *Result) (string, []string, bool, error) {
+func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, userID, dbID, draftID, revision int64, retryOf string, result *Result) (string, []string, bool, error) {
 	meta, err := s.db.Begin(ctx)
 	if err != nil {
 		return "", nil, false, err
@@ -164,19 +177,54 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 		return "", nil, false, errConflict
 	}
 
-	// Replay eksekusi Up mengembalikan attempt awal tanpa mengeksekusi SQL ulang.
-	err = meta.QueryRow(ctx, `
-		SELECT execution_id, version, status, error_code
-		FROM migration_history
-		WHERE database_id = $1 AND draft_id = $2 AND draft_revision = $3
-		ORDER BY version ASC
-		LIMIT 1
-	`, dbID, draftID, revision).Scan(&result.ExecutionID, &result.Version, &result.Status, &result.ErrorCode)
-	if err == nil {
-		return "", nil, true, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return "", nil, false, err
+	// Endpoint execute lama tetap idempotent. Retry harus eksplisit agar request
+	// duplikat tidak menjalankan SQL dua kali secara tidak sengaja.
+	if retryOf == "" {
+		err = meta.QueryRow(ctx, `
+			SELECT execution_id, version, status, error_code
+			FROM migration_history
+			WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3 AND action_type='up'
+			ORDER BY version DESC LIMIT 1
+		`, dbID, draftID, revision).Scan(&result.ExecutionID, &result.Version, &result.Status, &result.ErrorCode)
+		if err == nil {
+			return "", nil, true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, false, err
+		}
+	} else {
+		// Retry kedua atas parent yang sama mengembalikan child sebelumnya.
+		err = meta.QueryRow(ctx, `SELECT execution_id,version,status,error_code FROM migration_history
+			WHERE database_id=$1 AND retry_of_execution_id=$2`, dbID, retryOf).
+			Scan(&result.ExecutionID, &result.Version, &result.Status, &result.ErrorCode)
+		if err == nil {
+			return "", nil, true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, false, err
+		}
+		var parentStatus, parentAction, parentSQL string
+		err = meta.QueryRow(ctx, `SELECT status, action_type, sql FROM migration_history
+			WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3 AND execution_id=$4
+			FOR UPDATE`, dbID, draftID, revision, retryOf).Scan(&parentStatus, &parentAction, &parentSQL)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, false, errRetryInvalid
+		}
+		if err != nil {
+			return "", nil, false, err
+		}
+		if parentStatus != "failed" || parentAction != "up" || parentSQL != sqlText {
+			return "", nil, false, errRetryInvalid
+		}
+		// Receipt yang sudah committed mengalahkan metadata status=failed.
+		var committed bool
+		if err = targetTx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM _terserah.migration_receipts
+			WHERE execution_id=$1)`, retryOf).Scan(&committed); err != nil {
+			return "", nil, false, err
+		}
+		if committed {
+			return "", nil, false, errMigrationUnresolved
+		}
 	}
 
 	var hasPending, hasOtherRevision bool
@@ -237,8 +285,13 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 	result.ExecutionID = hex.EncodeToString(token[:])
 	result.Status = "running"
 
-	result.Version, err = catatExecutionPertamaTx(ctx, meta, dbID, draftID, revision,
-		userID, result.ExecutionID, sqlText, sqlDown, irreversible, irreversibleReason)
+	if retryOf == "" {
+		result.Version, err = catatExecutionPertamaTx(ctx, meta, dbID, draftID, revision,
+			userID, result.ExecutionID, sqlText, sqlDown, irreversible, irreversibleReason)
+	} else {
+		result.Version, err = catatExecutionUlangTx(ctx, meta, dbID, draftID, revision,
+			userID, result.ExecutionID, retryOf, sqlText)
+	}
 	if err != nil {
 		return "", nil, false, err
 	}
