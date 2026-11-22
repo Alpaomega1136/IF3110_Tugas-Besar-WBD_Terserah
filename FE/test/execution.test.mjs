@@ -9,7 +9,8 @@ const draftID = "9007199254740995";
 const base = `/api/v1/databases/${databaseID}/drafts`;
 const draft = {
     id: draftID, database_id: databaseID, revision: "7", title: "Create demo",
-    sql: 'CREATE TABLE example(id int);', created_by_username: "editor",
+    sql: 'CREATE TABLE example(id int);', sql_down: 'DROP TABLE example;', irreversible: false,
+    irreversible_reason: null, immutable: false, created_by_username: "editor",
     created_at: "2026-10-24T15:00:00Z", updated_at: "2026-10-24T15:00:00Z"
 };
 let run = 0;
@@ -27,9 +28,11 @@ async function setup({ access = "edit", selected = true, confirm = true, backend
         "draft-page", "draft-page-status", "draft-page-error", "draft-workspace", "draft-database-name",
         "draft-target-name", "draft-access", "draft-list-status", "draft-list-error", "draft-list-empty",
         "draft-list-table", "draft-list-body", "draft-new", "draft-pagination", "draft-prev", "draft-next", "draft-page-number", "draft-form", "draft-editor-heading",
-        "draft-current-id", "draft-title", "draft-sql", "draft-title-error", "draft-sql-error",
+        "draft-current-id", "draft-title", "draft-sql", "draft-sql-down", "draft-irreversible", "draft-reason",
+        "draft-down-group", "draft-reason-group", "draft-immutable-note", "draft-title-error", "draft-sql-error",
+        "draft-sql-down-error", "draft-reason-error",
         "draft-save", "draft-save-message", "draft-detail", "draft-detail-author", "draft-detail-created",
-        "draft-detail-updated", "draft-detail-sql", "draft-execution", "draft-execute", "draft-reload",
+        "draft-detail-updated", "draft-detail-sql", "draft-detail-down", "draft-detail-down-section", "draft-detail-irreversible", "draft-execution", "draft-execute", "draft-reload",
         "draft-explain", "draft-explain-message", "draft-explain-result",
         "draft-execution-revision", "draft-execution-state", "draft-execution-message",
         "draft-execution-result", "draft-result-status", "draft-result-version", "draft-result-id", "draft-result-error"
@@ -38,12 +41,15 @@ async function setup({ access = "edit", selected = true, confirm = true, backend
     const $ = (id) => elements[id];
     $("draft-page").dataset.databaseId = databaseID;
     for (const id of ["draft-page-error", "draft-workspace", "draft-list-error", "draft-list-empty", "draft-list-table",
-        "draft-title-error", "draft-sql-error", "draft-save-message", "draft-detail", "draft-execution",
+        "draft-title-error", "draft-sql-error", "draft-sql-down-error", "draft-reason-error", "draft-save-message", "draft-detail", "draft-execution",
         "draft-execution-message", "draft-execution-result"]) $(id).hidden = true;
     $("draft-execute").disabled = true;
     $("draft-title").value = "";
     $("draft-sql").value = "";
-    $("draft-form").reset = () => { $("draft-title").value = ""; $("draft-sql").value = ""; };
+    $("draft-sql-down").value = "";
+    $("draft-irreversible").checked = false;
+    $("draft-reason").value = "";
+    $("draft-form").reset = () => { $("draft-title").value = ""; $("draft-sql").value = ""; $("draft-sql-down").value = ""; $("draft-reason").value = ""; $("draft-irreversible").checked = false; };
     const redirects = [], confirms = [], calls = [];
     globalThis.window = {
         location: { replace: (path) => redirects.push(path) },
@@ -97,6 +103,7 @@ test("draft cannot execute before save; creates draft without implicit execute",
     assert.equal(executeCalls(ui).length, 0);
     ui.$("draft-title").value = "Create demo";
     ui.$("draft-sql").value = "CREATE TABLE example(id int);";
+    ui.$("draft-sql-down").value = "DROP TABLE example;";
     await ui.$("draft-form").fire("submit");
     assert.equal(ui.calls.filter((c) => c.method === "POST" && c.url === base).length, 1);
     assert.equal(executeCalls(ui).length, 0);
@@ -113,6 +120,7 @@ test("draft create and update enforce the 48 KiB SQL limit in UTF-8 bytes", asyn
                 "a".repeat((limit - prefix.length) % 3 + extra);
             ui.$("draft-title").value = "SQL limit";
             ui.$("draft-sql").value = sql;
+            if (!selected) ui.$("draft-sql-down").value = "SELECT 1;";
             await ui.$("draft-form").fire("submit");
             const saves = ui.calls.filter((call) => ["POST", "PATCH"].includes(call.method));
             assert.equal(saves.length, extra === 0 ? 1 : 0);
@@ -133,7 +141,9 @@ test("draft create and update enforce 64 KiB serialized JSON independently of SQ
     const title = "JSON limit";
     for (const selected of [false, true]) {
         const start = "SELECT '" + '"'.repeat(32000);
-        const payload = (sql) => selected ? { title, sql, revision: draft.revision } : { title, sql };
+        const payload = (sql) => ({ title, sql,
+            sql_down: selected ? draft.sql_down : "SELECT 1;", irreversible: false, irreversible_reason: null,
+            ...(selected ? { revision: draft.revision } : {}) });
         const padding = limit - encoder.encode(JSON.stringify(payload(start + "'"))).length;
         for (const extra of [0, 1]) {
             const ui = await setup({ selected });
@@ -142,6 +152,7 @@ test("draft create and update enforce 64 KiB serialized JSON independently of SQ
             assert.equal(encoder.encode(JSON.stringify(payload(sql))).length, limit + extra);
             ui.$("draft-title").value = title;
             ui.$("draft-sql").value = sql;
+            if (!selected) ui.$("draft-sql-down").value = "SELECT 1;";
             await ui.$("draft-form").fire("submit");
             const saves = ui.calls.filter((call) => ["POST", "PATCH"].includes(call.method));
             assert.equal(saves.length, extra === 0 ? 1 : 0);
@@ -297,4 +308,61 @@ test("specific error guidance does not promise success on 409/503", () => {
     assert.match(executeErrorMessage({ status: 409, code: "target_history_unprotected" }), /khusus database ini/);
     assert.match(executeErrorMessage({ status: 503, code: "migration_unavailable" }), /belum pasti/);
     assert.match(executeErrorMessage({ status: 403, code: "csrf_rejected" }), /CSRF/);
+});
+
+
+test("form baru menyimpan reversible dengan SQL Down", async () => {
+    const ui = await setup({ selected: false });
+    ui.$("draft-title").value = "Tambah kolom";
+    ui.$("draft-sql").value = "ALTER TABLE demo ADD COLUMN age INT;";
+    ui.$("draft-sql-down").value = "ALTER TABLE demo DROP COLUMN age;";
+    await ui.$("draft-form").fire("submit");
+    const call = ui.calls.find((c) => c.url === base && c.method === "POST");
+    assert.ok(call);
+    assert.equal(call.body.sql_down, "ALTER TABLE demo DROP COLUMN age;");
+    assert.equal(call.body.irreversible, false);
+    assert.equal(call.body.irreversible_reason, null);
+});
+
+test("form irreversible wajib alasan dan tidak menyimpan SQL Down", async () => {
+    const ui = await setup({ selected: false });
+    ui.$("draft-title").value = "Hapus data";
+    ui.$("draft-sql").value = "DELETE FROM demo;";
+    ui.$("draft-irreversible").checked = true;
+    await ui.$("draft-irreversible").fire("change");
+    assert.equal(ui.$("draft-down-group").hidden, true);
+    assert.equal(ui.$("draft-reason-group").hidden, false);
+    await ui.$("draft-form").fire("submit");
+    assert.equal(ui.calls.some((c) => c.method === "POST" && c.url === base), false);
+    ui.$("draft-reason").value = "Tidak ada backup data";
+    await ui.$("draft-form").fire("submit");
+    const call = ui.calls.find((c) => c.method === "POST" && c.url === base);
+    assert.equal(call.body.sql_down, null);
+    assert.equal(call.body.irreversible, true);
+    assert.equal(call.body.irreversible_reason, "Tidak ada backup data");
+});
+
+test("draft immutable ditampilkan read-only dan tidak bisa disimpan ulang", async () => {
+    const ui = await setup({ freshDraft: { ...draft, immutable: true } });
+    assert.equal(ui.$("draft-title").disabled, true);
+    assert.equal(ui.$("draft-sql-down").disabled, true);
+    assert.equal(ui.$("draft-save").disabled, true);
+    assert.equal(ui.$("draft-execute").disabled, true);
+    assert.equal(ui.$("draft-immutable-note").hidden, false);
+    await ui.$("draft-form").fire("submit");
+    assert.equal(ui.calls.filter((c) => c.method === "PATCH").length, 0);
+});
+
+test("perubahan SQL Down pada server mencegah execute memakai draft basi", async () => {
+    let reads = 0;
+    const ui = await setup({ backend: ({ url, method }) => {
+        if (url === `${base}/${draftID}` && method === "GET") {
+            reads++;
+            return reply(reads === 1 ? draft : { ...draft, sql_down: "SELECT 99;" });
+        }
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(executeCalls(ui).length, 0);
+    assert.match(ui.$("draft-execution-message").textContent, /sudah berubah/);
 });

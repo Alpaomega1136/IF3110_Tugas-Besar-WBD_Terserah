@@ -87,7 +87,7 @@ export function initializeSchemaDiff(databaseId, useSQL) {
     const invalidate = () => { sql = ""; use.disabled = true; output.textContent = ""; };
     current.addEventListener("change", invalidate);
     desired.addEventListener("change", invalidate);
-    use.addEventListener("click", () => { if (sql) useSQL(sql); });
+    use.addEventListener("click", async () => { if (sql) await useSQL(sql); });
     compare.addEventListener("click", async () => {
         invalidate();
         if (!current.value || !desired.value || current.value === desired.value) {

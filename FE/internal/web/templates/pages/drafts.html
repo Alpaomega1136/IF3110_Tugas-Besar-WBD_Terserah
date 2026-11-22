@@ -115,7 +115,7 @@
 
                     <div class="form-group">
                         <label for="draft-sql">
-                            SQL Migration (wajib)
+                            SQL Up — Terapkan Perubahan (wajib)
                         </label>
 
                         <textarea id="draft-sql"
@@ -133,6 +133,31 @@
                         <p id="draft-sql-error"
                            class="error-message" hidden></p>
                     </div>
+
+                    <fieldset class="draft-migration-options">
+                        <legend>Jenis Migration</legend>
+                        <label class="draft-choice" for="draft-irreversible">
+                            <input id="draft-irreversible" type="checkbox" name="irreversible">
+                            Irreversible (tidak dapat di-rollback)
+                        </label>
+                        <p class="form-help">Untuk reversible, SQL Down wajib diisi. Untuk irreversible, berikan alasannya.</p>
+                    </fieldset>
+                    <div class="form-group" id="draft-down-group">
+                        <label for="draft-sql-down">SQL Down — Batalkan Perubahan (wajib untuk reversible)</label>
+                        <textarea id="draft-sql-down" name="sql_down" rows="9" spellcheck="false"
+                                  aria-describedby="draft-down-help draft-sql-down-error"></textarea>
+                        <p id="draft-down-help" class="form-help">SQL Down harus mengembalikan perubahan SQL Up. Maksimum 48 KiB.</p>
+                        <p id="draft-sql-down-error" class="error-message" hidden></p>
+                    </div>
+                    <div class="form-group" id="draft-reason-group" hidden>
+                        <label for="draft-reason">Alasan Irreversible (wajib)</label>
+                        <textarea id="draft-reason" name="irreversible_reason" rows="3" maxlength="500"
+                                  aria-describedby="draft-reason-error"></textarea>
+                        <p id="draft-reason-error" class="error-message" hidden></p>
+                    </div>
+                    <p id="draft-immutable-note" class="form-help" role="status" hidden>
+                        Definisi migration ini sudah pernah dieksekusi dan tidak dapat diedit. Buat migration baru untuk perbaikan.
+                    </p>
 
                     <button id="draft-save" type="submit">
                         Buat Draft
@@ -192,9 +217,14 @@
                     <div><dt>Diperbarui</dt><dd id="draft-detail-updated"></dd></div>
                 </dl>
 
-                <h3>SQL Tersimpan</h3>
+                <h3>SQL Up Tersimpan</h3>
                 <pre id="draft-detail-sql"
                      class="draft-sql-preview"></pre>
+                <div id="draft-detail-down-section">
+                    <h3>SQL Down Tersimpan</h3>
+                    <pre id="draft-detail-down" class="draft-sql-preview"></pre>
+                </div>
+                <p id="draft-detail-irreversible" class="form-help" hidden></p>
             </section>
 
             <section id="draft-execution" class="dashboard-panel draft-execution"

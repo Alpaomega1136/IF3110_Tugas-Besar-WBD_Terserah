@@ -1,7 +1,9 @@
 import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
 import { positiveInt64, parseCursorPage, parseReconcileResult } from "./pagination.js";
-import { byId, addCell, formatDate } from "./ui.js";
+import { byId, addCell, formatDate, setBanner } from "./ui.js";
+import { parseExecutionResult, executionFeedback, executeErrorMessage } from "./execution.js";
+import { ACTION_LABELS, migrationAction, operationRequest } from "./migration-actions.js";
 
 const page = byId("history-page");
 const databaseId = page.dataset.databaseId;
@@ -26,6 +28,8 @@ const prevButton = byId("history-prev");
 const nextButton = byId("history-next");
 const pageNumber = byId("history-page-number");
 const pendingNotice = byId("history-pending-notice");
+const hideRollback = byId("history-hide-rollback");
+const actionMessage = byId("history-action-message");
 
 const reconcilePanel = byId("history-reconcile-panel");
 const reconcileButton = byId("history-reconcile");
@@ -42,13 +46,23 @@ const detailError = byId("history-detail-error");
 const detailContent = byId("history-detail-content");
 const detailSQLSection = byId("history-detail-sql-section");
 const detailSQL = byId("history-detail-sql");
+const actionPanel = byId("history-action-panel");
+const actionHint = byId("history-action-hint");
+const actionReview = byId("history-action-review");
+const actionRun = byId("history-action-run");
+const actionStatus = byId("history-action-status");
+const actionReviewLink = byId("history-action-review-link");
+const actionSQLSection = byId("history-action-sql-section");
+const actionSQLHeading = byId("history-action-sql-heading");
+const actionSQL = byId("history-action-sql");
 
 const pageLimit = 50;
 const STATUS_LABELS = {
     running: "Berjalan",
     success: "Berhasil",
     failed: "Gagal",
-    unknown: "Tidak pasti"
+    unknown: "Tidak pasti",
+    partial: "Parsial", partially_reverted: "Sebagian dibatalkan"
 };
 
 let busy = false;
@@ -57,6 +71,8 @@ let cursors = [null];
 let currentPage = 0;
 let nextCursor = null;
 let hasMore = false;
+let selectedHistory = null;
+let selectedAction = null;
 
 function showMessage(element, message) {
     element.textContent = message;
@@ -91,6 +107,9 @@ function setBusy(value) {
     busy = value;
     refreshButton.disabled = value;
     reconcileButton.disabled = value || !canEdit;
+    hideRollback.disabled = value;
+    actionReview.disabled = value || !selectedAction || selectedAction.type.startsWith("retry_");
+    actionRun.disabled = value || !selectedAction;
     updatePagination();
     for (const button of listBody.querySelectorAll("button")) {
         button.disabled = value || button.dataset.invalidVersion === "true";
@@ -102,6 +121,13 @@ function clearDetail() {
     detailContent.hidden = true;
     detailSQLSection.hidden = true;
     detailSQL.textContent = "";
+    actionPanel.hidden = true;
+    selectedHistory = null;
+    selectedAction = null;
+    actionReviewLink.hidden = true;
+    actionSQLSection.hidden = true;
+    actionSQL.textContent = "";
+    showMessage(actionStatus, "");
     showMessage(detailStatus, "");
     showMessage(detailError, "");
 }
@@ -114,6 +140,7 @@ function clearPrivateData() {
     pendingNotice.hidden = true;
     reconcilePanel.hidden = true;
     reconcileResult.hidden = true;
+    showMessage(actionMessage, "");
     clearDetail();
     canEdit = false;
 }
@@ -166,6 +193,7 @@ function renderHistory(entries) {
         const statusCell = document.createElement("td");
         statusCell.appendChild(makeStatus(entry.status));
         row.appendChild(statusCell);
+        addCell(row, ACTION_LABELS[entry.action_type] ?? entry.action_type ?? "-");
 
         addCell(row, `${entry.draft_id ?? "-"} / ${entry.draft_revision ?? "-"}`);
         addCell(row, entry.execution_id ?? "-");
@@ -216,6 +244,9 @@ function showHistory(entry, version) {
     const fields = {
         "history-detail-version": version,
         "history-detail-execution-id": entry.execution_id ?? "-",
+        "history-detail-action-type": ACTION_LABELS[entry.action_type] ?? entry.action_type ?? "-",
+        "history-detail-target-id": entry.target_execution_id ?? "-",
+        "history-detail-retry-id": entry.retry_of_execution_id ?? "-",
         "history-detail-draft-revision": entry.draft_revision ?? "-",
         "history-detail-draft-id": entry.draft_id ?? "-",
         "history-detail-result": statusLabel(entry.status),
@@ -228,6 +259,7 @@ function showHistory(entry, version) {
         byId(id).textContent = String(value);
     }
     detailSQL.textContent = entry.sql;
+    selectedHistory = entry;
     detailContent.hidden = false;
     detailSQLSection.hidden = false;
 }
@@ -245,6 +277,7 @@ async function openHistory(version) {
     try {
         const result = await authenticatedRequest(`${apiPath}/${encodeURIComponent(version)}`);
         showHistory(result, version);
+        if (canEdit) await refreshAction();
     } catch (error) {
         handleRequestError(error, detailError);
     } finally {
@@ -269,6 +302,7 @@ async function loadHistory(index = currentPage, reset = false) {
         const cursor = cursors[index];
         const query = new URLSearchParams({ limit: String(pageLimit) });
         if (cursor !== null) query.set("before", cursor);
+        if (hideRollback.checked) query.set("hide_rollback", "true");
 
         const result = parseCursorPage(
             await authenticatedRequest(`${apiPath}?${query}`),
@@ -353,6 +387,108 @@ async function reconcileHistory() {
     if (completed) await loadHistory(0, true);
 }
 
+// Kelayakan aksi selalu dibaca dari backend. UI hanya memberikan petunjuk;
+// backend tetap memeriksa izin, approval, dan posisi di bawah lock.
+async function refreshAction() {
+    selectedAction = null;
+    actionPanel.hidden = true;
+    if (!canEdit || !selectedHistory) return;
+    try {
+        const base = `/api/v1/databases/${encodeURIComponent(databaseId)}`;
+        const state = await authenticatedRequest(`${base}/migration-state`);
+        selectedAction = migrationAction(state, selectedHistory);
+        if (!selectedAction) return;
+        // Preview SQL berasal dari definisi immutable, bukan SQL pada attempt sebelumnya.
+        const draft = await authenticatedRequest(`${base}/drafts/${encodeURIComponent(selectedHistory.draft_id)}`);
+        if (!draft?.immutable || draft.revision !== selectedHistory.draft_revision ||
+            typeof draft.sql !== "string" || (selectedAction.type.includes("rollback") && typeof draft.sql_down !== "string")) {
+            throw new Error("Definisi immutable tidak tersedia atau revisinya berubah. Periksa backend sebelum menjalankan aksi.");
+        }
+        const isRollback = selectedAction.type.includes("rollback");
+        actionSQLHeading.textContent = isRollback ? "SQL Down Immutable (Rollback)" : "SQL Up Immutable (Forward/Retry)";
+        actionSQL.textContent = isRollback ? draft.sql_down : draft.sql;
+        actionSQLSection.hidden = false;
+        actionPanel.hidden = false;
+        actionReview.hidden = selectedAction.type.startsWith("retry_");
+        actionReview.disabled = busy || actionReview.hidden;
+        actionRun.disabled = busy;
+        actionRun.textContent = selectedAction.label;
+        actionHint.textContent = selectedAction.type.startsWith("retry_")
+            ? "Attempt gagal dapat dicoba kembali secara eksplisit. Semua percobaan tetap tercatat."
+            : `${selectedAction.label} hanya tersedia pada posisi migration yang sah dan memerlukan approval seluruh leader.`;
+    } catch (error) {
+        // Detail tetap dapat dibaca walaupun preview atau layanan posisi gagal.
+        selectedAction = null;
+        actionPanel.hidden = true;
+        showMessage(detailError, `Tidak dapat memeriksa aksi migration: ${error.message}`);
+    }
+}
+
+async function submitActionReview() {
+    if (busy || !canEdit || !selectedHistory || !selectedAction || selectedAction.type.startsWith("retry_")) return;
+    const detailEntry = selectedHistory, action = selectedAction;
+    if (!(await confirmAction({
+        title: `Ajukan Review ${action.label}?`,
+        message: `Ajukan ${action.label} untuk execution ${action.target}? Semua leader group yang memiliki akses harus menyetujui.`,
+        confirmLabel: "Ajukan Review"
+    })) || busy) return;
+    setBusy(true);
+    try {
+        const base = `/api/v1/databases/${encodeURIComponent(databaseId)}`;
+        const freshState = await authenticatedRequest(`${base}/migration-state`);
+        const freshAction = migrationAction(freshState, detailEntry);
+        if (!freshAction || freshAction.type !== action.type || freshAction.target !== action.target) throw new Error("Posisi migration sudah berubah. Muat ulang History.");
+        const result = await authenticatedRequest(`${base}/reviews`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ draft_id: detailEntry.draft_id, revision: detailEntry.draft_revision,
+                action_type: action.type, target_execution_id: action.target })
+        });
+        if (!positiveInt64(result?.review?.id)) throw new Error("Respons pengajuan review tidak valid.");
+        showMessage(actionStatus, `Review #${result.review.id} dibuat. Tunggu persetujuan semua leader sebelum eksekusi.`);
+        actionReviewLink.href = `/databases/${encodeURIComponent(databaseId)}/reviews/${encodeURIComponent(result.review.id)}`;
+        actionReviewLink.hidden = false;
+    } catch (error) {
+        handleRequestError(error, actionStatus);
+    } finally { setBusy(false); }
+}
+
+async function runMigrationAction() {
+    if (busy || !canEdit || !selectedHistory || !selectedAction) return;
+    const detailEntry = selectedHistory, action = selectedAction;
+    if (!(await confirmAction({
+        title: `${action.label} Migration?`,
+        message: `${action.label} pada database ${databaseName.textContent} (${targetName.textContent})?\n` +
+            `Execution target: ${action.target}\nAksi akan mengubah database. Pastikan SQL immutable dan approval sudah benar.`,
+        confirmLabel: action.label, tone: "warning"
+    })) || busy) return;
+    setBusy(true);
+    showMessage(actionStatus, "Memvalidasi posisi migration dan mengirim eksekusi...");
+    let sent = false;
+    try {
+        const base = `/api/v1/databases/${encodeURIComponent(databaseId)}`;
+        const state = await authenticatedRequest(`${base}/migration-state`);
+        const current = migrationAction(state, detailEntry);
+        if (!current || current.type !== action.type || current.target !== action.target) throw new Error("Posisi migration berubah. Muat ulang History sebelum eksekusi.");
+        const request = operationRequest(base, detailEntry, action);
+        sent = true;
+        const result = parseExecutionResult(await authenticatedRequest(request.url, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.body)
+        }));
+        const feedback = executionFeedback(result.status);
+        setBanner(actionMessage, `${action.label} #${result.version}: ${feedback.message} Execution ID ${result.execution_id}.`, feedback.isError);
+        setBusy(false);
+        await loadHistory(0, true);
+    } catch (error) {
+        setBanner(actionMessage, sent ? executeErrorMessage(error) :
+            `Aksi tidak dikirim: ${error.message || "validasi gagal"}.`, true);
+        showMessage(actionStatus, sent ? "Hasil eksekusi belum pasti. Periksa History sebelum mengulangi." :
+            "Tidak ada permintaan eksekusi yang dikirim.");
+    } finally { setBusy(false); }
+}
+
+actionReview.addEventListener("click", submitActionReview);
+actionRun.addEventListener("click", runMigrationAction);
+hideRollback.addEventListener("change", () => loadHistory(0, true));
 refreshButton.addEventListener("click", () => loadHistory(0, true));
 prevButton.addEventListener("click", () => loadHistory(currentPage - 1));
 nextButton.addEventListener("click", () => {

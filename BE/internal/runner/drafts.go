@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-const draftColumns = "d.id, d.database_id, d.title, d.sql, d.sql_down, d.irreversible, d.irreversible_reason, d.revision, d.created_by, u.username, d.created_at, d.updated_at"
+const draftColumns = "d.id, d.database_id, d.title, d.sql, d.sql_down, d.irreversible, d.irreversible_reason, d.revision, d.created_by, u.username, d.created_at, d.updated_at, EXISTS (SELECT 1 FROM migration_history h WHERE h.database_id=d.database_id AND h.draft_id=d.id)"
 
 var errDraftDefinition = errors.New("definisi migration tidak valid")
 var errDraftLocked = errors.New("definisi migration yang pernah dieksekusi tidak dapat diubah; buat migration baru")
@@ -66,6 +66,7 @@ func scanDraft(row pgx.Row) (Draft, error) {
 		&d.CreatedByUsername,
 		&d.CreatedAt,
 		&d.UpdatedAt,
+		&d.Immutable,
 	)
 	return d, err
 }

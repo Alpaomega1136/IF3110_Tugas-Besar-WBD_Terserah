@@ -18,11 +18,15 @@ const ids = [
     "history-page", "history-page-status", "history-page-error", "history-workspace", "history-database-name",
     "history-target-name", "history-access", "history-drafts-link", "history-refresh", "history-list-status",
     "history-list-error", "history-list-empty", "history-list-table", "history-list-body", "history-pagination",
-    "history-prev", "history-next", "history-page-number", "history-pending-notice", "history-reconcile-panel",
+    "history-prev", "history-next", "history-page-number", "history-pending-notice", "history-hide-rollback",
+    "history-action-message", "history-reconcile-panel",
     "history-reconcile", "history-reconcile-status", "history-reconcile-error", "history-reconcile-result",
     "history-reconcile-summary", "history-reconcile-table", "history-reconcile-body", "history-detail",
     "history-detail-status", "history-detail-error", "history-detail-content", "history-detail-sql-section",
-    "history-detail-sql", "history-detail-version", "history-detail-execution-id", "history-detail-draft-revision",
+    "history-detail-sql", "history-action-panel", "history-action-hint", "history-action-review", "history-action-run",
+    "history-action-status", "history-action-review-link", "history-action-sql-section", "history-action-sql-heading",
+    "history-action-sql", "history-detail-version", "history-detail-execution-id",
+    "history-detail-action-type", "history-detail-target-id", "history-detail-retry-id", "history-detail-draft-revision",
     "history-detail-draft-id", "history-detail-result", "history-detail-executor", "history-detail-started",
     "history-detail-finished", "history-detail-error-code"
 ];
@@ -35,21 +39,25 @@ async function setupHistory({ access = "edit", confirm = true, custom, firstPage
     const elements = Object.fromEntries(ids.map((id) => [id, new Element()]));
     const $ = (id) => elements[id];
     $("history-page").dataset.databaseId = db;
+    $("history-hide-rollback").checked = false;
     for (const id of ["history-workspace", "history-page-error", "history-list-error", "history-list-empty",
         "history-list-table", "history-pagination", "history-pending-notice", "history-reconcile-panel",
         "history-reconcile-error", "history-reconcile-result", "history-reconcile-table", "history-detail",
-        "history-detail-error", "history-detail-content", "history-detail-sql-section", "history-drafts-link"]) $(id).hidden = true;
+        "history-detail-error", "history-detail-content", "history-detail-sql-section", "history-drafts-link", "history-action-panel", "history-action-message"]) $(id).hidden = true;
     const redirects = [], confirms = [], calls = [];
     globalThis.document = { getElementById: (id) => $(id), createElement: (tag) => new Element(tag) };
     globalThis.window = { location: { replace: (path) => redirects.push(path) }, confirm: (text) => { confirms.push(text); return confirm; } };
     globalThis.fetch = async (url, opts = {}) => {
         const method = opts.method || "GET";
-        calls.push({ url, method, headers: new Headers(opts.headers), credentials: opts.credentials });
+        calls.push({ url, method, body: opts.body ? JSON.parse(opts.body) : null, headers: new Headers(opts.headers), credentials: opts.credentials });
         const override = custom?.({ url, method, calls });
         if (override !== undefined) return override;
         if (url === "/api/v1/auth/me") return json({ id: "12", username: "tester", is_platform_admin: false });
         if (url === "/api/v1/auth/csrf") return json({ csrf_token: "phase6-csrf" });
         if (url === "/api/v1/databases") return json({ databases: [{ id: db, name: "Demo", database_name: "target", access }] });
+        if (url === `/api/v1/databases/${db}/migration-state`) return json({ has_unresolved: false, next_rollback: null, next_forward: null });
+        if (url === `/api/v1/databases/${db}/drafts/${first[0].draft_id}`) return json({ id: first[0].draft_id,
+            revision: first[0].draft_revision, sql: "CREATE TABLE test(id INT)", sql_down: "DROP TABLE test", irreversible: false, immutable: true });
         if (url === `${api}?limit=50`) return json({ migrations: firstPage, has_more: more, next_before: more ? firstPage.at(-1).version : null });
         if (url === `${api}?limit=50&before=${encodeURIComponent(first.at(-1).version)}`) return json({ migrations: second, has_more: false, next_before: null });
         if (url === `${api}/${first[0].version}`) return json({ ...first[0], sql: '<img src=x onerror="alert(1)">;' });
@@ -95,7 +103,7 @@ test("history list uses cursor and returns to previous page; no numeric precisio
     assert.equal(ui.$("history-next").disabled, true);
     assert.equal(ui.$("history-prev").disabled, false);
     assert.equal(ui.$("history-list-body").children.length, 1);
-    assert.equal(ui.$("history-list-body").children[0].children[4].textContent, "22012");
+    assert.equal(ui.$("history-list-body").children[0].children[5].textContent, "22012");
     await ui.$("history-prev").fire("click");
     assert.equal(ui.$("history-page-number").textContent, "1");
     assert.equal(ui.calls.filter((c) => c.url === `${api}?limit=50`).length, 2);
@@ -174,8 +182,9 @@ const draftIds = [
     "draft-target-name", "draft-access", "draft-list-status", "draft-list-error", "draft-list-empty",
     "draft-list-table", "draft-list-body", "draft-new", "draft-pagination", "draft-prev", "draft-next",
     "draft-page-number", "draft-form", "draft-editor-heading", "draft-current-id", "draft-title",
-    "draft-sql", "draft-title-error", "draft-sql-error", "draft-save", "draft-save-message", "draft-detail",
-    "draft-detail-author", "draft-detail-created", "draft-detail-updated", "draft-detail-sql",
+    "draft-sql", "draft-sql-down", "draft-irreversible", "draft-reason", "draft-down-group", "draft-reason-group", "draft-immutable-note",
+    "draft-title-error", "draft-sql-error", "draft-sql-down-error", "draft-reason-error", "draft-save", "draft-save-message", "draft-detail",
+    "draft-detail-author", "draft-detail-created", "draft-detail-updated", "draft-detail-sql", "draft-detail-down", "draft-detail-down-section", "draft-detail-irreversible",
     "draft-execution", "draft-execute", "draft-reload", "draft-execution-revision", "draft-execution-state",
     "draft-explain", "draft-explain-message", "draft-explain-result",
     "draft-execution-message", "draft-execution-result", "draft-result-status", "draft-result-version",
@@ -185,7 +194,8 @@ let draftGeneration = 0;
 const draftsAPI = `/api/v1/databases/${db}/drafts`;
 const draftsPage1 = Array.from({ length: 50 }, (_, i) => ({
     id: String(v0 + BigInt(i)), database_id: db, title: `Draft ${i}`,
-    revision: "1", sql: "SELECT 1", created_by_username: "tester",
+    revision: "1", sql: "SELECT 1", sql_down: "SELECT 2", irreversible: false, irreversible_reason: null, immutable: false,
+    created_by_username: "tester",
     updated_at: "2026-10-24T15:00:00Z"
 }));
 async function setupDrafts({ custom } = {}) {
@@ -194,7 +204,7 @@ async function setupDrafts({ custom } = {}) {
     const $ = (id) => els[id];
     $("draft-page").dataset.databaseId = db;
     for (const id of ["draft-workspace", "draft-page-error", "draft-list-error", "draft-list-empty", "draft-list-table", "draft-pagination",
-        "draft-detail", "draft-execution", "draft-execution-result", "draft-save-message", "draft-title-error", "draft-sql-error"]) $(id).hidden = true;
+        "draft-detail", "draft-execution", "draft-execution-result", "draft-save-message", "draft-title-error", "draft-sql-error", "draft-sql-down-error", "draft-reason-error"]) $(id).hidden = true;
     $("draft-form").reset = () => { $("draft-title").value = ""; $("draft-sql").value = ""; };
     const calls = [];
     globalThis.window = { location: { replace() {} }, addEventListener() {}, confirm: () => true };
@@ -233,4 +243,81 @@ test("draft pagination errors are displayed without opening imaginary rows", asy
         ? json({ drafts: draftsPage1, has_more: true, next_after: 9007199254740993 }) : undefined });
     assert.match(ui.$("draft-list-error").textContent, /Cursor/);
     assert.equal(ui.$("draft-next").disabled, true);
+});
+
+
+test("Hide rollback dikirim sebagai filter backend dan mengulang pagination", async () => {
+    const ui = await setupHistory({ more: false, custom: ({ url }) =>
+        url === `${api}?limit=50&hide_rollback=true` ? json({ migrations: [], has_more: false, next_before: null }) : undefined });
+    ui.$("history-hide-rollback").checked = true;
+    await ui.$("history-hide-rollback").fire("change");
+    assert.equal(ui.calls.some((c) => c.url === `${api}?limit=50&hide_rollback=true`), true);
+    assert.equal(ui.$("history-list-empty").hidden, false);
+    assert.equal(ui.$("history-page-number").textContent, "1");
+});
+
+test("UI rollback meminta approval terlebih dahulu dan menjalankan hanya target eligible", async () => {
+    const up = { ...first[0], status: "success", action_type: "up", sql: "CREATE TABLE test(id INT)", finished_at: "2026-10-24T15:00:05Z" };
+    const state = { has_unresolved: false, next_rollback: { execution_id: up.execution_id, can_rollback: true }, next_forward: null };
+    const ui = await setupHistory({ firstPage: [up], more: false, custom: ({ url, method }) => {
+        if (url === `${api}/${up.version}`) return json(up);
+        if (url === `/api/v1/databases/${db}/migration-state`) return json(state);
+        if (url === `/api/v1/databases/${db}/reviews` && method === "POST") return json({ review: { id: "13" } }, 201);
+        if (url === `/api/v1/databases/${db}/migration-executions/${up.execution_id}/rollback` && method === "POST")
+            return json({ version: "9007199254741299", execution_id: "rolled-back", status: "success", error_code: null });
+        return undefined;
+    } });
+    await ui.$("history-list-body").children[0].children.at(-1).children[0].fire("click");
+    assert.equal(ui.$("history-action-panel").hidden, false);
+    assert.equal(ui.$("history-action-run").textContent, "Rollback");
+    assert.equal(ui.$("history-action-sql").textContent, "DROP TABLE test");
+    await ui.$("history-action-review").fire("click");
+    const review = ui.calls.find((c) => c.method === "POST" && c.url.endsWith("/reviews"));
+    assert.deepEqual(review.body, { draft_id: up.draft_id, revision: up.draft_revision, action_type: "rollback", target_execution_id: up.execution_id });
+    assert.equal(review.headers.get("X-CSRF-Token"), "phase6-csrf");
+    assert.equal(ui.$("history-action-review-link").hidden, false);
+    await ui.$("history-action-run").fire("click");
+    const executed = ui.calls.find((c) => c.method === "POST" && c.url.endsWith("/rollback"));
+    assert.ok(executed);
+    assert.equal(executed.credentials, "same-origin");
+    assert.match(ui.$("history-action-message").textContent, /di-commit/);
+});
+
+test("UI forward menggunakan execution rollback, bukan draft ID", async () => {
+    const rolled = { ...first[0], status: "success", action_type: "rollback" };
+    const state = { has_unresolved: false, next_rollback: null, next_forward: { rollback_execution_id: rolled.execution_id } };
+    const ui = await setupHistory({ firstPage: [rolled], more: false, custom: ({ url, method }) => {
+        if (url === `${api}/${rolled.version}`) return json({ ...rolled, sql: "DROP TABLE test" });
+        if (url === `/api/v1/databases/${db}/migration-state`) return json(state);
+        if (url === `/api/v1/databases/${db}/migration-executions/${rolled.execution_id}/forward` && method === "POST")
+            return json({ version: "99", execution_id: "forward-id", status: "success", error_code: null });
+        return undefined;
+    } });
+    await ui.$("history-list-body").children[0].children.at(-1).children[0].fire("click");
+    assert.equal(ui.$("history-action-run").textContent, "Forward");
+    await ui.$("history-action-run").fire("click");
+    assert.ok(ui.calls.some((c) => c.method === "POST" && c.url.endsWith(`/migration-executions/${rolled.execution_id}/forward`)));
+});
+
+test("pengguna View Only tidak bisa mengajukan review maupun eksekusi", async () => {
+    const ui = await setupHistory({ access: "view", more: false });
+    await ui.$("history-list-body").children[0].children.at(-1).children[0].fire("click");
+    assert.equal(ui.$("history-action-panel").hidden, true);
+    assert.equal(ui.calls.filter((c) => c.method === "POST").length, 0);
+});
+
+test("posisi migration berubah sebelum eksekusi: POST harus ditolak di frontend", async () => {
+    const up = { ...first[0], status: "success", action_type: "up" };
+    let requests = 0;
+    const ui = await setupHistory({ firstPage: [up], more: false, custom: ({ url }) => {
+        if (url === `${api}/${up.version}`) return json({ ...up, sql: "SELECT 1" });
+        if (url === `/api/v1/databases/${db}/migration-state`) {
+            requests++;
+            return json({ has_unresolved: requests > 1, next_rollback: { execution_id: up.execution_id, can_rollback: true } });
+        }
+        return undefined;
+    } });
+    await ui.$("history-list-body").children[0].children.at(-1).children[0].fire("click");
+    await ui.$("history-action-run").fire("click");
+    assert.equal(ui.calls.filter((c) => c.method === "POST").length, 0);
 });

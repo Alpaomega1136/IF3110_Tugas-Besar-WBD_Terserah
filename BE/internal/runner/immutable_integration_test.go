@@ -180,3 +180,28 @@ func TestImmutableSnapshotIrreversible(t *testing.T) {
 		t.Fatalf("snapshot irreversible tidak sesuai: down=%v irreversible=%v reason=%q", sqlDown, irreversible, reason)
 	}
 }
+
+func TestImmutableFlagPadaDraftAPI(t *testing.T) {
+	ctx := context.Background()
+	pool := draftTestDB(t)
+	actorID, dbID := draftTestFixture(t, pool)
+	svc := New(pool, nil, nil)
+	down := "SELECT 2"
+	d, err := svc.createDraft(ctx, dbID, actorID, draftInput{Title: "Preview UI", SQL: "SELECT 1", SQLDown: &down})
+	if err != nil || d.Immutable {
+		t.Fatalf("draft baru seharusnya belum immutable: %+v, %v", d, err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO migration_history
+		(database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id)
+		VALUES ($1,$2,$3,1,$4,$5,'failed','stage9immutable')`, dbID, d.ID, d.Revision, d.SQL, actorID); err != nil {
+		t.Fatal(err)
+	}
+	read, err := svc.getDraft(ctx, dbID, d.ID)
+	if err != nil || !read.Immutable {
+		t.Fatalf("draft yang pernah dieksekusi harus immutable: %+v, %v", read, err)
+	}
+	items, _, _, err := svc.listDraftsPage(ctx, dbID, 0, 10)
+	if err != nil || len(items) != 1 || !items[0].Immutable {
+		t.Fatalf("daftar draft tidak mengembalikan immutable: %+v, %v", items, err)
+	}
+}

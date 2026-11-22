@@ -35,6 +35,7 @@ type Draft struct {
 	SQLDown            *string   `json:"sql_down"`
 	Irreversible       bool      `json:"irreversible"`
 	IrreversibleReason *string   `json:"irreversible_reason"`
+	Immutable          bool      `json:"immutable"`
 	Revision           int64     `json:"revision,string"`
 	CreatedBy          int64     `json:"created_by,string"`
 	CreatedByUsername  string    `json:"created_by_username"`
