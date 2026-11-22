@@ -40,7 +40,7 @@ func batchTarget(t *testing.T) (*pgxpool.Pool, string) {
 func enqueueBatch(t *testing.T, f *queueFixture, c batch.Config) jobs.Job {
 	t.Helper()
 	base := fmt.Sprintf("/api/v1/databases/%d/drafts", f.first)
-	w := f.editor.request("POST", base, map[string]any{"title": "batch update", "batch": c})
+	w := f.editor.request("POST", base, map[string]any{"title": "batch update", "batch": c, "irreversible": true, "irreversible_reason": "Test batch has no reverse operation"})
 	status(t, w, 201)
 	var draft runner.Draft
 	if err := json.Unmarshal(w.Body.Bytes(), &draft); err != nil {

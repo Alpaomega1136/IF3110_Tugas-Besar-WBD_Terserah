@@ -62,8 +62,8 @@ func TestResumeReviewBindsHistoricalSQLAndExecution(t *testing.T) {
 	missing["target_execution_id"] = strings.Repeat("0", 32)
 	status(t, f.editor.request("POST", path, missing), 404)
 	status(t, f.editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/reviews", f.second), body), 404)
-	// Historical resume must use its frozen payload even if the draft editor has moved on.
-	status(t, f.editor.request("PATCH", fmt.Sprintf("/api/v1/databases/%d/drafts/%d", f.first, j.DraftID), map[string]string{"revision": "1", "title": "new revision", "sql": "SELECT 99"}), 200)
+	// Executed definitions are locked; resume still binds the exact historical payload.
+	status(t, f.editor.request("PATCH", fmt.Sprintf("/api/v1/databases/%d/drafts/%d", f.first, j.DraftID), map[string]string{"revision": "1", "title": "new revision", "sql": "SELECT 99", "sql_down": "SELECT 1"}), 409)
 	r := submitResumeReview(t, f, f.editor, j, a.ExecutionID)
 	if r.TargetExecutionID == nil || *r.TargetExecutionID != a.ExecutionID || r.DraftRevision != 1 || r.SQLSnapshot == "SELECT 99" || !strings.HasPrefix(r.SQLSnapshot, "-- terserah-batch-v1 ") {
 		t.Fatal("resume review changed the executed snapshot", r)

@@ -48,7 +48,7 @@ func TestRunnerAPI(t *testing.T) {
 	if _, err = db.Exec(ctx, "CREATE TABLE "+q+".plan_items(id integer); INSERT INTO "+q+".plan_items VALUES(1)"); err != nil {
 		t.Fatal(err)
 	}
-	wPlan := editor.request("POST", base, map[string]string{"title": "plan", "sql": "UPDATE " + q + ".plan_items SET id=2; CREATE TABLE " + q + ".unsupported(id int)"})
+	wPlan := editor.request("POST", base, map[string]string{"title": "plan", "sql": "UPDATE " + q + ".plan_items SET id=2; CREATE TABLE " + q + ".unsupported(id int)", "sql_down": "DROP TABLE IF EXISTS " + q + ".unsupported; UPDATE " + q + ".plan_items SET id=1"})
 	status(t, wPlan, 201)
 	var planDraft runner.Draft
 	if err = json.Unmarshal(wPlan.Body.Bytes(), &planDraft); err != nil {
@@ -73,7 +73,7 @@ func TestRunnerAPI(t *testing.T) {
 	if err = db.QueryRow(ctx, "SELECT id FROM "+q+".plan_items").Scan(&unchanged); err != nil || unchanged != 1 {
 		t.Fatalf("EXPLAIN changed data: %d, %v", unchanged, err)
 	}
-	input := map[string]string{"title": "create table", "sql": "CREATE TABLE " + q + ".items(id int PRIMARY KEY, note text); INSERT INTO " + q + ".items VALUES(1,'semi;colon')"}
+	input := map[string]string{"title": "create table", "sql": "CREATE TABLE " + q + ".items(id int PRIMARY KEY, note text); INSERT INTO " + q + ".items VALUES(1,'semi;colon')", "sql_down": "DROP FUNCTION IF EXISTS " + q + ".echo(); DROP TABLE IF EXISTS " + q + ".items"}
 	status(t, a.browser().request("POST", base, input), 401)
 	status(t, view.request("POST", base, input), 403)
 	status(t, admin.request("POST", base, input), 403)
@@ -144,11 +144,21 @@ func TestRunnerAPI(t *testing.T) {
 	}
 	// DDL and DML before a failing middle statement must both disappear.
 	badSQL := "CREATE TABLE " + q + ".rolled_back(id int); INSERT INTO " + q + ".items VALUES(2,'rollback'); SELECT 1/0; INSERT INTO " + q + ".items VALUES(3,'never')"
-	w = editor.request("PATCH", path, map[string]string{"revision": "1", "title": "failure", "sql": badSQL})
-	status(t, w, 200)
-	status(t, editor.request("PATCH", path, map[string]string{"revision": "1", "title": "stale", "sql": "SELECT 1"}), 409)
-	status(t, editor.request("POST", path+"/execute", map[string]string{"revision": "1"}), 409)
-	failed := execute(path, "2")
+	// Draft yang sudah sukses tidak boleh diedit; kegagalan diuji lewat migration baru.
+	w = editor.request("PATCH", path, map[string]string{"revision": "1", "title": "failure", "sql": badSQL, "sql_down": "SELECT 1"})
+	status(t, w, 409)
+	w = editor.request("POST", base, map[string]string{
+		"title": "failure", "sql": badSQL,
+		"sql_down": "DROP TABLE IF EXISTS " + q + ".rolled_back; DELETE FROM " + q + ".items WHERE id IN (2,3)",
+	})
+	status(t, w, 201)
+	var failedDraft runner.Draft
+	if err = json.Unmarshal(w.Body.Bytes(), &failedDraft); err != nil {
+		t.Fatal(err)
+	}
+	failedPath := fmt.Sprintf("%s/%d", base, failedDraft.ID)
+	status(t, editor.request("POST", failedPath+"/execute", map[string]string{"revision": "2"}), 409)
+	failed := execute(failedPath, "1")
 	if failed.Status != "failed" || failed.Version != 2 || failed.ErrorCode == nil || *failed.ErrorCode != "22012" {
 		t.Fatalf("result=%+v", failed)
 	}
@@ -162,11 +172,11 @@ func TestRunnerAPI(t *testing.T) {
 	if err = db.QueryRow(ctx, "SELECT count(*) FROM _terserah.migration_receipts WHERE execution_id=$1", failed.ExecutionID).Scan(&count); err != nil || count != 0 {
 		t.Fatal("failed execution has a success receipt")
 	}
-	if execute(path, "2").ExecutionID != failed.ExecutionID {
+	if execute(failedPath, "1").ExecutionID != failed.ExecutionID {
 		t.Fatal("failed revision retried")
 	}
 	for _, sql := range []string{"SELECT 1;COMMIT", "BEGIN;SELECT 1", "ROLLBACK", "SET ROLE test", "CREATE DATABASE blocked", "CREATE INDEX CONCURRENTLY ix ON t(id)", "CREATE SUBSCRIPTION s CONNECTION 'redacted' PUBLICATION p"} {
-		status(t, editor.request("POST", base, map[string]string{"title": "reject", "sql": sql}), 400)
+		status(t, editor.request("POST", base, map[string]string{"title": "reject", "sql": sql, "sql_down": "SELECT 1"}), 400)
 	}
 	// Draft text is validated again at execution, even for pre-existing database rows.
 	var unsafeID int64
@@ -180,15 +190,15 @@ func TestRunnerAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status(t, editor.request("POST", path+"/execute", map[string]string{"revision": "2"}), 200)
-	status(t, editor.request("PATCH", path, map[string]string{"revision": "2", "title": "blocked", "sql": "SELECT 1"}), 200)
-	status(t, editor.request("POST", path+"/execute", map[string]string{"revision": "3"}), 409)
+	status(t, editor.request("POST", failedPath+"/execute", map[string]string{"revision": "1"}), 200)
+	status(t, editor.request("PATCH", failedPath, map[string]string{"revision": "1", "title": "blocked", "sql": "SELECT 1", "sql_down": "SELECT 1"}), 409)
 	_, err = a.db.Exec(ctx, "UPDATE migration_history SET status='failed' WHERE execution_id=$1", failed.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Independent sessions issue the same revision simultaneously; only one executes.
 	input["sql"] = "INSERT INTO " + q + ".items VALUES(4,'once'); SELECT pg_sleep(0.1)"
+	input["sql_down"] = "DELETE FROM " + q + ".items WHERE id=4"
 	w = editor.request("POST", base, input)
 	status(t, w, 201)
 	_ = json.Unmarshal(w.Body.Bytes(), &d)
@@ -225,6 +235,7 @@ func TestRunnerAPI(t *testing.T) {
 	}
 	// Statement timeout rolls back earlier writes and persists failure after cancellation.
 	input["sql"] = "INSERT INTO " + q + ".items VALUES(5,'timeout'); SELECT pg_sleep(10)"
+	input["sql_down"] = "DELETE FROM " + q + ".items WHERE id=5"
 	w = editor.request("POST", base, input)
 	status(t, w, 201)
 	_ = json.Unmarshal(w.Body.Bytes(), &d)
@@ -236,6 +247,7 @@ func TestRunnerAPI(t *testing.T) {
 		t.Fatal("timeout committed data")
 	}
 	input["sql"] = "INSERT INTO " + q + ".items VALUES(6,'deadline'); SELECT pg_sleep(4); SELECT pg_sleep(4)"
+	input["sql_down"] = "DELETE FROM " + q + ".items WHERE id=6"
 	w = editor.request("POST", base, input)
 	status(t, w, 201)
 	if err = json.Unmarshal(w.Body.Bytes(), &d); err != nil {
@@ -255,6 +267,7 @@ func TestRunnerAPI(t *testing.T) {
 	// Deferred constraints can fail only during COMMIT; a server rejection is a
 	// confirmed rollback, rather than an ambiguous network outcome.
 	input["sql"] = "CREATE TABLE " + q + ".deferred_failure(id int UNIQUE DEFERRABLE INITIALLY DEFERRED); INSERT INTO " + q + ".deferred_failure VALUES(1),(1)"
+	input["sql_down"] = "DROP TABLE IF EXISTS " + q + ".deferred_failure"
 	w = editor.request("POST", base, input)
 	status(t, w, 201)
 	if err = json.Unmarshal(w.Body.Bytes(), &d); err != nil {

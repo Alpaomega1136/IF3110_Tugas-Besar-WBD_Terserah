@@ -85,6 +85,80 @@ func inspectDatabaseGroups(ctx context.Context, tx pgx.Tx, dbID int64) ([]requir
 	return groups, nil
 }
 
+// reviewSQLSnapshotTx menentukan SQL yang harus disetujui untuk satu aksi.
+// Dipakai saat pengajuan dan keputusan agar review tidak mengacu pada definisi lama.
+func reviewSQLSnapshotTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision int64, action string, targetID *string) (string, error) {
+	if !ValidActionType(action) {
+		return "", ErrInvalidInput
+	}
+	if action == "resume" {
+		if targetID == nil || len(*targetID) != 32 {
+			return "", ErrInvalidInput
+		}
+		var snapshot string
+		err := tx.QueryRow(ctx, `SELECT j.sql_snapshot FROM migration_jobs j
+ JOIN migration_job_attempts a ON a.job_id=j.id AND a.attempt_no=j.attempt_count
+ JOIN migration_history h ON h.execution_id=a.execution_id
+ WHERE j.database_id=$1 AND j.draft_id=$2 AND j.draft_revision=$3 AND a.execution_id=$4
+ AND j.execution_mode='batch' AND j.status='partial' AND j.committed_batches>0
+ AND a.status IN ('partial','failed') AND h.status IN ('partial','failed') FOR UPDATE OF j`, dbID, draftID, revision, *targetID).Scan(&snapshot)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return snapshot, err
+	}
+	var sqlUp string
+	var currentRevision int64
+	err := tx.QueryRow(ctx, `SELECT sql,revision FROM migration_drafts
+		WHERE database_id=$1 AND id=$2 FOR UPDATE`, dbID, draftID).Scan(&sqlUp, &currentRevision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	if currentRevision != revision {
+		return "", ErrRevisionConflict
+	}
+	if action != "rollback" && action != "forward" {
+		if action == "up" && targetID != nil {
+			return "", ErrInvalidInput
+		}
+		return sqlUp, nil
+	}
+	if targetID == nil || *targetID == "" || len(*targetID) > 128 {
+		return "", ErrInvalidInput
+	}
+	var previousAction, previousStatus, immutableUp string
+	var immutableDown *string
+	var irreversible bool
+	err = tx.QueryRow(ctx, `
+		SELECT h.action_type,h.status,snap.sql_up,snap.sql_down,snap.irreversible
+		FROM migration_history h
+		JOIN migration_revision_snapshots snap ON snap.draft_id=h.draft_id AND snap.revision=h.draft_revision
+		WHERE h.database_id=$1 AND h.draft_id=$2 AND h.draft_revision=$3 AND h.execution_id=$4
+	`, dbID, draftID, revision, *targetID).Scan(&previousAction, &previousStatus, &immutableUp, &immutableDown, &irreversible)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrInvalidInput
+	}
+	if err != nil {
+		return "", err
+	}
+	if previousStatus != "success" {
+		return "", ErrInvalidInput
+	}
+	if action == "rollback" {
+		if (previousAction != "up" && previousAction != "forward") || irreversible || immutableDown == nil {
+			return "", ErrInvalidInput
+		}
+		return *immutableDown, nil
+	}
+	if previousAction != "rollback" {
+		return "", ErrInvalidInput
+	}
+	return immutableUp, nil
+}
+
 func (s *PostgresStore) SubmitReview(ctx context.Context, actorID, dbID int64, input SubmitInput, now time.Time) (ReviewView, error) {
 	access, err := policy.DatabaseAccess(ctx, s.pool, actorID, dbID)
 	if err != nil {
@@ -108,42 +182,17 @@ func (s *PostgresStore) SubmitReview(ctx context.Context, actorID, dbID int64, i
 		return ReviewView{}, err
 	}
 
-	var sqlSnapshot string
-	var actualRevision int64
-	if input.ActionType == "resume" {
-		if input.TargetExecutionID == nil || len(*input.TargetExecutionID) != 32 {
-			return ReviewView{}, ErrInvalidInput
-		}
-		err = tx.QueryRow(ctx, `SELECT j.sql_snapshot,j.draft_revision FROM migration_jobs j
- JOIN migration_job_attempts a ON a.job_id=j.id AND a.attempt_no=j.attempt_count
- JOIN migration_history h ON h.execution_id=a.execution_id
- WHERE j.database_id=$1 AND j.draft_id=$2 AND j.draft_revision=$3 AND a.execution_id=$4
- AND j.execution_mode='batch' AND j.status='partial' AND j.committed_batches>0
- AND a.status IN ('partial','failed') AND h.status IN ('partial','failed')
- FOR UPDATE OF j`, dbID, input.DraftID, input.Revision, *input.TargetExecutionID).Scan(&sqlSnapshot, &actualRevision)
-	} else {
-		err = tx.QueryRow(ctx, `
-		SELECT sql, revision
-		FROM migration_drafts
-		WHERE database_id = $1 AND id = $2
-		FOR UPDATE
-	`, dbID, input.DraftID).Scan(&sqlSnapshot, &actualRevision)
-	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ReviewView{}, ErrNotFound
-	}
+	// Preserve historical resume coordinates and immutable rollback/forward SQL.
+	sqlSnapshot, err := reviewSQLSnapshotTx(ctx, tx, dbID, input.DraftID, input.Revision, input.ActionType, input.TargetExecutionID)
 	if err != nil {
 		return ReviewView{}, err
-	}
-	if actualRevision != input.Revision {
-		return ReviewView{}, ErrRevisionConflict
 	}
 
 	groups, err := inspectDatabaseGroups(ctx, tx, dbID)
 	if err != nil {
 		return ReviewView{}, err
 	}
-	_, approvalErr := ensureApprovedTx(ctx, tx, dbID, input.DraftID, input.Revision, input.ActionType, 0, input.TargetExecutionID)
+	_, approvalErr := ensureApprovedTx(ctx, tx, dbID, input.DraftID, input.Revision, input.ActionType, 0, input.TargetExecutionID, &sqlSnapshot)
 	if errors.Is(approvalErr, ErrNotApproved) {
 		_, err = tx.Exec(ctx, `UPDATE migration_reviews SET status = 'cancelled', decided_at = $5 WHERE database_id = $1 AND draft_id = $2 AND draft_revision = $3 AND action_type = $4 AND status = 'approved' AND target_execution_id IS NOT DISTINCT FROM $6::text`, dbID, input.DraftID, input.Revision, input.ActionType, now, input.TargetExecutionID)
 		if err != nil {
@@ -229,13 +278,15 @@ func (s *PostgresStore) DecideReview(ctx context.Context, actorID, dbID, reviewI
 		return ReviewView{}, err
 	}
 
-	var status string
+	var status, action, sqlSnapshot string
+	var draftID, revision int64
+	var targetID *string
 	err = tx.QueryRow(ctx, `
-		SELECT status
+		SELECT status,draft_id,draft_revision,action_type,target_execution_id,sql_snapshot
 		FROM migration_reviews
 		WHERE id = $1 AND database_id = $2
 		FOR UPDATE
-	`, reviewID, dbID).Scan(&status)
+	`, reviewID, dbID).Scan(&status, &draftID, &revision, &action, &targetID, &sqlSnapshot)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ReviewView{}, ErrNotFound
 	}
@@ -244,6 +295,19 @@ func (s *PostgresStore) DecideReview(ctx context.Context, actorID, dbID, reviewI
 	}
 	if status != StatusPendingReview {
 		return ReviewView{}, ErrReviewClosed
+	}
+	if approve {
+		// Review lama tidak boleh disetujui setelah SQL, revisi, atau target berubah.
+		currentSQL, err := reviewSQLSnapshotTx(ctx, tx, dbID, draftID, revision, action, targetID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) || errors.Is(err, ErrInvalidInput) || errors.Is(err, ErrRevisionConflict) {
+				return ReviewView{}, ErrRevisionConflict
+			}
+			return ReviewView{}, err
+		}
+		if currentSQL != sqlSnapshot {
+			return ReviewView{}, ErrRevisionConflict
+		}
 	}
 
 	groups, err := inspectDatabaseGroups(ctx, tx, dbID)
@@ -475,22 +539,33 @@ func (s *PostgresStore) EnsureApproved(ctx context.Context, dbID, draftID, revis
 	return review, tx.Commit(ctx)
 }
 
-// EnsureApprovedTx keeps approval and group locks until the caller commits.
+// EnsureApprovedTx hanya untuk aksi tanpa target. Rollback/forward wajib memakai
+// EnsureApprovedExecutionTx agar target execution dan SQL immutable ikut diperiksa.
 func EnsureApprovedTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision int64, actionType string) (ReviewView, error) {
-	return ensureApprovedTx(ctx, tx, dbID, draftID, revision, actionType, 0, nil)
+	if actionType == "rollback" || actionType == "forward" {
+		return ReviewView{}, ErrNotApproved
+	}
+	return ensureApprovedTx(ctx, tx, dbID, draftID, revision, actionType, 0, nil, nil)
 }
 
 // EnsureApprovedReviewTx validates the precise approved payload, including its execution target.
 func EnsureApprovedReviewTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision int64, actionType string, reviewID int64, target *string) (ReviewView, error) {
-	return ensureApprovedTx(ctx, tx, dbID, draftID, revision, actionType, reviewID, target)
+	return ensureApprovedTx(ctx, tx, dbID, draftID, revision, actionType, reviewID, target, nil)
 }
 
-func ensureApprovedTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision int64, actionType string, requestedID int64, target *string) (ReviewView, error) {
+// EnsureApprovedExecutionTx binds both the immutable SQL and the exact target.
+func EnsureApprovedExecutionTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision int64, actionType, targetExecutionID, sqlText string) (ReviewView, error) {
+	if (actionType != "rollback" && actionType != "forward") || targetExecutionID == "" || sqlText == "" {
+		return ReviewView{}, ErrNotApproved
+	}
+	return ensureApprovedTx(ctx, tx, dbID, draftID, revision, actionType, 0, &targetExecutionID, &sqlText)
+}
+
+func ensureApprovedTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision int64, actionType string, requestedID int64, target, sqlText *string) (ReviewView, error) {
 	groups, err := inspectDatabaseGroups(ctx, tx, dbID)
 	if err != nil {
 		return ReviewView{}, err
 	}
-
 	var reviewID int64
 	err = tx.QueryRow(ctx, `
 		SELECT id
@@ -501,18 +576,19 @@ func ensureApprovedTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision in
 		  AND action_type = $4
 		  AND ($5::bigint=0 OR id=$5)
 		  AND target_execution_id IS NOT DISTINCT FROM $6::text
+          AND ($7::text IS NULL OR sql_snapshot=$7)
+          AND ($4<>'up' OR sql_snapshot=(SELECT sql FROM migration_drafts WHERE database_id=$1 AND id=$2 AND revision=$3))
 		  AND status IN ('approved', 'queued')
 		ORDER BY id DESC
 		LIMIT 1
 		FOR UPDATE
-	`, dbID, draftID, revision, actionType, requestedID, target).Scan(&reviewID)
+	`, dbID, draftID, revision, actionType, requestedID, target, sqlText).Scan(&reviewID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ReviewView{}, ErrNotApproved
 	}
 	if err != nil {
 		return ReviewView{}, err
 	}
-
 	approvals, err := loadApprovalsTx(ctx, tx, reviewID)
 	if err != nil {
 		return ReviewView{}, err
@@ -530,12 +606,7 @@ func ensureApprovedTx(ctx context.Context, tx pgx.Tx, dbID, draftID, revision in
 	if anyRejected || !allApproved {
 		return ReviewView{}, ErrNotApproved
 	}
-
-	review, err := loadReviewTx(ctx, tx, 0, dbID, reviewID, true)
-	if err != nil {
-		return ReviewView{}, err
-	}
-	return review, nil
+	return loadReviewTx(ctx, tx, 0, dbID, reviewID, true)
 }
 
 func loadReviewTx(ctx context.Context, tx pgx.Tx, actorID, dbID, reviewID int64, includeSQL bool) (ReviewView, error) {

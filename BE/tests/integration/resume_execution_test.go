@@ -38,7 +38,7 @@ func TestApprovedResumeUsesFrozenScopeWithNewActorAndLostCommitResponse(t *testi
 	if _, err := f.a.db.Exec(ctx, `UPDATE group_database_permissions SET access_level='edit' WHERE database_id=$1 AND group_id IN (SELECT group_id FROM user_groups WHERE user_id=$2)`, f.first, f.a.users["viewer"]); err != nil {
 		t.Fatal(err)
 	}
-	status(t, f.editor.request("PATCH", fmt.Sprintf("/api/v1/databases/%d/drafts/%d", f.first, parent.DraftID), map[string]string{"revision": "1", "title": "changed editor draft", "sql": "SELECT 99"}), 200)
+	status(t, f.editor.request("PATCH", fmt.Sprintf("/api/v1/databases/%d/drafts/%d", f.first, parent.DraftID), map[string]string{"revision": "1", "title": "changed editor draft", "sql": "SELECT 99", "sql_down": "SELECT 1"}), 409)
 	next := queuedJob(t, f, f.first, "SELECT 1")
 	r := submitResumeReview(t, f, f.viewer, parent, original.ExecutionID)
 	approveResumeReview(t, f, r)

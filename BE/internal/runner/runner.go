@@ -25,22 +25,29 @@ func New(db *pgxpool.Pool, targets *connections.Service, key []byte) *Service {
 }
 
 type Draft struct {
-	ID                int64     `json:"id,string"`
-	DatabaseID        int64     `json:"database_id,string"`
-	Title             string    `json:"title"`
-	SQL               string    `json:"sql"`
-	Revision          int64     `json:"revision,string"`
-	CreatedBy         int64     `json:"created_by,string"`
-	CreatedByUsername string    `json:"created_by_username"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                 int64     `json:"id,string"`
+	DatabaseID         int64     `json:"database_id,string"`
+	Title              string    `json:"title"`
+	SQL                string    `json:"sql"`
+	SQLDown            *string   `json:"sql_down"`
+	Irreversible       bool      `json:"irreversible"`
+	IrreversibleReason *string   `json:"irreversible_reason"`
+	Immutable          bool      `json:"immutable"`
+	Revision           int64     `json:"revision,string"`
+	CreatedBy          int64     `json:"created_by,string"`
+	CreatedByUsername  string    `json:"created_by_username"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type draftInput struct {
-	Title    string        `json:"title"`
-	SQL      string        `json:"sql"`
-	Revision int64         `json:"revision,string"`
-	Batch    *batch.Config `json:"batch,omitempty"`
+	Title              string        `json:"title"`
+	SQL                string        `json:"sql"`
+	SQLDown            *string       `json:"sql_down"`
+	Irreversible       bool          `json:"irreversible"`
+	IrreversibleReason *string       `json:"irreversible_reason"`
+	Revision           int64         `json:"revision,string"`
+	Batch              *batch.Config `json:"batch,omitempty"`
 }
 
 type Result struct {
@@ -52,6 +59,7 @@ type Result struct {
 
 var errConflict = errors.New("draft revision changed or an unresolved execution exists")
 var errActiveJob = errors.New("a worker still owns a live execution lease")
+var errRetryInvalid = errors.New("retry hanya diizinkan untuk execution Up yang telah gagal")
 
 func rollback(parent context.Context, tx pgx.Tx) {
 	if tx == nil {
@@ -127,16 +135,13 @@ func (s *Service) commitAndFinalizeLedger(ctx context.Context, targetTx pgx.Tx, 
 
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
-	updated, err := s.db.Exec(cleanup, `
-		UPDATE migration_history
-		SET status = $1,
-		    error_code = $2,
-		    finished_at = CASE WHEN $1 IN ('success', 'failed') THEN now() ELSE NULL END
-		WHERE execution_id = $3 AND status IN ('running', 'unknown')
- AND EXISTS(SELECT 1 FROM migration_job_attempts a JOIN migration_jobs j ON j.id=a.job_id
- WHERE a.execution_id=$3 AND a.attempt_no=j.attempt_count AND NOT a.retry_scheduled AND j.status='running' AND j.lease_expires_at>clock_timestamp())
-	`, result.Status, result.ErrorCode, result.ExecutionID)
-	if err != nil || updated.RowsAffected() != 1 {
+	var finished *time.Time
+	if result.Status == "success" || result.Status == "failed" {
+		now := time.Now().UTC()
+		finished = &now
+	}
+	err := s.finalisasiAttempt(cleanup, *result, finished)
+	if err != nil {
 		result.Status = "unknown"
 		code := "ledger_unavailable"
 		result.ErrorCode = &code

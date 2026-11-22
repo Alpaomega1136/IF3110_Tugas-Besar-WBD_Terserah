@@ -116,7 +116,7 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 		telemetry.Event(ctx, "resume_queued", "actor_id", p.ID, "database_id", dbID, "job_id", j.ID, "parent_job_id", *j.ParentJobID, "review_id", reviewID, "status", j.Status)
 		return j, false, nil
 	}
-	if action != "up" || targetExecution != nil {
+	if (action != "up" && action != "rollback" && action != "forward") || (action == "up") != (targetExecution == nil) {
 		return Job{}, false, ErrUnsupported
 	}
 	if status != approval.StatusApproved {
@@ -127,6 +127,19 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 	err = tx.QueryRow(ctx, `SELECT sql,revision FROM migration_drafts WHERE database_id=$1 AND id=$2 FOR UPDATE`, dbID, draftID).Scan(&sql, &actual)
 	if err != nil {
 		return Job{}, false, err
+	}
+	if action != "up" {
+		var targetBatch bool
+		err = tx.QueryRow(ctx, `SELECT CASE WHEN $4='rollback' THEN snap.sql_down ELSE snap.sql_up END,h.batch_root_execution_id IS NOT NULL
+ FROM migration_history h JOIN migration_revision_snapshots snap ON snap.draft_id=h.draft_id AND snap.revision=h.draft_revision
+ WHERE h.database_id=$1 AND h.execution_id=$2 AND h.draft_id=$3 AND h.status='success'
+ AND (($4='rollback' AND h.action_type IN ('up','forward') AND NOT snap.irreversible) OR ($4='forward' AND h.action_type='rollback'))`, dbID, *targetExecution, draftID, action).Scan(&sql, &targetBatch)
+		if err != nil {
+			return Job{}, false, ErrConflict
+		}
+		if targetBatch {
+			return Job{}, false, ErrUnsupported
+		}
 	}
 	if actual != revision {
 		return Job{}, false, ErrConflict
@@ -139,10 +152,10 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3)`, dbID, draftID, revision).Scan(&executed); err != nil {
 		return Job{}, false, err
 	}
-	if executed {
+	if executed && action == "up" {
 		return Job{}, false, ErrConflict
 	}
-	review, err := approval.EnsureApprovedTx(ctx, tx, dbID, draftID, revision, action)
+	review, err := approval.EnsureApprovedReviewTx(ctx, tx, dbID, draftID, revision, action, reviewID, targetExecution)
 	if err != nil {
 		return Job{}, false, err
 	}
@@ -150,14 +163,14 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 		return Job{}, false, ErrConflict
 	}
 	j := Job{DatabaseID: dbID, ReviewID: reviewID, DraftID: draftID, DraftRevision: revision,
-		ActionType: action, ExecutionMode: "normal", RequestedBy: p.ID}
+		ActionType: action, ExecutionMode: "normal", RequestedBy: p.ID, TargetExecutionID: targetExecution}
 	if config != nil {
 		j.ExecutionMode = "batch"
 	}
 	j, err = scanJob(tx.QueryRow(ctx, `INSERT INTO migration_jobs
- (database_id,review_id,draft_id,draft_revision,action_type,execution_mode,sql_snapshot,snapshot_hash,requested_by,trace_parent)
- VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+jobColumns,
-		dbID, reviewID, draftID, revision, action, j.ExecutionMode, sql, snapshotHash(j, sql), p.ID, traceParent(parent)))
+ (database_id,review_id,draft_id,draft_revision,action_type,execution_mode,sql_snapshot,snapshot_hash,requested_by,trace_parent,target_execution_id)
+ VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING `+jobColumns,
+		dbID, reviewID, draftID, revision, action, j.ExecutionMode, sql, snapshotHash(j, sql), p.ID, traceParent(parent), targetExecution))
 	if err != nil {
 		return Job{}, false, err
 	}
@@ -311,6 +324,11 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	if snapshotHash(j, sql) != hash {
 		return nil, ErrConflict
 	}
+	// Serialize the first attempt with editor updates before freezing its definition.
+	var lockedDraftID int64
+	if err = tx.QueryRow(ctx, `SELECT id FROM migration_drafts WHERE id=$1 FOR UPDATE`, j.DraftID).Scan(&lockedDraftID); err != nil {
+		return nil, err
+	}
 	var execution [16]byte
 	var token [32]byte
 	if _, err = rand.Read(execution[:]); err != nil {
@@ -340,11 +358,20 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	if c.RootExecutionID != "" {
 		root = c.RootExecutionID
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO migration_history(database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id,receipt_version,batch_root_execution_id,action_type,target_execution_id,job_id)
- SELECT $1,$2,$3,COALESCE(MAX(version),0)+1,$4,$5,'running',$6,1,$7,$8,$9,$10 FROM migration_history WHERE database_id=$1 RETURNING version`,
-		j.DatabaseID, j.DraftID, j.DraftRevision, sql, j.RequestedBy, c.ExecutionID, root, j.ActionType, j.TargetExecutionID, j.ID).Scan(&c.Version)
+	err = tx.QueryRow(ctx, `INSERT INTO migration_history(database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id,receipt_version,batch_root_execution_id,action_type,target_execution_id,job_id,retry_of_execution_id)
+ SELECT $1,$2,$3,COALESCE(MAX(version),0)+1,$4,$5,'running',$6,1,$7,$8,$9,$10,(SELECT execution_id FROM migration_job_attempts WHERE job_id=$10 AND attempt_no=$11) FROM migration_history WHERE database_id=$1 RETURNING version`,
+		j.DatabaseID, j.DraftID, j.DraftRevision, sql, j.RequestedBy, c.ExecutionID, root, j.ActionType, j.TargetExecutionID, j.ID, j.AttemptCount-1).Scan(&c.Version)
 	if err != nil {
 		return nil, err
+	}
+	if j.ActionType == "up" {
+		_, err = tx.Exec(ctx, `INSERT INTO migration_revision_snapshots(draft_id,revision,sql_up,sql_down,irreversible,irreversible_reason,first_execution_id)
+ SELECT id,revision,sql,sql_down,irreversible,irreversible_reason,$3 FROM migration_drafts d WHERE id=$1 AND revision=$2
+ AND NOT EXISTS(SELECT 1 FROM migration_revision_snapshots snap WHERE snap.draft_id=d.id AND snap.revision=d.revision)
+ ON CONFLICT(draft_id,revision) DO NOTHING`, j.DraftID, j.DraftRevision, c.ExecutionID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err

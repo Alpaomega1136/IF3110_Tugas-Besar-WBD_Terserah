@@ -3,6 +3,16 @@ import assert from "node:assert/strict";
 import { parseJob, parseJobPage, parseJobDetail, assertJobAdvance } from "../internal/web/static/js/job-contract.js";
 import { dbID, jobFixture, attemptFixture } from "./job-fixtures.mjs";
 
+test("normal rollback and forward jobs preserve their exact execution target", () => {
+    for (const action_type of ["rollback", "forward"]) {
+        const job = jobFixture({ action_type, execution_mode: "normal", parent_job_id: null, target_execution_id: "b".repeat(32) });
+        assert.equal(parseJob(job, dbID).target_execution_id, job.target_execution_id);
+        for (const change of [{ target_execution_id: null }, { execution_mode: "batch" }, { parent_job_id: "8" }]) {
+            assert.throws(() => parseJob({ ...job, ...change }, dbID));
+        }
+    }
+});
+
 test("job detail preserves string IDs and committed counts beyond Number precision", () => {
     const job = jobFixture({ committed_rows: "9007199254740999" });
     const detail = parseJobDetail({ job, attempts: [attemptFixture()] }, dbID, job.id);

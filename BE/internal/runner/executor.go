@@ -184,6 +184,12 @@ func executionCode(err error) string {
 		return "approval_incomplete"
 	case errors.Is(err, errConflict):
 		return "snapshot_changed"
+	case errors.Is(err, errMigrationOrder), errors.Is(err, errMigrationMustForward):
+		return "invalid_migration_order"
+	case errors.Is(err, errMigrationIrreversible):
+		return "migration_irreversible"
+	case errors.Is(err, errMigrationUnresolved), errors.Is(err, errMigrationStateInvalid):
+		return "migration_state_conflict"
 	case errors.Is(err, errHistorySetup):
 		return "target_history_unprotected"
 	case errors.Is(err, errTargetIdentity):
@@ -230,12 +236,20 @@ func validateApprovedSnapshot(ctx context.Context, tx pgx.Tx, job jobs.Job, sqlS
 			return err
 		}
 	} else {
-		var revision int64
-		var sql string
-		if err = tx.QueryRow(ctx, `SELECT revision,sql FROM migration_drafts WHERE database_id=$1 AND id=$2 FOR UPDATE`, job.DatabaseID, job.DraftID).Scan(&revision, &sql); err != nil {
+		var own string
+		if err = tx.QueryRow(ctx, `SELECT execution_id FROM migration_job_attempts WHERE job_id=$1 AND attempt_no=$2`, job.ID, job.AttemptCount).Scan(&own); err != nil {
 			return err
 		}
-		if revision != job.DraftRevision || sql != sqlSnapshot {
+		target := ""
+		if job.TargetExecutionID != nil {
+			target = *job.TargetExecutionID
+		}
+		// Recovery also revalidates failed/partial attempts before scheduling a retry.
+		plan, err := prepareAsyncOperation(ctx, tx, AsyncOperationRequest{DatabaseID: job.DatabaseID, DraftID: job.DraftID, Revision: job.DraftRevision, ReviewID: job.ReviewID, ActorID: job.RequestedBy, ActionType: job.ActionType, TargetExecutionID: target}, own)
+		if err != nil {
+			return err
+		}
+		if plan.SQL != sqlSnapshot {
 			return errConflict
 		}
 	}
@@ -247,7 +261,7 @@ func validateApprovedSnapshot(ctx context.Context, tx pgx.Tx, job jobs.Job, sqlS
 	if parseErr != nil || (job.ExecutionMode == "batch") != (config != nil) {
 		return errConflict
 	}
-	if review.ID != job.ReviewID || review.SQLSnapshot != sqlSnapshot || (job.ActionType != "up" && job.ActionType != "resume") || (job.ExecutionMode != "normal" && job.ExecutionMode != "batch") {
+	if review.ID != job.ReviewID || review.SQLSnapshot != sqlSnapshot || (job.ActionType != "up" && job.ActionType != "resume" && job.ActionType != "rollback" && job.ActionType != "forward") || (job.ExecutionMode != "normal" && job.ExecutionMode != "batch") {
 		return errConflict
 	}
 	return nil

@@ -190,7 +190,7 @@ async function updateQueueControls(review) {
     byId("review-jobs-link").href = `/databases/${encodeURIComponent(review.database_id)}/jobs`;
     setBanner(jobMessage, review.status === "queued" ? "Job sudah masuk antrean. Periksa monitoring untuk hasil worker." : "");
     if (review.status !== "approved") return;
-    if (!["up", "resume"].includes(review.action_type)) {
+    if (!["up", "resume", "rollback", "forward"].includes(review.action_type)) {
         setBanner(jobMessage, "Eksekusi aksi ini belum tersedia."); return;
     }
     try {

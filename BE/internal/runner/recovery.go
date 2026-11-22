@@ -97,7 +97,7 @@ func (s *Service) RecoverJob(ctx context.Context, r *jobs.Recovery) error {
 	}
 	if cause != "" && r.Job.AttemptCount < r.Job.MaxAttempts {
 		if err = s.retryAllowed(ctx, r); err != nil {
-			if !errors.Is(err, connections.ErrForbidden) && !errors.Is(err, approval.ErrNotApproved) && !errors.Is(err, approval.ErrLeaderMissing) && !errors.Is(err, errConflict) {
+			if !errors.Is(err, connections.ErrForbidden) && !errors.Is(err, approval.ErrNotApproved) && !errors.Is(err, approval.ErrLeaderMissing) && !errors.Is(err, errConflict) && !errors.Is(err, errMigrationOrder) && !errors.Is(err, errMigrationMustForward) && !errors.Is(err, errMigrationIrreversible) && !errors.Is(err, errMigrationUnresolved) && !errors.Is(err, errMigrationStateInvalid) {
 				return s.deferRecovery(ctx, r, "metadata_unavailable", 5*time.Second)
 			}
 			cause = ""

@@ -47,7 +47,7 @@ func newQueueFixture(t *testing.T, tracers ...pgx.QueryTracer) *queueFixture {
 
 func (f *queueFixture) draft(t *testing.T, dbID int64, sql string) runner.Draft {
 	t.Helper()
-	w := f.editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/drafts", dbID), map[string]string{"title": "queued migration", "sql": sql})
+	w := f.editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/drafts", dbID), map[string]any{"title": "queued migration", "sql": sql, "irreversible": true, "irreversible_reason": "Test migration has no reverse operation"})
 	status(t, w, 201)
 	var d runner.Draft
 	if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
@@ -149,7 +149,7 @@ func TestJobsAPI(t *testing.T) {
 	if _, err = f.a.db.Exec(ctx, `UPDATE migration_jobs SET sql_snapshot='SELECT 99' WHERE id=$1`, queued.Job.ID); err == nil {
 		t.Fatal("job SQL snapshot was mutable")
 	}
-	status(t, f.editor.request("PATCH", fmt.Sprintf("/api/v1/databases/%d/drafts/%d", f.first, d.ID), map[string]string{"title": "new draft revision", "sql": "SELECT 88", "revision": "1"}), 200)
+	status(t, f.editor.request("PATCH", fmt.Sprintf("/api/v1/databases/%d/drafts/%d", f.first, d.ID), map[string]any{"title": "new draft revision", "sql": "SELECT 88", "revision": "1", "irreversible": true, "irreversible_reason": "Test migration has no reverse operation"}), 200)
 	claim, err := f.service.Claim(ctx, "api-test-worker", time.Minute)
 	if err != nil || claim == nil || claim.SQL != "SELECT 'private-job-sql'" || claim.Job.DraftRevision != 1 {
 		t.Fatal("claim used mutable draft SQL instead of the approved snapshot")
@@ -331,7 +331,7 @@ func TestJobsRejectStaleOrExecutedReviews(t *testing.T) {
 	ctx := context.Background()
 	reviewID, d := f.approved(t, f.first, "SELECT 1")
 	status(t, f.editor.request("PATCH", fmt.Sprintf("/api/v1/databases/%d/drafts/%d", f.first, d.ID),
-		map[string]string{"title": "changed", "sql": "SELECT 2", "revision": "1"}), 200)
+		map[string]string{"title": "changed", "sql": "SELECT 2", "revision": "1", "sql_down": "SELECT 1"}), 200)
 	if _, _, err := f.service.Enqueue(ctx, f.actor, f.first, reviewID, ""); !errors.Is(err, jobs.ErrConflict) {
 		t.Fatal("stale revision was queued")
 	}
@@ -363,7 +363,7 @@ func TestJobsRejectStaleOrExecutedReviews(t *testing.T) {
  VALUES($1,$2,1,'rollback','prior-execution','SELECT 4','approved',$3) RETURNING id`, f.first, d.ID, f.actor.ID).Scan(&unsupported); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := f.service.Enqueue(ctx, f.actor, f.first, unsupported, ""); !errors.Is(err, jobs.ErrUnsupported) {
-		t.Fatal("a rollback review was incorrectly queued as SQL up")
+	if _, _, err := f.service.Enqueue(ctx, f.actor, f.first, unsupported, ""); !errors.Is(err, jobs.ErrConflict) {
+		t.Fatal("a rollback without a valid successful target was queued")
 	}
 }

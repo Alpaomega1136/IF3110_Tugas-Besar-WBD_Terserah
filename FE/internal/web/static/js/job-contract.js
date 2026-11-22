@@ -13,14 +13,15 @@ const executionStates = ["running", "success", "failed", "unknown", "partial"];
 export function parseJob(job, databaseID) {
     parseJobResponse({ job }, databaseID);
     if (!["review_id", "draft_id", "draft_revision", "requested_by"].every((key) => positiveInt64(job[key])) ||
-        !["up", "resume"].includes(job.action_type) || !["normal", "batch"].includes(job.execution_mode) ||
+        !["up", "resume", "rollback", "forward"].includes(job.action_type) || !["normal", "batch"].includes(job.execution_mode) ||
         !Number.isInteger(job.max_attempts) || job.max_attempts < 1 || job.max_attempts > 10 ||
         !Number.isInteger(job.attempt_count) || job.attempt_count < 0 || job.attempt_count > job.max_attempts ||
         typeof job.committed_batches !== "string" || typeof job.committed_rows !== "string" ||
         BigInt(job.committed_rows) < BigInt(job.committed_batches) ||
         !date(job.created_at) || !date(job.available_at) ||
         ["started_at", "finished_at"].some((key) => job[key] != null && !date(job[key])) ||
-        (job.action_type === "resume" && (!positiveInt64(job.parent_job_id) || !job.target_execution_id))) {
+        (job.action_type === "resume" && (!positiveInt64(job.parent_job_id) || !job.target_execution_id)) ||
+        (["rollback", "forward"].includes(job.action_type) && (job.execution_mode !== "normal" || !job.target_execution_id || job.parent_job_id != null))) {
         throw new Error("Detail job dari backend tidak valid. Muat ulang sebelum mengambil tindakan.");
     }
     return job;

@@ -3,7 +3,8 @@ import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./a
 import { executionFeedback, parseExecutionResult, parseJobResponse, executeErrorMessage } from "./execution.js";
 import { positiveInt64, parseCursorPage } from "./pagination.js";
 import { initializeSchemaDiff } from "./schema-diff.js";
-import { byId, addCell, formatDate, setBanner, setFieldError, utf8Bytes } from "./ui.js";
+import { byId, addCell, formatDate, setBanner, setFieldError } from "./ui.js";
+import { normalizeDraftDefinition, draftEditorValues, validateDraftEditor, identicalDraftDefinition } from "./migration-form.js";
 
 const page = byId("draft-page");
 const databaseId = page.dataset.databaseId;
@@ -32,8 +33,16 @@ const heading = byId("draft-editor-heading");
 const currentId = byId("draft-current-id");
 const titleInput = byId("draft-title");
 const sqlInput = byId("draft-sql");
+const downInput = byId("draft-sql-down");
+const irreversibleInput = byId("draft-irreversible");
+const reasonInput = byId("draft-reason");
+const downGroup = byId("draft-down-group");
+const reasonGroup = byId("draft-reason-group");
+const immutableNote = byId("draft-immutable-note");
 const titleError = byId("draft-title-error");
 const sqlError = byId("draft-sql-error");
+const downError = byId("draft-sql-down-error");
+const reasonError = byId("draft-reason-error");
 const saveButton = byId("draft-save");
 const saveMessage = byId("draft-save-message");
 
@@ -42,6 +51,9 @@ const detailAuthor = byId("draft-detail-author");
 const detailCreated = byId("draft-detail-created");
 const detailUpdated = byId("draft-detail-updated");
 const detailSQL = byId("draft-detail-sql");
+const detailDown = byId("draft-detail-down");
+const detailDownSection = byId("draft-detail-down-section");
+const detailIrreversible = byId("draft-detail-irreversible");
 
 const executionPanel = byId("draft-execution");
 const executeButton = byId("draft-execute");
@@ -59,15 +71,13 @@ const resultVersion = byId("draft-result-version");
 const resultID = byId("draft-result-id");
 const resultError = byId("draft-result-error");
 
-const maxSQLBytes = 48 * 1024;
-const maxBodyBytes = 64 * 1024;
 const pageLimit = 50;
 
 let selectedDraft = null;
 let busy = false;
 let allowNavigation = false;
 let executing = false;
-let lockedExecution = null; // A sent request may have an unknown outcome. Never retry it automatically.
+let lockedExecution = null; // Hasil request bisa belum pasti; jangan lakukan retry otomatis.
 let cursors = [null];
 let currentPage = 0;
 let hasMore = false;
@@ -108,11 +118,36 @@ function handleError(err, target = saveMessage) {
 
 const executionKey = (draft) => (draft ? `${draft.id}:${draft.revision}` : null);
 
+function editorValues() {
+    return {
+        title: titleInput.value, sql: sqlInput.value, sqlDown: downInput.value,
+        irreversible: irreversibleInput.checked, reason: reasonInput.value
+    };
+}
+
 function isDirty() {
+    if (selectedDraft?.immutable) return false;
+    const values = editorValues();
     if (selectedDraft) {
-        return titleInput.value !== selectedDraft.title || sqlInput.value !== selectedDraft.sql;
+        const original = draftEditorValues(selectedDraft);
+        return Object.keys(values).some((key) => values[key] !== original[key]);
     }
-    return Boolean(titleInput.value || sqlInput.value);
+    return Boolean(titleInput.value || sqlInput.value || downInput.value || reasonInput.value || irreversibleInput.checked);
+}
+
+function updateEditorMode() {
+    const irreversible = irreversibleInput.checked, locked = Boolean(selectedDraft?.immutable);
+    downGroup.hidden = irreversible;
+    reasonGroup.hidden = !irreversible;
+    immutableNote.hidden = !locked;
+    for (const field of [titleInput, sqlInput, downInput, irreversibleInput, reasonInput]) field.disabled = busy || locked;
+    saveButton.disabled = busy || locked;
+}
+
+function clearEditorErrors() {
+    for (const [input, error] of [[titleInput, titleError], [sqlInput, sqlError], [downInput, downError], [reasonInput, reasonError]]) {
+        setFieldError(input, error, "");
+    }
 }
 
 async function confirmDiscard() {
@@ -127,18 +162,21 @@ async function confirmDiscard() {
 function updateExecutionControls() {
     const saved = selectedDraft !== null;
     const modified = saved && isDirty();
+    const immutable = Boolean(selectedDraft?.immutable);
     const locked = saved && lockedExecution === executionKey(selectedDraft);
 
     executionPanel.hidden = !saved;
-    executeButton.disabled = busy || !saved || modified || locked;
-    if (submitReviewButton) submitReviewButton.disabled = busy || !saved || modified;
+    executeButton.disabled = busy || !saved || modified || locked || immutable;
+    if (submitReviewButton) submitReviewButton.disabled = busy || !saved || modified || immutable;
     explainButton.disabled = busy || !saved || modified;
     reloadButton.disabled = busy || !saved;
     executeButton.textContent = executing ? "Menjalankan Migration..." : "Execute Migration";
 
     if (!saved) return;
     executionRevision.textContent = selectedDraft.revision;
-    executionState.textContent = locked
+    executionState.textContent = immutable
+        ? "Migration sudah pernah dieksekusi. Definisinya immutable; gunakan History untuk rollback atau forward."
+        : locked
         ? "Eksekusi untuk revisi ini sudah diminta. Periksa History atau buka ulang draft sebelum tindakan lain."
         : modified
             ? "Ada perubahan belum disimpan. Simpan perubahan sebelum Execute."
@@ -159,16 +197,12 @@ function setBusy(value) {
     busy = value;
     newButton.disabled = value;
     updatePagination();
-    saveButton.disabled = value;
-    titleInput.disabled = value;
-    sqlInput.disabled = value;
+    updateEditorMode();
 
     for (const button of listBody.querySelectorAll("button")) {
         button.disabled = value;
     }
-    saveButton.textContent = value
-        ? "Memproses..."
-        : selectedDraft ? "Simpan Perubahan" : "Buat Draft";
+    saveButton.textContent = value ? "Memproses..." : selectedDraft?.immutable ? "Definisi Terkunci" : selectedDraft ? "Simpan Perubahan" : "Buat Draft";
     updateExecutionControls();
 }
 
@@ -178,7 +212,7 @@ function requireDraftShape(draft) {
         typeof draft.title !== "string" || typeof draft.sql !== "string") {
         throw new Error("Format detail draft dari backend tidak valid.");
     }
-    return draft;
+    return normalizeDraftDefinition(draft);
 }
 
 function showDraft(draft) {
@@ -189,16 +223,23 @@ function showDraft(draft) {
 
     titleInput.value = draft.title;
     sqlInput.value = draft.sql;
+    downInput.value = draft.sql_down ?? "";
+    irreversibleInput.checked = draft.irreversible;
+    reasonInput.value = draft.irreversible_reason ?? "";
+    detailDown.textContent = draft.sql_down ?? "";
+    detailDownSection.hidden = draft.irreversible;
+    detailIrreversible.hidden = !draft.irreversible;
+    detailIrreversible.textContent = draft.irreversible ? `Irreversible: ${draft.irreversible_reason || "Alasan tidak tersedia"}` : "";
     detailAuthor.textContent = draft.created_by_username || "-";
     detailCreated.textContent = formatDate(draft.created_at);
     detailUpdated.textContent = formatDate(draft.updated_at);
     detailSQL.textContent = draft.sql;
     detail.hidden = false;
 
-    setFieldError(titleInput, titleError, "");
-    setFieldError(sqlInput, sqlError, "");
+    clearEditorErrors();
     setBanner(saveMessage, "");
     resetExecutionFeedback();
+    updateEditorMode();
 }
 
 async function startNewDraft() {
@@ -207,10 +248,12 @@ async function startNewDraft() {
     heading.textContent = "Buat Draft Baru";
     currentId.hidden = true;
     form.reset();
+    downInput.value = "";
+    reasonInput.value = "";
+    irreversibleInput.checked = false;
     detail.hidden = true;
     resetExecutionFeedback();
-    setFieldError(titleInput, titleError, "");
-    setFieldError(sqlInput, sqlError, "");
+    clearEditorErrors();
     setBanner(saveMessage, "");
     setBusy(false);
     titleInput.focus();
@@ -392,7 +435,7 @@ async function executeDraft() {
     try {
         // A fresh GET catches stale editor data before asking the user to confirm.
         const latest = requireDraftShape(await authenticatedRequest(`${apiPath}/${encodeURIComponent(draft.id)}`));
-        if (latest.revision !== draft.revision || latest.title !== draft.title || latest.sql !== draft.sql) {
+        if (latest.revision !== draft.revision || !identicalDraftDefinition(latest, draft)) {
             lockedExecution = revisionKey;
             setBanner(
                 executionMessage,
@@ -518,6 +561,8 @@ explainButton.addEventListener("click", async () => {
 reloadButton.addEventListener("click", () => {
     if (selectedDraft) openDraft(selectedDraft.id);
 });
+irreversibleInput.addEventListener("change", () => { updateEditorMode(); updateExecutionControls(); });
+for (const input of [downInput, reasonInput]) input.addEventListener("input", updateExecutionControls);
 titleInput.addEventListener("input", updateExecutionControls);
 sqlInput.addEventListener("input", () => {
     explainResult.hidden = true;
@@ -530,39 +575,24 @@ form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (busy) return;
 
-    setFieldError(titleInput, titleError, "");
-    setFieldError(sqlInput, sqlError, "");
+    if (selectedDraft?.immutable) return;
+    clearEditorErrors();
     setBanner(saveMessage, "");
-
-    const title = titleInput.value.trim();
-    const sql = sqlInput.value.trim();
-    const titleBytes = utf8Bytes(title);
-    const sqlBytes = utf8Bytes(sql);
-
-    if (titleBytes < 1 || titleBytes > 200) {
-        setFieldError(titleInput, titleError, "Isi judul dengan maksimal 200 karakter biasa; karakter tertentu dapat dihitung lebih dari satu.");
-    }
-    if (sqlBytes < 1 || sqlBytes > maxSQLBytes) {
-        setFieldError(sqlInput, sqlError, "SQL harus diisi dan maksimal 48 KiB.");
-    }
-    if (!titleError.hidden || !sqlError.hidden) {
-        (titleError.hidden ? sqlInput : titleInput).focus();
+    const { errors, payload } = validateDraftEditor(editorValues(), selectedDraft?.revision ?? null);
+    const validation = [["title", titleInput, titleError], ["sql", sqlInput, sqlError],
+        ["sqlDown", downInput, downError], ["reason", reasonInput, reasonError]];
+    for (const [key, input, error] of validation) setFieldError(input, error, errors[key] || "");
+    if (errors.body) setFieldError(sqlInput, sqlError, errors.body);
+    if (Object.keys(errors).length) {
+        const first = validation.find(([key]) => errors[key]);
+        (first ? first[1] : sqlInput).focus();
         return;
     }
-
-    if (selectedDraft && title === selectedDraft.title && sql === selectedDraft.sql) {
+    if (selectedDraft && identicalDraftDefinition(payload, selectedDraft)) {
         setBanner(saveMessage, "Tidak ada perubahan yang perlu disimpan.");
         return;
     }
-    const payload = selectedDraft
-        ? { title, sql, revision: selectedDraft.revision }
-        : { title, sql };
     const serialized = JSON.stringify(payload);
-
-    if (utf8Bytes(serialized) > maxBodyBytes) {
-        setFieldError(sqlInput, sqlError, "Ukuran JSON melebihi 64 KiB. Kurangi ukuran SQL sebelum menyimpan.");
-        return;
-    }
 
     const updating = selectedDraft !== null;
     const url = updating ? `${apiPath}/${encodeURIComponent(String(selectedDraft.id))}` : apiPath;
@@ -586,7 +616,14 @@ form.addEventListener("submit", async (event) => {
             }
         }
     } catch (err) {
-        handleError(err);
+        if (err.status === 409 && err.code === "migration_immutable") {
+            setBanner(saveMessage, "Migration telah dieksekusi dan tidak dapat diedit. Buat draft baru untuk perbaikan.", true);
+            if (selectedDraft) {
+                selectedDraft.immutable = true;
+                updateEditorMode();
+                updateExecutionControls();
+            }
+        } else handleError(err);
     } finally {
         setBusy(false);
     }
@@ -621,18 +658,21 @@ async function initialize() {
         access.textContent = "View + Edit";
         workspace.hidden = false;
 
-        initializeSchemaDiff(databaseId, (sql) => {
-            if (busy || !confirmDiscard()) return false;
+        initializeSchemaDiff(databaseId, async (sql) => {
+            if (busy || !(await confirmDiscard())) return false;
             selectedDraft = null;
             heading.textContent = "Buat Draft Baru";
             currentId.hidden = true;
             detail.hidden = true;
             form.reset();
+            downInput.value = "";
+            reasonInput.value = "";
+            irreversibleInput.checked = false;
             titleInput.value = "Schema diff";
             sqlInput.value = sql;
             resetExecutionFeedback();
-            setFieldError(titleInput, titleError, "");
-            setFieldError(sqlInput, sqlError, "");
+            clearEditorErrors();
+            updateEditorMode();
             setBanner(saveMessage, "");
             form.scrollIntoView({ behavior: "smooth", block: "start" });
             return true;

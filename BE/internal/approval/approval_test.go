@@ -59,6 +59,12 @@ func TestEvaluateCompleteness(t *testing.T) {
 	if all, rejected := EvaluateCompleteness([]int64{10, 20}, approvals); all || !rejected {
 		t.Fatal("any rejected group must return anyRejected=true")
 	}
+	if all, rejected := EvaluateCompleteness([]int64{10}, approvals); !all || rejected {
+		t.Fatal("penolakan dari group tanpa grant tidak boleh menggagalkan review")
+	}
+	if all, rejected := EvaluateCompleteness(nil, approvals); all || rejected {
+		t.Fatal("tanpa group yang memiliki grant, review tidak boleh dianggap lengkap")
+	}
 }
 
 func TestReviewHTTPHandlers(t *testing.T) {

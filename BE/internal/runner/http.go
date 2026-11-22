@@ -22,6 +22,10 @@ import (
 func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("GET /api/v1/databases/{id}/migrations", sessions.Require(s.history))
 	mux.HandleFunc("GET /api/v1/databases/{id}/migrations/{version}", sessions.Require(s.history))
+	mux.HandleFunc("GET /api/v1/databases/{id}/migration-executions/{executionID}", sessions.Require(s.executionDetail))
+	mux.HandleFunc("POST /api/v1/databases/{id}/migration-executions/{executionID}/rollback", sessions.Require(s.rollbackExecution))
+	mux.HandleFunc("POST /api/v1/databases/{id}/migration-executions/{executionID}/forward", sessions.Require(s.forwardExecution))
+	mux.HandleFunc("GET /api/v1/databases/{id}/migration-state", sessions.Require(s.state))
 	mux.HandleFunc("POST /api/v1/databases/{id}/migrations/reconcile", sessions.Require(s.reconcile))
 
 	base := "/api/v1/databases/{id}/drafts"
@@ -30,6 +34,7 @@ func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("GET "+base+"/{draftID}", sessions.Require(s.draft))
 	mux.HandleFunc("PATCH "+base+"/{draftID}", sessions.Require(s.draft))
 	mux.HandleFunc("POST "+base+"/{draftID}/execute", sessions.Require(s.execute))
+	mux.HandleFunc("POST "+base+"/{draftID}/retry", sessions.Require(s.retry))
 	mux.HandleFunc("POST "+base+"/{draftID}/explain", sessions.Require(s.explain))
 }
 
@@ -62,12 +67,24 @@ func fail(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusForbidden, "forbidden", "Database access denied")
 	case errors.Is(err, pgx.ErrNoRows), errors.Is(err, jobs.ErrNotFound):
 		httpx.Error(w, http.StatusNotFound, "not_found", "Database object not found")
+	case errors.Is(err, errDraftLocked):
+		httpx.Error(w, http.StatusConflict, "migration_immutable", err.Error())
+	case errors.Is(err, errMigrationOrder), errors.Is(err, errMigrationIrreversible),
+		errors.Is(err, errMigrationUnresolved), errors.Is(err, errMigrationMustForward),
+		errors.Is(err, errMigrationStateInvalid):
+		httpx.Error(w, http.StatusConflict, "migration_state_conflict", err.Error())
+	case errors.Is(err, errRetryInvalid):
+		httpx.Error(w, http.StatusConflict, "retry_invalid", err.Error())
 	case errors.Is(err, errConflict), errors.Is(err, jobs.ErrConflict):
 		httpx.Error(w, http.StatusConflict, "execution_conflict", "Reload draft or resolve the pending execution before retrying")
 	case errors.Is(err, approval.ErrNotApproved), errors.Is(err, approval.ErrLeaderMissing):
 		httpx.Error(w, http.StatusConflict, "approval_incomplete", "Approval from current group leaders is required before execution")
+	case errors.Is(err, errDraftDefinition):
+		httpx.Error(w, http.StatusBadRequest, "invalid_migration_definition", err.Error())
 	case errors.Is(err, connections.ErrInvalid), errors.Is(err, errSQL), errors.Is(err, jobs.ErrInvalid):
 		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid ID, revision, title or unsupported SQL")
+	case errors.Is(err, jobs.ErrUnsupported):
+		httpx.Error(w, 409, "unsupported_job_action", "Batch rollback/forward requires approved checkpoint compensation; normal actions use the job queue")
 	case errors.Is(err, errHistorySetup):
 		httpx.Error(w, http.StatusConflict, "target_history_unprotected", "Provision target history and use a dedicated restricted executor per database")
 	case errors.Is(err, errTargetIdentity):
@@ -153,7 +170,7 @@ func (s *Service) draft(w http.ResponseWriter, r *http.Request) {
 			fail(w, connections.ErrInvalid)
 			return
 		}
-		d, err := s.createDraft(r.Context(), dbID, p.ID, in.Title, in.SQL)
+		d, err := s.createDraft(r.Context(), dbID, p.ID, in)
 		if err != nil {
 			fail(w, err)
 			return
@@ -166,7 +183,7 @@ func (s *Service) draft(w http.ResponseWriter, r *http.Request) {
 		fail(w, connections.ErrInvalid)
 		return
 	}
-	d, err := s.updateDraft(r.Context(), dbID, draftID, in.Revision, in.Title, in.SQL)
+	d, err := s.updateDraft(r.Context(), dbID, draftID, in)
 	if err != nil {
 		fail(w, err)
 		return
@@ -222,6 +239,116 @@ func validateDraftSQL(sql string) error {
 	return err
 }
 
+// retry mewajibkan referensi attempt gagal agar tidak terjadi retry implisit.
+func (s *Service) retry(w http.ResponseWriter, r *http.Request) {
+	p, dbID, err := s.authorize(r, true)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	draftID, err := strconv.ParseInt(r.PathValue("draftID"), 10, 64)
+	var in struct {
+		Revision          int64  `json:"revision,string"`
+		FailedExecutionID string `json:"failed_execution_id"`
+	}
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	if err != nil || draftID < 1 || in.Revision < 1 || in.FailedExecutionID == "" || len(in.FailedExecutionID) > 128 {
+		fail(w, connections.ErrInvalid)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Second)
+	defer cancel()
+	var actualDraft, actualRevision int64
+	if err = s.db.QueryRow(ctx, `SELECT draft_id,draft_revision FROM migration_history WHERE database_id=$1 AND execution_id=$2`, dbID, in.FailedExecutionID).Scan(&actualDraft, &actualRevision); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = errRetryInvalid
+		}
+		fail(w, err)
+		return
+	}
+	if draftID != actualDraft || in.Revision != actualRevision {
+		fail(w, errRetryInvalid)
+		return
+	}
+	job, replayed, err := jobs.New(s.db).RetryExecution(ctx, p, dbID, in.FailedExecutionID, "up", nil)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	code := http.StatusAccepted
+	if replayed {
+		code = http.StatusOK
+	}
+	httpx.JSON(w, code, map[string]any{"job": job, "replayed": replayed})
+}
+
+// rollbackExecution dan forwardExecution memakai execution ID sebagai target immutable.
+func (s *Service) rollbackExecution(w http.ResponseWriter, r *http.Request) {
+	s.executeAction(w, r, "rollback")
+}
+
+func (s *Service) forwardExecution(w http.ResponseWriter, r *http.Request) {
+	s.executeAction(w, r, "forward")
+}
+
+func (s *Service) executeAction(w http.ResponseWriter, r *http.Request, action string) {
+	p, dbID, err := s.authorize(r, true)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	targetID := r.PathValue("executionID")
+	if targetID == "" || len(targetID) > 128 {
+		fail(w, connections.ErrInvalid)
+		return
+	}
+	var in struct {
+		FailedExecutionID string `json:"failed_execution_id"`
+	}
+	if r.ContentLength != 0 && !httpx.Decode(w, r, &in) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Second)
+	defer cancel()
+	var job jobs.Job
+	var replayed bool
+	if in.FailedExecutionID != "" {
+		job, replayed, err = jobs.New(s.db).RetryExecution(ctx, p, dbID, in.FailedExecutionID, action, &targetID)
+	} else {
+		job, replayed, err = jobs.New(s.db).EnqueueOperation(ctx, p, dbID, action, targetID)
+	}
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	code := http.StatusAccepted
+	if replayed {
+		code = http.StatusOK
+	}
+	httpx.JSON(w, code, map[string]any{"job": job, "replayed": replayed})
+}
+
+func (s *Service) executionDetail(w http.ResponseWriter, r *http.Request) {
+	_, dbID, err := s.authorize(r, false)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	executionID := r.PathValue("executionID")
+	if executionID == "" || len(executionID) > 128 {
+		fail(w, connections.ErrInvalid)
+		return
+	}
+	item, err := s.getHistoryByExecution(r.Context(), dbID, executionID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, item)
+}
+
 func (s *Service) explain(w http.ResponseWriter, r *http.Request) {
 	p, dbID, err := s.authorize(r, true)
 	if err != nil {
@@ -253,7 +380,7 @@ func (s *Service) history(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.PathValue("version") != "" {
-		if r.URL.Query().Has("limit") || r.URL.Query().Has("before") {
+		if r.URL.Query().Has("limit") || r.URL.Query().Has("before") || r.URL.Query().Has("hide_rollback") {
 			fail(w, connections.ErrInvalid)
 			return
 		}
@@ -276,7 +403,15 @@ func (s *Service) history(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	items, more, next, err := s.listHistoryPage(r.Context(), dbID, before, limit)
+	hideRollback := false
+	if r.URL.Query().Has("hide_rollback") {
+		hideRollback, err = strconv.ParseBool(r.URL.Query().Get("hide_rollback"))
+		if err != nil {
+			fail(w, connections.ErrInvalid)
+			return
+		}
+	}
+	items, more, next, err := s.listHistoryPage(r.Context(), dbID, before, limit, hideRollback)
 	if err != nil {
 		fail(w, err)
 		return
@@ -286,6 +421,37 @@ func (s *Service) history(w http.ResponseWriter, r *http.Request) {
 		"next_before": next,
 		"has_more":    more,
 	})
+}
+
+// state menyediakan posisi migration dan kandidat rollback/forward bagi frontend.
+// Pemeriksaan permission tetap dilakukan pada backend untuk pengguna View Only.
+func (s *Service) state(w http.ResponseWriter, r *http.Request) {
+	_, dbID, err := s.authorize(r, false)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	defer rollback(r.Context(), tx)
+	var id int64
+	if err := tx.QueryRow(r.Context(), `SELECT id FROM database_connections WHERE id=$1 FOR SHARE`, dbID).Scan(&id); err != nil {
+		fail(w, err)
+		return
+	}
+	position, err := bacaPosisiMigration(r.Context(), tx, dbID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		fail(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, position)
 }
 
 func (s *Service) reconcile(w http.ResponseWriter, r *http.Request) {

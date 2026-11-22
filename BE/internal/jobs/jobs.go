@@ -111,6 +111,11 @@ func traceParent(value string) string {
 }
 
 func snapshotHash(j Job, sql string) string {
+	if j.ActionType == "rollback" || j.ActionType == "forward" {
+		data, _ := json.Marshal([]any{"terserah-operation-v1", j.DatabaseID, j.ReviewID, j.DraftID, j.DraftRevision, j.ActionType, j.ExecutionMode, j.RequestedBy, sql, j.TargetExecutionID})
+		hash := sha256.Sum256(data)
+		return hex.EncodeToString(hash[:])
+	}
 	if j.ActionType == "resume" {
 		data, _ := json.Marshal([]any{"terserah-resume-job-v1", j.DatabaseID, j.ReviewID, j.DraftID, j.DraftRevision, j.ActionType, j.ExecutionMode, j.RequestedBy, sql, j.ParentJobID, j.TargetExecutionID})
 		hash := sha256.Sum256(data)

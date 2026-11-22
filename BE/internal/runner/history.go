@@ -16,25 +16,26 @@ import (
 )
 
 type History struct {
-	DatabaseID        int64      `json:"database_id,string"`
-	DraftID           *int64     `json:"draft_id,string"`
-	Revision          *int64     `json:"draft_revision,string"`
-	ExecutionID       *string    `json:"execution_id"`
-	Version           int64      `json:"version,string"`
-	SQL               string     `json:"sql,omitempty"`
-	ExecutedBy        int64      `json:"executed_by,string"`
-	Username          string     `json:"username"`
-	StartedAt         time.Time  `json:"started_at"`
-	FinishedAt        *time.Time `json:"finished_at"`
-	Status            string     `json:"status"`
-	ErrorCode         *string    `json:"error_code"`
-	ActionType        string     `json:"action_type"`
-	TargetExecutionID *string    `json:"target_execution_id,omitempty"`
-	JobID             *int64     `json:"job_id,string,omitempty"`
+	DatabaseID         int64      `json:"database_id,string"`
+	DraftID            *int64     `json:"draft_id,string"`
+	Revision           *int64     `json:"draft_revision,string"`
+	ExecutionID        *string    `json:"execution_id"`
+	Version            int64      `json:"version,string"`
+	SQL                string     `json:"sql,omitempty"`
+	ExecutedBy         int64      `json:"executed_by,string"`
+	Username           string     `json:"username"`
+	StartedAt          time.Time  `json:"started_at"`
+	FinishedAt         *time.Time `json:"finished_at"`
+	Status             string     `json:"status"`
+	ErrorCode          *string    `json:"error_code"`
+	ActionType         string     `json:"action_type"`
+	TargetExecutionID  *string    `json:"target_execution_id"`
+	RetryOfExecutionID *string    `json:"retry_of_execution_id"`
+	JobID              *int64     `json:"job_id,string,omitempty"`
 }
 
-func (s *Service) listHistoryPage(ctx context.Context, dbID, before int64, limit int) ([]History, bool, *string, error) {
-	items, err := s.queryHistory(ctx, dbID, 0, before, limit+1)
+func (s *Service) listHistoryPage(ctx context.Context, dbID, before int64, limit int, hideRollback bool) ([]History, bool, *string, error) {
+	items, err := s.queryHistory(ctx, dbID, 0, before, limit+1, hideRollback, "")
 	if err != nil {
 		return nil, false, nil, err
 	}
@@ -51,7 +52,7 @@ func (s *Service) listHistoryPage(ctx context.Context, dbID, before int64, limit
 }
 
 func (s *Service) getHistoryDetail(ctx context.Context, dbID, version int64) (History, error) {
-	items, err := s.queryHistory(ctx, dbID, version, 0, 1)
+	items, err := s.queryHistory(ctx, dbID, version, 0, 1, false, "")
 	if err != nil {
 		return History{}, err
 	}
@@ -61,7 +62,19 @@ func (s *Service) getHistoryDetail(ctx context.Context, dbID, version int64) (Hi
 	return items[0], nil
 }
 
-func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64, limit int) ([]History, error) {
+// getHistoryByExecution mencari attempt berdasarkan ID tanpa mengandalkan nomor versi.
+func (s *Service) getHistoryByExecution(ctx context.Context, dbID int64, executionID string) (History, error) {
+	items, err := s.queryHistory(ctx, dbID, 0, 0, 1, false, executionID)
+	if err != nil {
+		return History{}, err
+	}
+	if len(items) == 0 {
+		return History{}, pgx.ErrNoRows
+	}
+	return items[0], nil
+}
+
+func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64, limit int, hideRollback bool, executionID string) ([]History, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT
 			h.database_id,
@@ -69,21 +82,32 @@ func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64,
 			h.draft_revision,
 			h.execution_id,
 			h.version,
-			CASE WHEN $2::bigint > 0 THEN h.sql ELSE '' END,
+			CASE WHEN $2::bigint > 0 OR $6::text <> '' THEN h.sql ELSE '' END,
 			h.executed_by,
 			u.username,
 			h.started_at,
 			h.finished_at,
 			h.status,
-			h.error_code,h.action_type,h.target_execution_id,h.job_id
+			h.error_code,
+			CASE WHEN pair.rollback_execution_id IS NOT NULL AND h.action_type = 'up' THEN 'rollback' ELSE h.action_type END,
+			h.target_execution_id,
+			h.retry_of_execution_id,h.job_id
 		FROM migration_history h
 		JOIN users u ON u.id = h.executed_by
+		LEFT JOIN migration_rollback_pairs pair ON pair.database_id = h.database_id
+		  AND pair.rollback_execution_id = h.execution_id
 		WHERE h.database_id = $1
 		  AND ($2::bigint = 0 OR h.version = $2)
 		  AND ($3::bigint = 0 OR h.version < $3)
+		  AND ($6::text = '' OR h.execution_id = $6)
+		  AND (NOT $5::boolean OR NOT EXISTS (
+		    SELECT 1 FROM migration_rollback_pairs rp
+		    WHERE rp.database_id = h.database_id
+		      AND (rp.applied_execution_id = h.execution_id OR rp.rollback_execution_id = h.execution_id)
+		  ))
 		ORDER BY h.version DESC
 		LIMIT $4
-	`, dbID, version, before, limit)
+	`, dbID, version, before, limit, hideRollback, executionID)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +129,10 @@ func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64,
 			&item.FinishedAt,
 			&item.Status,
 			&item.ErrorCode,
-			&item.ActionType, &item.TargetExecutionID, &item.JobID,
+			&item.ActionType,
+			&item.TargetExecutionID,
+			&item.RetryOfExecutionID,
+			&item.JobID,
 		)
 		if err != nil {
 			return nil, err
@@ -227,11 +254,14 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 		if err != nil {
 			return nil, err
 		}
-		_, err = meta.Exec(ctx, `
-			UPDATE migration_history
-			SET status = $1, error_code = $2, finished_at = $3
-			WHERE database_id = $4 AND version = $5 AND status IN ('running', 'unknown','partial')
-		`, out.Status, out.ErrorCode, finished, dbID, item.version)
+		if item.execution == nil {
+			// Riwayat legacy tanpa execution ID tetap dapat direkonsiliasi.
+			_, err = meta.Exec(ctx, `UPDATE migration_history SET status=$1,error_code=$2,finished_at=$3
+				WHERE database_id=$4 AND version=$5 AND status IN ('running','unknown')`,
+				out.Status, out.ErrorCode, finished, dbID, item.version)
+		} else {
+			err = simpanHasilAttemptTx(ctx, meta, out, finished)
+		}
 		if err != nil {
 			return nil, err
 		}
