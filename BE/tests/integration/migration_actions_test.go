@@ -46,7 +46,9 @@ func TestRollbackQueueDoesNotExecuteInline(t *testing.T) {
 	path := base + "/migration-executions/" + execution + "/rollback"
 	w = f.editor.request("POST", path, nil)
 	status(t, w, 202)
-	var queued struct { Job jobs.Job `json:"job"` }
+	var queued struct {
+		Job jobs.Job `json:"job"`
+	}
 	if err := json.Unmarshal(w.Body.Bytes(), &queued); err != nil || queued.Job.ActionType != "rollback" || queued.Job.Status != jobs.Queued || queued.Job.AttemptCount != 0 {
 		t.Fatal("rollback did not return a queued job", err)
 	}
