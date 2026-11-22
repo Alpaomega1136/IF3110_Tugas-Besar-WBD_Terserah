@@ -85,6 +85,7 @@ func (w *Worker) RecoverNext(ctx context.Context) (bool, error) {
 	}
 	ctx, span := telemetry.Start(telemetry.Restore(ctx, r.TraceParent), "migration.recovery", trace.WithSpanKind(trace.SpanKindConsumer), trace.WithAttributes(attribute.Int64("job.id", r.Job.ID), attribute.String("execution.id", r.ExecutionID)))
 	defer span.End()
+	ctx = telemetry.WithFields(ctx, "actor_id", r.Job.RequestedBy, "database_id", r.Job.DatabaseID, "job_id", r.Job.ID, "migration_id", r.Job.DraftID, "revision", r.Job.DraftRevision, "execution_id", r.ExecutionID, "attempt", r.Job.AttemptCount)
 	ctx, cancel := context.WithTimeout(ctx, w.options.JobTimeout)
 	defer cancel()
 	err = w.executor.RecoverJob(ctx, r)
@@ -102,6 +103,7 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 	ctx, span := telemetry.Start(telemetry.Restore(ctx, c.TraceParent), "migration.worker", trace.WithSpanKind(trace.SpanKindConsumer),
 		trace.WithAttributes(attribute.Int64("job.id", c.Job.ID), attribute.Int64("database.id", c.Job.DatabaseID), attribute.String("execution.id", c.ExecutionID), attribute.Int64("queue.wait_ms", time.Since(c.Job.CreatedAt).Milliseconds())))
 	defer span.End()
+	ctx = telemetry.WithFields(ctx, "actor_id", c.Job.RequestedBy, "database_id", c.Job.DatabaseID, "job_id", c.Job.ID, "migration_id", c.Job.DraftID, "revision", c.Job.DraftRevision, "execution_id", c.ExecutionID, "attempt", c.Job.AttemptCount, "version", c.Version)
 	jobCtx, cancel := context.WithTimeout(ctx, w.options.JobTimeout)
 	defer cancel()
 	heartbeatDone := make(chan struct{})

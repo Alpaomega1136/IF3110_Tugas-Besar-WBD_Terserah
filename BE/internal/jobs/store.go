@@ -29,8 +29,8 @@ func scanJob(row pgx.Row) (Job, error) {
 	return j, err
 }
 
-func rollback(tx pgx.Tx) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+func rollback(parent context.Context, tx pgx.Tx) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), time.Second)
 	defer cancel()
 	_ = tx.Rollback(ctx)
 }
@@ -54,6 +54,7 @@ func (s *Service) authorize(ctx context.Context, p auth.Principal, dbID int64, w
 
 // Enqueue binds one approved review to one immutable job in the same transaction.
 func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID int64, parent string) (Job, bool, error) {
+	ctx = telemetry.WithFields(ctx, "actor_id", p.ID, "database_id", dbID, "review_id", reviewID)
 	ctx, span := telemetry.Start(ctx, "migration.enqueue", trace.WithSpanKind(trace.SpanKindProducer))
 	defer span.End()
 	if current := telemetry.Parent(ctx); current != "" {
@@ -69,7 +70,7 @@ func (s *Service) Enqueue(ctx context.Context, p auth.Principal, dbID, reviewID 
 	if err != nil {
 		return Job{}, false, err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	var locked int64
 	if err = tx.QueryRow(ctx, `SELECT id FROM database_connections WHERE id=$1 FOR UPDATE`, dbID).Scan(&locked); err != nil {
 		return Job{}, false, err
@@ -216,7 +217,7 @@ func (s *Service) Get(ctx context.Context, p auth.Principal, dbID, jobID int64) 
 	if err != nil {
 		return Job{}, nil, err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	j, err := scanJob(tx.QueryRow(ctx, `SELECT `+jobColumns+` FROM migration_jobs WHERE database_id=$1 AND id=$2`, dbID, jobID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, nil, ErrNotFound
@@ -269,7 +270,7 @@ func (s *Service) Claim(ctx context.Context, worker string, lease time.Duration)
 	if err != nil {
 		return nil, err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	var dbID int64
 	err = tx.QueryRow(ctx, `SELECT d.id FROM database_connections d
  WHERE EXISTS(SELECT 1 FROM migration_jobs q WHERE q.database_id=d.id AND q.status IN ('queued','retry_wait') AND q.available_at<=now() AND q.attempt_count<q.max_attempts AND NOT EXISTS(SELECT 1 FROM migration_jobs w WHERE w.database_id=d.id AND w.status='retry_wait' AND w.id<>q.id))
@@ -414,7 +415,7 @@ func (s *Service) Finish(ctx context.Context, c *Claim, out Outcome) error {
 	if err != nil {
 		return err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	var locked int64
 	err = tx.QueryRow(ctx, `SELECT id FROM migration_jobs WHERE id=$1 AND status='running'
  AND worker_id=$2 AND lease_token_hash=$3 AND lease_expires_at>clock_timestamp() FOR UPDATE`,

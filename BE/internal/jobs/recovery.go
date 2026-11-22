@@ -23,7 +23,7 @@ func (s *Service) RecoveryCandidate(ctx context.Context) (*Recovery, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	j, err := scanJob(tx.QueryRow(ctx, `SELECT `+jobColumns+` FROM migration_jobs WHERE available_at<=clock_timestamp()
  AND (status IN ('unknown','recovering') OR (status='running' AND lease_expires_at<=clock_timestamp())) ORDER BY available_at,id LIMIT 1`))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -105,7 +105,7 @@ func (s *Service) ResolveRecovery(ctx context.Context, r *Recovery, out Outcome,
 	if err != nil {
 		return err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	var id int64
 	if err = tx.QueryRow(ctx, `SELECT id FROM database_connections WHERE id=$1 FOR UPDATE`, r.Job.DatabaseID).Scan(&id); err != nil {
 		return err
