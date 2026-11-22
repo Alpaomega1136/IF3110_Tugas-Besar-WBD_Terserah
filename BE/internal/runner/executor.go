@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net"
 	"time"
@@ -57,7 +59,7 @@ func (s *Service) ExecuteJob(ctx context.Context, c *jobs.Claim) (Result, error)
 	if err != nil {
 		return s.preflightFailure(ctx, c, err)
 	}
-	defer rollback(targetTx)
+	defer rollback(ctx, targetTx)
 	path, err := internalSearchPath(ctx, targetTx)
 	// Transaction locks cannot be released by migration SQL calling pg_advisory_unlock_all.
 	if err == nil {
@@ -109,7 +111,7 @@ func (s *Service) reserveJob(ctx context.Context, c *jobs.Claim) (Result, error)
 	if err != nil {
 		return result, err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	var locked int64
 	if err = tx.QueryRow(ctx, `SELECT id FROM database_connections WHERE id=$1 FOR UPDATE`, c.Job.DatabaseID).Scan(&locked); err != nil {
 		return result, err
@@ -133,7 +135,8 @@ func (s *Service) reserveJob(ctx context.Context, c *jobs.Claim) (Result, error)
 	if err = tx.Commit(ctx); err != nil {
 		return result, err
 	}
-	telemetry.Event(ctx, "execution_started", "actor_id", c.Job.RequestedBy, "database_id", c.Job.DatabaseID, "job_id", c.Job.ID, "execution_id", c.ExecutionID, "version", result.Version)
+	hash := sha256.Sum256([]byte(c.SQL))
+	telemetry.Event(ctx, "execution_started", "actor_id", c.Job.RequestedBy, "database_id", c.Job.DatabaseID, "job_id", c.Job.ID, "migration_id", c.Job.DraftID, "revision", c.Job.DraftRevision, "attempt", c.Job.AttemptCount, "execution_id", c.ExecutionID, "version", result.Version, "status", "running", "query", telemetry.RedactSQL(c.SQL), "query_sha256", hex.EncodeToString(hash[:]))
 	return result, nil
 }
 
@@ -142,7 +145,7 @@ func (s *Service) validateJob(ctx context.Context, target pgx.Tx, c *jobs.Claim)
 	if err != nil {
 		return err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	var locked int64
 	if err = tx.QueryRow(ctx, `SELECT id FROM database_connections WHERE id=$1 FOR UPDATE`, c.Job.DatabaseID).Scan(&locked); err != nil {
 		return err

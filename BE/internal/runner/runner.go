@@ -53,11 +53,11 @@ type Result struct {
 var errConflict = errors.New("draft revision changed or an unresolved execution exists")
 var errActiveJob = errors.New("a worker still owns a live execution lease")
 
-func rollback(tx pgx.Tx) {
+func rollback(parent context.Context, tx pgx.Tx) {
 	if tx == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), time.Second)
 	defer cancel()
 	_ = tx.Rollback(ctx)
 }
@@ -72,7 +72,10 @@ func (s *Service) execStatementsWithReceipt(ctx context.Context, targetTx pgx.Tx
 		// ExecParams forces one server-parsed command and discards returned rows.
 		statementCtx, span := sqlSpan(ctx, index+1)
 		started := time.Now()
-		_, err = targetTx.Conn().PgConn().ExecParams(statementCtx, part, nil, nil, nil, nil).Close()
+		queryCtx, finish := (telemetry.SQLTracer{Role: "target", DatabaseID: dbID}).BeginSQL(statementCtx, part, 0)
+		tag, queryErr := targetTx.Conn().PgConn().ExecParams(queryCtx, part, nil, nil, nil, nil).Close()
+		err = queryErr
+		finish(tag, err)
 		code := ""
 		if err != nil {
 			code = executionCode(err)
@@ -98,7 +101,7 @@ func (s *Service) commitAndFinalizeLedger(ctx context.Context, targetTx pgx.Tx, 
 	ctx, span := telemetry.Start(ctx, "migration.finalize")
 	defer span.End()
 	if execErr != nil {
-		rollback(targetTx)
+		rollback(ctx, targetTx)
 		result.Status = "failed"
 		code := executionCode(execErr)
 		result.ErrorCode = &code
@@ -122,7 +125,7 @@ func (s *Service) commitAndFinalizeLedger(ctx context.Context, targetTx pgx.Tx, 
 		result.Status = "success"
 	}
 
-	cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
 	defer cancel()
 	updated, err := s.db.Exec(cleanup, `
 		UPDATE migration_history

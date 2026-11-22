@@ -44,7 +44,7 @@ func (s *Service) RecoverJob(ctx context.Context, r *jobs.Recovery) error {
 	if err != nil {
 		return s.deferRecovery(ctx, r, "target_unavailable", 5*time.Second)
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	if _, err = internalSearchPath(ctx, tx); err != nil {
 		return s.deferRecovery(ctx, r, "target_unavailable", 5*time.Second)
 	}
@@ -132,7 +132,7 @@ func (s *Service) bindRecoveryTarget(ctx context.Context, target pgx.Tx, r *jobs
 	if err != nil {
 		return err
 	}
-	defer rollback(meta)
+	defer rollback(ctx, meta)
 	var id int64
 	if err = meta.QueryRow(ctx, `SELECT id FROM database_connections WHERE id=$1 FOR UPDATE`, r.Job.DatabaseID).Scan(&id); err != nil {
 		return err
@@ -156,7 +156,7 @@ func (s *Service) retryAllowed(ctx context.Context, r *jobs.Recovery) error {
 	if err != nil {
 		return err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	var id int64
 	if err = tx.QueryRow(ctx, `SELECT id FROM database_connections WHERE id=$1 FOR UPDATE`, r.Job.DatabaseID).Scan(&id); err != nil {
 		return err

@@ -28,7 +28,7 @@ func beginBatch(ctx context.Context, pool *pgxpool.Pool, isolation pgx.TxIsoLeve
 	}
 	_, err = tx.Exec(ctx, `SET LOCAL statement_timeout='5min'; SET LOCAL lock_timeout='2s'; SET LOCAL standard_conforming_strings=on; SET LOCAL search_path=pg_catalog,pg_temp; SELECT pg_catalog.pg_advisory_xact_lock(3110004)`)
 	if err != nil {
-		rollback(tx)
+		rollback(ctx, tx)
 		return nil, err
 	}
 	return tx, nil
@@ -43,7 +43,7 @@ func (s *Service) runBatch(ctx context.Context, pool *pgxpool.Pool, guard *pgx.C
 	if err != nil {
 		return s.preflightFailure(ctx, c, err)
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	if err = protectedBatchHistory(ctx, tx); err != nil {
 		return s.preflightFailure(ctx, c, err)
 	}
@@ -56,7 +56,7 @@ func (s *Service) runBatch(ctx context.Context, pool *pgxpool.Pool, guard *pgx.C
 		return result, err
 	}
 	if err = s.validateJob(ctx, tx, c); err != nil {
-		rollback(tx)
+		rollback(ctx, tx)
 		return s.finishBatch(ctx, result, "failed", executionCode(err)), nil
 	}
 	item := pendingExecution{execution: &c.ExecutionID, version: result.Version, sql: c.SQL, actor: c.Job.RequestedBy, format: 1, isBatch: true}
@@ -84,7 +84,7 @@ func (s *Service) runBatch(ctx context.Context, pool *pgxpool.Pool, guard *pgx.C
 		err = errBatchEvidence
 	}
 	if err != nil {
-		rollback(tx)
+		rollback(ctx, tx)
 		return s.finishBatch(ctx, result, "failed", executionCode(err)), nil
 	}
 	if manifest.ScopeCount == 0 {
@@ -97,7 +97,7 @@ func (s *Service) runBatch(ctx context.Context, pool *pgxpool.Pool, guard *pgx.C
 		err = commitBatch(ctx, tx)
 	}
 	if err != nil {
-		rollback(tx)
+		rollback(ctx, tx)
 		status, code := batchFailure(err, 0)
 		return s.finishBatch(ctx, result, status, code), nil
 	}
@@ -166,6 +166,7 @@ func (s *Service) freezeBatchScope(ctx context.Context, tx pgx.Tx, config batch.
 
 func (s *Service) executeBatch(ctx context.Context, pool *pgxpool.Pool, guard *pgx.Conn, c *jobs.Claim, config batch.Config, m batch.Manifest, previous batch.Checkpoint) (checkpoint batch.Checkpoint, isLast bool, returnErr error) {
 	cp := batch.Checkpoint{BatchNo: previous.BatchNo + 1, PreviousSignature: previous.Signature, AttemptExecutionID: c.ExecutionID, AttemptVersion: c.Version}
+	ctx = telemetry.WithFields(ctx, "batch", cp.BatchNo)
 	ctx, span := telemetry.Start(ctx, "migration.batch", trace.WithAttributes(attribute.Int64("batch.number", cp.BatchNo)))
 	defer func() {
 		if returnErr != nil {
@@ -181,7 +182,7 @@ func (s *Service) executeBatch(ctx context.Context, pool *pgxpool.Pool, guard *p
 		telemetry.Failure(span, executionCode(err))
 		return cp, false, err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 	oid, err := batchTable(ctx, tx, config)
 	if err != nil || oid != m.TableOID {
 		telemetry.Failure(span, "batch_table_changed")

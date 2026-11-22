@@ -139,7 +139,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	if err != nil {
 		return nil, err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 
 	if _, err = tx.Exec(ctx, `SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='2s'`); err != nil {
 		return nil, err
@@ -167,7 +167,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	if err != nil {
 		return nil, err
 	}
-	defer rollback(meta)
+	defer rollback(ctx, meta)
 
 	var locked int64
 	if err = meta.QueryRow(ctx, `SELECT id FROM database_connections WHERE id = $1 FOR UPDATE`, dbID).Scan(&locked); err != nil {
