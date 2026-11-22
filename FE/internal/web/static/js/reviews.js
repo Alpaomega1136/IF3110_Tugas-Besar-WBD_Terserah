@@ -216,6 +216,7 @@ async function updateQueueControls(review) {
 async function enqueueApprovedReview() {
     if (busy || !canQueue || queueLocked || !reviewAlive() || selectedReview?.status !== "approved") return;
     const review = selectedReview;
+    let cancelled = false;
     setBusy(true);
     try {
         const base = `/api/v1/databases/${encodeURIComponent(review.database_id)}`;
@@ -237,8 +238,9 @@ async function enqueueApprovedReview() {
             canQueue = false; enqueueButton.hidden = true;
             throw new Error("Akses Edit sudah tidak tersedia.");
         }
-        if (!(await confirmAction({ title: "Masukkan migration ke antrean?", confirmLabel: "Antrekan job",
-            message: `Antrekan aksi ${review.action_type}, draft #${review.draft_id} revisi ${review.draft_revision}, review #${review.id}${review.target_execution_id ? `, target execution ${review.target_execution_id}` : ""}?\n\nWorker akan memeriksa ulang approval dan hak akses. Hasil SQL belum dinyatakan berhasil saat job diterima.` })) || !reviewAlive()) return;
+        const confirmed = await confirmAction({ title: "Masukkan migration ke antrean?", confirmLabel: "Antrekan job",
+            message: `Antrekan aksi ${review.action_type}, draft #${review.draft_id} revisi ${review.draft_revision}, review #${review.id}${review.target_execution_id ? `, target execution ${review.target_execution_id}` : ""}?\n\nWorker akan memeriksa ulang approval dan hak akses. Hasil SQL belum dinyatakan berhasil saat job diterima.` });
+        if (!confirmed || !reviewAlive()) { cancelled = !confirmed; return; }
         const response = await authenticatedRequest(`${base}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ review_id: review.id }) });
         if (!reviewAlive()) return;
         const job = parseJobResponse(response, review.database_id);
@@ -250,7 +252,12 @@ async function enqueueApprovedReview() {
         const message = isCSRFError(error) ? "CSRF ditolak. Muat ulang atau login kembali." : error.message;
         setBanner(jobMessage, `${message || "Hasil permintaan belum pasti."} Periksa Jobs dan buka ulang review sebelum mencoba lagi.`, true);
         if (error.status === 401) navigateTo("/login", { replace: true });
-    } finally { if (reviewAlive()) setBusy(false); }
+    } finally {
+        if (reviewAlive()) {
+            setBusy(false);
+            if (cancelled && selectedReview?.id === review.id && !enqueueButton.hidden && !enqueueButton.disabled) enqueueButton.focus();
+        }
+    }
 }
 
 async function openReviewDetail(dbId, reviewId) {

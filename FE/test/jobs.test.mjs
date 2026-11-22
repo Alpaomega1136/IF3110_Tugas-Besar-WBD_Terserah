@@ -100,6 +100,21 @@ test("background tabs pause polling and resume with one timer", async (t) => {
     assert.equal(ui.timers.size, 0);
 });
 
+test("polling refreshes edit controls when current database access changes", async (t) => {
+    const ui = await setup(t, { job: jobFixture({ status: "partial" }), attempts: [attemptFixture({ status: "partial" })] });
+    assert.equal(ui.$("jobs-request-resume").hidden, false);
+    assert.equal(ui.$("jobs-drafts-link").hidden, false);
+    ui.state.access = "view"; await ui.poll();
+    assert.equal(ui.$("jobs-access").textContent, "View Only");
+    assert.equal(ui.$("jobs-request-resume").hidden, true);
+    assert.equal(ui.$("jobs-drafts-link").hidden, true);
+    ui.state.access = "edit"; await ui.poll();
+    assert.equal(ui.$("jobs-access").textContent, "View + Edit");
+    assert.equal(ui.$("jobs-request-resume").hidden, false);
+    assert.equal(ui.calls.some((c) => c.method === "POST"), false);
+    assert.equal(ui.timers.size, 1);
+});
+
 test("read failure pauses automatic requests and manual refresh recovers", async (t) => {
     let offline = false;
     const ui = await setup(t, { backend: ({ url }) => offline && url.includes("/jobs?") ? json({ error: { code: "offline", message: "Backend unavailable" } }, 503) : undefined });
@@ -163,6 +178,7 @@ test("view-only, existing approved review and cancelled confirmation never creat
     const cancelled = await setup(t, { job, attempts: [attemptFixture({ status: "partial" })], confirm: false });
     await cancelled.$("jobs-request-resume").fire("click");
     assert.equal(cancelled.calls.some((c) => c.method === "POST"), false);
+    assert.equal(document.activeElement, cancelled.$("jobs-request-resume"));
 });
 
 test("uncertain resume response locks mutations until a fresh manual read", async (t) => {

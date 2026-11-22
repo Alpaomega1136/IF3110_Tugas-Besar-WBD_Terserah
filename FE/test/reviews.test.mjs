@@ -218,6 +218,7 @@ test("view user and cancelled confirmation never enqueue approved jobs", async (
     await cancelled.$("reviews-list-body").children[0].children[7].children[0].fire("click"); await tick();
     await cancelled.$("review-enqueue").fire("click");
     assert.equal(cancelled.calls.some((c) => c.method === "POST"), false);
+    assert.equal(cancelled.$("review-enqueue").focused, true);
 });
 
 test("uncertain enqueue response locks the action and never retries SQL automatically", async () => {

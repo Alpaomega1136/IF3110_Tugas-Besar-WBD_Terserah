@@ -95,6 +95,7 @@ async function loadAccess() {
     const database = result.databases.find((d) => d.id === databaseID && ["view", "edit"].includes(d.access));
     if (!database) { const error = new Error("Akses database tidak tersedia."); error.status = 403; throw error; }
     canEdit = database.access === "edit";
+    byId("jobs-drafts-link").hidden = !canEdit;
     text("jobs-database-name", database.name);
     text("jobs-access", canEdit ? "View + Edit" : "View Only");
 }
@@ -183,7 +184,7 @@ function renderDetail(detail) {
     }
 }
 
-async function refresh({ index = currentPage, checkAccess = false } = {}) {
+async function refresh({ index = currentPage } = {}) {
     if (!alive() || loading || acting) return;
     loading = true; stopTimer(); controls();
     try {
@@ -191,9 +192,9 @@ async function refresh({ index = currentPage, checkAccess = false } = {}) {
             const user = await requireAuthenticatedUser();
             if (!user) { cleanup(); return; }
             if (!alive()) return;
-            authenticated = true; checkAccess = true;
+            authenticated = true;
         }
-        if (checkAccess) await loadAccess();
+        await loadAccess();
         if (!alive()) return;
         const query = new URLSearchParams({ limit: "50" });
         if (cursors[index]) query.set("before", cursors[index]);
@@ -219,6 +220,7 @@ async function refresh({ index = currentPage, checkAccess = false } = {}) {
 
 async function requestResume() {
     if (!alive() || loading || acting || failed || !canResume(current)) return;
+    let cancelled = false;
     acting = true; stopTimer(); controls();
     try {
         await loadAccess();
@@ -231,7 +233,7 @@ async function requestResume() {
         const j = fresh.job, execution = fresh.attempts.at(-1).execution_id;
         const confirmed = await confirmAction({ title: "Ajukan review resume?", confirmLabel: "Ajukan review",
             message: `Ajukan resume Job #${j.id}, draft #${j.draft_id} revisi ${j.draft_revision}, execution ${execution}?\n\n${j.committed_batches} batch / ${j.committed_rows} row sudah committed. SQL historis dan scope awal dipertahankan. Worker menunggu persetujuan seluruh leader sebelum melanjutkan.` });
-        if (!confirmed || !alive()) return;
+        if (!confirmed || !alive()) { cancelled = !confirmed; return; }
         const result = await authenticatedRequest(`/api/v1/databases/${encodeURIComponent(databaseID)}/reviews`, {
             ...options, method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ draft_id: j.draft_id, revision: j.draft_revision, action_type: "resume", target_execution_id: execution })
@@ -247,14 +249,20 @@ async function requestResume() {
         const message = isCSRFError(error) ? "CSRF ditolak. Muat ulang atau login kembali sebelum mencoba lagi." : error.message;
         setBanner(byId("jobs-action-message"), `${message || "Pengajuan belum dapat dipastikan."} Periksa status dengan Muat ulang sebelum mengirim lagi.`, true);
         failure(error);
-    } finally { acting = false; if (alive()) { controls(); schedule(); } }
+    } finally {
+        acting = false;
+        if (alive()) {
+            controls(); schedule();
+            if (cancelled && !resumeButton.hidden && !resumeButton.disabled) resumeButton.focus();
+        }
+    }
 }
 
-refreshButton.addEventListener("click", () => refresh({ checkAccess: true }));
-byId("jobs-page-retry").addEventListener("click", () => refresh({ checkAccess: true }));
-previousButton.addEventListener("click", () => currentPage > 0 && refresh({ index: currentPage - 1, checkAccess: true }));
+refreshButton.addEventListener("click", () => refresh());
+byId("jobs-page-retry").addEventListener("click", () => refresh());
+previousButton.addEventListener("click", () => currentPage > 0 && refresh({ index: currentPage - 1 }));
 nextButton.addEventListener("click", () => {
-    if (!loading && !acting && hasMore && positiveInt64(nextCursor)) { cursors[currentPage + 1] = nextCursor; return refresh({ index: currentPage + 1, checkAccess: true }); }
+    if (!loading && !acting && hasMore && positiveInt64(nextCursor)) { cursors[currentPage + 1] = nextCursor; return refresh({ index: currentPage + 1 }); }
 });
 auto.addEventListener("change", () => { stopTimer(); text("jobs-read-status", auto.checked && !failed ? "Pembaruan otomatis aktif." : "Pembaruan otomatis dijeda."); schedule(); });
 resumeButton.addEventListener("click", requestResume);
@@ -262,4 +270,4 @@ resumeButton.addEventListener("click", requestResume);
 if (!positiveInt64(databaseID) || (jobID && !positiveInt64(jobID))) {
     failure(new Error("Identitas database atau job tidak valid."));
     byId("jobs-page-status").hidden = true;
-} else refresh({ checkAccess: true });
+} else refresh();

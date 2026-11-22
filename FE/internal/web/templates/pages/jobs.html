@@ -13,7 +13,7 @@
                 </div>
                 <nav class="database-workspace-links" aria-label="Workspace database">
                     <a class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/viewer">Viewer</a>
-                    <a class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/drafts">Draft</a>
+                    <a id="jobs-drafts-link" class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/drafts" hidden>Draft</a>
                     <a class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/history">History</a>
                     <a class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/reviews">Review</a>
                 </nav>
@@ -35,9 +35,9 @@
                     <dt>Job asal</dt><dd><a id="jobs-detail-parent" hidden></a><span id="jobs-detail-no-parent">-</span></dd>
                     <dt>Job resume</dt><dd><a id="jobs-detail-child" hidden></a><span id="jobs-detail-no-child">-</span></dd>
                 </dl>
-                <h3>Riwayat Attempt</h3>
+                <h3 id="jobs-attempts-heading">Riwayat Attempt</h3>
                 <p id="jobs-attempts-empty" hidden>Worker belum memulai attempt.</p>
-                <div class="users-table-wrapper" id="jobs-attempts-table" hidden>
+                <div class="users-table-wrapper" id="jobs-attempts-table" role="region" aria-labelledby="jobs-attempts-heading" tabindex="0" hidden>
                     <table class="users-table">
                         <thead><tr><th scope="col">Attempt</th><th scope="col">Execution ID</th><th scope="col">Status</th><th scope="col">Error code</th><th scope="col">Waktu mulai / selesai</th><th scope="col">History</th></tr></thead>
                         <tbody id="jobs-attempts-body"></tbody>
@@ -60,7 +60,7 @@
                 <p id="jobs-last-checked" class="form-help"></p>
                 <p id="jobs-read-error" class="error-message" role="alert" hidden></p>
                 <p id="jobs-list-empty" hidden>Belum ada job migration.</p>
-                <div id="jobs-list-table" class="users-table-wrapper" hidden>
+                <div id="jobs-list-table" class="users-table-wrapper" role="region" aria-labelledby="jobs-list-heading" tabindex="0" hidden>
                     <table class="users-table">
                         <thead><tr><th scope="col">Job / review</th><th scope="col">Aksi</th><th scope="col">Status</th><th scope="col">Attempt</th><th scope="col">Batch committed</th><th scope="col">Row committed</th><th scope="col">Dibuat</th><th scope="col">Detail</th></tr></thead>
                         <tbody id="jobs-list-body"></tbody>

@@ -15,7 +15,7 @@ func TestJobMonitoringRoutesAndAccessibleShell(t *testing.T) {
 		if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" {
 			t.Fatal("job route failed", path, w.Code)
 		}
-		for _, value := range []string{`data-database-id="9007199254740993"`, `id="jobs-workspace" hidden`, `id="jobs-attempts-body"`, `id="jobs-request-resume"`, `aria-atomic="true"`, `id="global-confirm-dialog"`, `/static/js/jobs.js`} {
+		for _, value := range []string{`data-database-id="9007199254740993"`, `id="jobs-workspace" hidden`, `id="jobs-attempts-body"`, `id="jobs-request-resume"`, `aria-atomic="true"`, `id="global-confirm-dialog"`, `/static/js/jobs.js`, `role="region" aria-labelledby="jobs-attempts-heading" tabindex="0"`, `role="region" aria-labelledby="jobs-list-heading" tabindex="0"`} {
 			if !strings.Contains(w.Body.String(), value) {
 				t.Errorf("%s missing %s", path, value)
 			}
