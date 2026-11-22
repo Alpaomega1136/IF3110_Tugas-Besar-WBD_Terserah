@@ -44,7 +44,7 @@ func TestHistoryAndReconciliation(t *testing.T) {
 	status(t, view.request("GET", base+"/1", nil), 404)
 	create := func(sql string) runner.Draft {
 		t.Helper()
-		w := editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/drafts", target.ID), map[string]string{"title": "history", "sql": sql})
+		w := editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/drafts", target.ID), map[string]string{"title": "history", "sql": sql, "sql_down": "SELECT 1"})
 		status(t, w, 201)
 		var d runner.Draft
 		if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {

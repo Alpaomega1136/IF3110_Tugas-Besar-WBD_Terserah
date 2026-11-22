@@ -50,8 +50,9 @@ func TestGroupLeaderAndApprovalWorkflowIntegration(t *testing.T) {
 	outsider.login(t, "outsider")
 
 	wDraft := editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/drafts", target.ID), map[string]string{
-		"title": "add users table",
-		"sql":   "CREATE TABLE approval_demo(id int PRIMARY KEY);",
+		"title":    "add users table",
+		"sql":      "CREATE TABLE approval_demo(id int PRIMARY KEY);",
+		"sql_down": "DROP TABLE IF EXISTS approval_demo;",
 	})
 	status(t, wDraft, 201)
 	var draft runner.Draft

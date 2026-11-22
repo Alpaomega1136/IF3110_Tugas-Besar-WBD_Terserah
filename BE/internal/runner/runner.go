@@ -28,21 +28,28 @@ func New(db *pgxpool.Pool, targets *connections.Service, key []byte) *Service {
 }
 
 type Draft struct {
-	ID                int64     `json:"id,string"`
-	DatabaseID        int64     `json:"database_id,string"`
-	Title             string    `json:"title"`
-	SQL               string    `json:"sql"`
-	Revision          int64     `json:"revision,string"`
-	CreatedBy         int64     `json:"created_by,string"`
-	CreatedByUsername string    `json:"created_by_username"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                 int64     `json:"id,string"`
+	DatabaseID         int64     `json:"database_id,string"`
+	Title              string    `json:"title"`
+	SQL                string    `json:"sql"`
+	SQLDown            *string   `json:"sql_down"`
+	Irreversible       bool      `json:"irreversible"`
+	IrreversibleReason *string   `json:"irreversible_reason"`
+	Immutable          bool      `json:"immutable"`
+	Revision           int64     `json:"revision,string"`
+	CreatedBy          int64     `json:"created_by,string"`
+	CreatedByUsername  string    `json:"created_by_username"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type draftInput struct {
-	Title    string `json:"title"`
-	SQL      string `json:"sql"`
-	Revision int64  `json:"revision,string"`
+	Title              string  `json:"title"`
+	SQL                string  `json:"sql"`
+	SQLDown            *string `json:"sql_down"`
+	Irreversible       bool    `json:"irreversible"`
+	IrreversibleReason *string `json:"irreversible_reason"`
+	Revision           int64   `json:"revision,string"`
 }
 
 type Result struct {
@@ -53,6 +60,7 @@ type Result struct {
 }
 
 var errConflict = errors.New("draft revision changed or an unresolved execution exists")
+var errRetryInvalid = errors.New("retry hanya diizinkan untuk execution Up yang telah gagal")
 
 func rollback(tx pgx.Tx) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -66,6 +74,18 @@ func rollback(tx pgx.Tx) {
 //  3. Execute migration SQL statements + insert HMAC receipt in one Target DB transaction.
 //  4. Commit Target DB and update `migration_history` status in Metadata DB.
 func (s *Service) run(ctx context.Context, p auth.Principal, dbID, draftID, revision int64) (Result, error) {
+	return s.runAttempt(ctx, p, dbID, draftID, revision, "")
+}
+
+// retryFailed hanya melakukan ulang SQL Up untuk attempt gagal yang telah dipilih.
+func (s *Service) retryFailed(ctx context.Context, p auth.Principal, dbID, draftID, revision int64, retryOf string) (Result, error) {
+	if retryOf == "" || len(retryOf) > 128 {
+		return Result{}, errRetryInvalid
+	}
+	return s.runAttempt(ctx, p, dbID, draftID, revision, retryOf)
+}
+
+func (s *Service) runAttempt(ctx context.Context, p auth.Principal, dbID, draftID, revision int64, retryOf string) (Result, error) {
 	var result Result
 
 	pool, err := s.targets.OpenTarget(ctx, p, dbID, true)
@@ -80,7 +100,7 @@ func (s *Service) run(ctx context.Context, p auth.Principal, dbID, draftID, revi
 	}
 	defer rollback(targetTx)
 
-	sqlText, parts, replayed, err := s.recordRunningAttempt(ctx, targetTx, p.ID, dbID, draftID, revision, &result)
+	sqlText, parts, replayed, err := s.recordRunningAttempt(ctx, targetTx, p.ID, dbID, draftID, revision, retryOf, &result)
 	if err != nil || replayed {
 		return result, err
 	}
@@ -126,7 +146,7 @@ func (s *Service) lockAndValidateTarget(ctx context.Context, pool *pgxpool.Pool,
 	return tx, userPath, nil
 }
 
-func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, userID, dbID, draftID, revision int64, result *Result) (string, []string, bool, error) {
+func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, userID, dbID, draftID, revision int64, retryOf string, result *Result) (string, []string, bool, error) {
 	meta, err := s.db.Begin(ctx)
 	if err != nil {
 		return "", nil, false, err
@@ -141,14 +161,16 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 		return "", nil, false, err
 	}
 
-	var sqlText string
+	var title, sqlText string
+	var sqlDown, irreversibleReason *string
+	var irreversible bool
 	var actualRevision int64
 	err = meta.QueryRow(ctx, `
-		SELECT sql, revision
+		SELECT title, sql, sql_down, irreversible, irreversible_reason, revision
 		FROM migration_drafts
 		WHERE database_id = $1 AND id = $2
 		FOR UPDATE
-	`, dbID, draftID).Scan(&sqlText, &actualRevision)
+	`, dbID, draftID).Scan(&title, &sqlText, &sqlDown, &irreversible, &irreversibleReason, &actualRevision)
 	if err != nil {
 		return "", nil, false, err
 	}
@@ -156,34 +178,100 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 		return "", nil, false, errConflict
 	}
 
-	// Idempotent replay: if this exact (draft_id, draft_revision) already has a history entry, return it.
-	err = meta.QueryRow(ctx, `
-		SELECT execution_id, version, status, error_code
-		FROM migration_history
-		WHERE database_id = $1 AND draft_id = $2 AND draft_revision = $3
-	`, dbID, draftID, revision).Scan(&result.ExecutionID, &result.Version, &result.Status, &result.ErrorCode)
-	if err == nil {
-		return "", nil, true, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return "", nil, false, err
+	// Endpoint execute lama tetap idempotent. Retry harus eksplisit agar request
+	// duplikat tidak menjalankan SQL dua kali secara tidak sengaja.
+	if retryOf == "" {
+		err = meta.QueryRow(ctx, `
+			SELECT execution_id, version, status, error_code
+			FROM migration_history
+			WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3 AND action_type='up'
+			ORDER BY version DESC LIMIT 1
+		`, dbID, draftID, revision).Scan(&result.ExecutionID, &result.Version, &result.Status, &result.ErrorCode)
+		if err == nil {
+			return "", nil, true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, false, err
+		}
+	} else {
+		// Retry kedua atas parent yang sama mengembalikan child sebelumnya.
+		err = meta.QueryRow(ctx, `SELECT execution_id,version,status,error_code FROM migration_history
+			WHERE database_id=$1 AND retry_of_execution_id=$2`, dbID, retryOf).
+			Scan(&result.ExecutionID, &result.Version, &result.Status, &result.ErrorCode)
+		if err == nil {
+			return "", nil, true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, false, err
+		}
+		var parentStatus, parentAction, parentSQL string
+		err = meta.QueryRow(ctx, `SELECT status, action_type, sql FROM migration_history
+			WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3 AND execution_id=$4
+			FOR UPDATE`, dbID, draftID, revision, retryOf).Scan(&parentStatus, &parentAction, &parentSQL)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, false, errRetryInvalid
+		}
+		if err != nil {
+			return "", nil, false, err
+		}
+		if parentStatus != "failed" || parentAction != "up" || parentSQL != sqlText {
+			return "", nil, false, errRetryInvalid
+		}
+		// Receipt yang sudah committed mengalahkan metadata status=failed.
+		var committed bool
+		if err = targetTx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM _terserah.migration_receipts
+			WHERE execution_id=$1)`, retryOf).Scan(&committed); err != nil {
+			return "", nil, false, err
+		}
+		if committed {
+			return "", nil, false, errMigrationUnresolved
+		}
 	}
 
-	var hasPending bool
+	var hasPending, hasOtherRevision bool
 	err = meta.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM migration_history
 			WHERE database_id = $1 AND status IN ('running', 'unknown')
+		), EXISTS(
+			SELECT 1 FROM migration_history
+			WHERE database_id = $1 AND draft_id = $2
+			  AND draft_revision IS DISTINCT FROM $3
 		)
-	`, dbID).Scan(&hasPending)
+	`, dbID, draftID, revision).Scan(&hasPending, &hasOtherRevision)
 	if err != nil {
 		return "", nil, false, err
+	}
+	if hasOtherRevision {
+		return "", nil, false, errDraftLocked
 	}
 	if hasPending {
 		return "", nil, false, errConflict
 	}
-	if _, err = approval.EnsureApprovedTx(ctx, meta, dbID, draftID, revision, "up"); err != nil {
+	// Validasi posisi dilakukan setelah database_connections terkunci dan sebelum
+	// menambah attempt agar tidak ada dua migration aktif dengan definisi sama.
+	state, err := bacaPosisiMigration(ctx, meta, dbID)
+	if err != nil {
 		return "", nil, false, err
+	}
+	if err := state.cekUp(draftID); err != nil {
+		return "", nil, false, err
+	}
+	// Definisi lama yang belum mempunyai Down atau alasan irreversible harus
+	// dilengkapi sebelum attempt pertama; jangan menyimpan snapshot tidak valid.
+	if _, err = validasiDefinisiDraft(draftInput{
+		Title: title, SQL: sqlText, SQLDown: sqlDown,
+		Irreversible: irreversible, IrreversibleReason: irreversibleReason,
+	}); err != nil {
+		return "", nil, false, err
+	}
+	review, err := approval.EnsureApprovedTx(ctx, meta, dbID, draftID, revision, "up")
+	if err != nil {
+		return "", nil, false, err
+	}
+	// Review yang disetujui tidak boleh digunakan bila SQL Up berubah diam-diam.
+	if review.SQLSnapshot != sqlText {
+		return "", nil, false, approval.ErrNotApproved
 	}
 
 	parts, err := statements(sqlText)
@@ -198,16 +286,13 @@ func (s *Service) recordRunningAttempt(ctx context.Context, targetTx pgx.Tx, use
 	result.ExecutionID = hex.EncodeToString(token[:])
 	result.Status = "running"
 
-	err = meta.QueryRow(ctx, `
-		INSERT INTO migration_history (
-			database_id, draft_id, draft_revision, version, sql,
-			executed_by, status, execution_id, receipt_version
-		)
-		SELECT $1, $2, $3, COALESCE(MAX(version), 0) + 1, $4, $5, 'running', $6, 1
-		FROM migration_history
-		WHERE database_id = $1
-		RETURNING version
-	`, dbID, draftID, revision, sqlText, userID, result.ExecutionID).Scan(&result.Version)
+	if retryOf == "" {
+		result.Version, err = catatExecutionPertamaTx(ctx, meta, dbID, draftID, revision,
+			userID, result.ExecutionID, sqlText, sqlDown, irreversible, irreversibleReason)
+	} else {
+		result.Version, err = catatExecutionUlangTx(ctx, meta, dbID, draftID, revision,
+			userID, result.ExecutionID, retryOf, sqlText)
+	}
 	if err != nil {
 		return "", nil, false, err
 	}
@@ -274,13 +359,12 @@ func (s *Service) commitAndFinalizeLedger(ctx context.Context, targetTx pgx.Tx, 
 
 	cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err := s.db.Exec(cleanup, `
-		UPDATE migration_history
-		SET status = $1,
-		    error_code = $2,
-		    finished_at = CASE WHEN $1 IN ('success', 'failed') THEN now() ELSE NULL END
-		WHERE execution_id = $3 AND status IN ('running', 'unknown')
-	`, result.Status, result.ErrorCode, result.ExecutionID)
+	var finished *time.Time
+	if result.Status == "success" || result.Status == "failed" {
+		now := time.Now().UTC()
+		finished = &now
+	}
+	err := s.finalisasiAttempt(cleanup, *result, finished)
 	if err != nil {
 		result.Status = "unknown"
 		code := "ledger_unavailable"

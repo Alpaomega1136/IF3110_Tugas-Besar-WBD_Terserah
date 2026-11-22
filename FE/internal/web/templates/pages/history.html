@@ -50,6 +50,11 @@
                     </button>
                 </div>
 
+                <label class="history-hide-choice" for="history-hide-rollback">
+                    <input type="checkbox" id="history-hide-rollback">
+                    Hide rollback — sembunyikan pasangan eksekusi dan rollback yang berhasil
+                </label>
+                <p id="history-action-message" role="status" aria-live="polite" hidden></p>
                 <p id="history-list-status" role="status"
                    aria-live="polite" hidden></p>
                 <p id="history-list-error" class="error-message"
@@ -65,6 +70,7 @@
                             <tr>
                                 <th scope="col">Versi</th>
                                 <th scope="col">Status</th>
+                                <th scope="col">Operasi</th>
                                 <th scope="col">Draft ID / Revisi</th>
                                 <th scope="col">Execution ID</th>
                                 <th scope="col">Error Code</th>
@@ -116,6 +122,9 @@
                 <dl class="history-metadata" id="history-detail-content" hidden>
                     <dt>Versi</dt><dd id="history-detail-version"></dd>
                     <dt>Execution ID</dt><dd id="history-detail-execution-id"></dd>
+                    <dt>Operasi</dt><dd id="history-detail-action-type"></dd>
+                    <dt>Target Execution</dt><dd id="history-detail-target-id"></dd>
+                    <dt>Retry dari</dt><dd id="history-detail-retry-id"></dd>
                     <dt>Revisi Draft</dt><dd id="history-detail-draft-revision"></dd>
                     <dt>ID Draft</dt><dd id="history-detail-draft-id"></dd>
                     <dt>Status</dt><dd id="history-detail-result"></dd>
@@ -124,6 +133,21 @@
                     <dt>Selesai</dt><dd id="history-detail-finished"></dd>
                     <dt>Error Code</dt><dd id="history-detail-error-code"></dd>
                 </dl>
+
+                <section id="history-action-panel" class="history-action-panel" aria-labelledby="history-action-heading" hidden>
+                    <h3 id="history-action-heading">Tindakan Migration</h3>
+                    <p id="history-action-hint" class="form-help" role="status"></p>
+                    <div id="history-action-sql-section" hidden>
+                        <h4 id="history-action-sql-heading">SQL yang Akan Dijalankan</h4>
+                        <pre id="history-action-sql" class="draft-sql-preview"></pre>
+                    </div>
+                    <div class="draft-execution-actions">
+                        <button type="button" id="history-action-review" class="button-secondary" disabled>Ajukan Review</button>
+                        <button type="button" id="history-action-run" disabled>Jalankan Aksi</button>
+                    </div>
+                    <p id="history-action-status" role="status" aria-live="polite" hidden></p>
+                    <a id="history-action-review-link" class="workspace-button" href="#" hidden>Lihat Review Approval</a>
+                </section>
 
                 <div id="history-detail-sql-section" hidden>
                     <h3>SQL yang Dieksekusi</h3>
