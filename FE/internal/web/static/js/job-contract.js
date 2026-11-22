@@ -20,6 +20,7 @@ export function parseJob(job, databaseID) {
         BigInt(job.committed_rows) < BigInt(job.committed_batches) ||
         !date(job.created_at) || !date(job.available_at) ||
         ["started_at", "finished_at"].some((key) => job[key] != null && !date(job[key])) ||
+        (job.authorization_review_id != null && !positiveInt64(job.authorization_review_id)) ||
         (job.action_type === "resume" && (!positiveInt64(job.parent_job_id) || !job.target_execution_id)) ||
         (["rollback", "forward"].includes(job.action_type) && (job.execution_mode !== "normal" || !job.target_execution_id || job.parent_job_id != null))) {
         throw new Error("Detail job dari backend tidak valid. Muat ulang sebelum mengambil tindakan.");

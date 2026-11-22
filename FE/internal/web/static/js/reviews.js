@@ -244,7 +244,7 @@ async function enqueueApprovedReview() {
         const response = await authenticatedRequest(`${base}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ review_id: review.id }) });
         if (!reviewAlive()) return;
         const job = parseJobResponse(response, review.database_id);
-        if (job.review_id !== review.id) throw new Error("Identitas job belum dapat dipastikan. Periksa monitoring.");
+        if (job.review_id !== review.id && job.authorization_review_id !== review.id) throw new Error("Identitas job belum dapat dipastikan. Periksa monitoring.");
         navigateTo(`/databases/${encodeURIComponent(review.database_id)}/jobs/${encodeURIComponent(job.id)}`);
     } catch (error) {
         if (!reviewAlive()) return;

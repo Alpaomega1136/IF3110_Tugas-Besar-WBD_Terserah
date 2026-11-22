@@ -221,6 +221,19 @@ test("view user and cancelled confirmation never enqueue approved jobs", async (
     assert.equal(cancelled.$("review-enqueue").focused, true);
 });
 
+test("fresh retry approval opens the existing job with its original identity", async () => {
+    const review = { ...sampleReview, status: "approved", can_current_user_act: false };
+    const ui = await setupReviews({ access: "edit", custom: ({ url, method }) => {
+        if (url.endsWith(`/reviews/${reviewID}`)) return json({ review });
+        if (url.endsWith("/jobs") && method === "POST") return json({ job: {
+            id: "55", review_id: "1", authorization_review_id: reviewID, database_id: dbID, status: "retry_wait"
+        } }, 202);
+    } });
+    await ui.$("reviews-list-body").children[0].children[7].children[0].fire("click"); await tick();
+    await ui.$("review-enqueue").fire("click");
+    assert.equal(ui.redirects.at(-1), `/databases/${dbID}/jobs/55`);
+});
+
 test("uncertain enqueue response locks the action and never retries SQL automatically", async () => {
     const review = { ...sampleReview, status: "approved", can_current_user_act: false };
     const ui = await setupReviews({ access: "edit", custom: ({ url, method }) => {

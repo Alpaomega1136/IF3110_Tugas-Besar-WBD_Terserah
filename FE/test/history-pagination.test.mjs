@@ -331,6 +331,19 @@ test("pengguna View Only tidak bisa mengajukan review maupun eksekusi", async ()
     assert.equal(ui.calls.filter((c) => c.method === "POST").length, 0);
 });
 
+test("failed Up can request fresh approval without treating the failed execution as an Up target", async () => {
+    const failed = { ...first[0], status: "failed", action_type: "up" };
+    const ui = await setupHistory({ firstPage: [failed], more: false, custom: ({ url, method }) => {
+        if (url === `${api}/${failed.version}`) return json({ ...failed, sql: "SELECT 1" });
+        if (url.endsWith("/reviews") && method === "POST") return json({ review: { id: "14" } }, 201);
+    } });
+    await ui.$("history-list-body").children[0].children.at(-1).children[0].fire("click");
+    assert.equal(ui.$("history-action-review").hidden, false);
+    await ui.$("history-action-review").fire("click");
+    assert.deepEqual(ui.calls.find((c) => c.url.endsWith("/reviews") && c.method === "POST").body,
+        { draft_id: failed.draft_id, revision: failed.draft_revision, action_type: "up" });
+});
+
 test("posisi migration berubah sebelum eksekusi: POST harus ditolak di frontend", async () => {
     const up = { ...first[0], status: "success", action_type: "up" };
     let requests = 0;

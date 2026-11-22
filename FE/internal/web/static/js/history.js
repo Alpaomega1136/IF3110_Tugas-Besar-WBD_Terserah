@@ -426,7 +426,7 @@ async function refreshAction() {
         actionSQL.textContent = isRollback ? draft.sql_down : draft.sql;
         actionSQLSection.hidden = false;
         actionPanel.hidden = false;
-        actionReview.hidden = selectedAction.type.startsWith("retry_");
+        actionReview.hidden = false;
         actionReview.disabled = busy || actionReview.hidden;
         actionRun.disabled = busy;
         actionRun.textContent = selectedAction.label;
@@ -442,7 +442,7 @@ async function refreshAction() {
 }
 
 async function submitActionReview() {
-    if (busy || !canEdit || !selectedHistory || !selectedAction || selectedAction.type.startsWith("retry_")) return;
+    if (busy || !canEdit || !selectedHistory || !selectedAction) return;
     const detailEntry = selectedHistory, action = selectedAction;
     if (!(await confirmAction({
         title: `Ajukan Review ${action.label}?`,
@@ -458,7 +458,7 @@ async function submitActionReview() {
         const result = await authenticatedRequest(`${base}/reviews`, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ draft_id: detailEntry.draft_id, revision: detailEntry.draft_revision,
-                action_type: action.type, target_execution_id: action.target })
+                action_type: action.type.replace("retry_", ""), ...(action.type === "retry_up" ? {} : { target_execution_id: action.target }) })
         });
         if (!positiveInt64(result?.review?.id)) throw new Error("Respons pengajuan review tidak valid.");
         showMessage(actionStatus, `Review #${result.review.id} dibuat. Tunggu persetujuan semua leader sebelum eksekusi.`);

@@ -161,7 +161,7 @@ function renderDetail(detail) {
     text("jobs-detail-times", `${formatDate(j.started_at)} / ${formatDate(j.finished_at)}`);
     text("jobs-detail-error", j.error_code || "-");
     text("jobs-feedback", `${executionFeedback(j.status).message} Batch committed: ${j.committed_batches}; row committed: ${j.committed_rows}.`);
-    byId("jobs-detail-review").href = reviewPath(j.review_id);
+    byId("jobs-detail-review").href = reviewPath(j.authorization_review_id ?? j.review_id);
     reference("jobs-detail-parent", "jobs-detail-no-parent", j.parent_job_id);
     reference("jobs-detail-child", "jobs-detail-no-child", j.resumed_by_job_id);
     syncRows(attemptsBody, attemptRows, attempts, (a) => a.execution_id, 6, (cells, a) => {
