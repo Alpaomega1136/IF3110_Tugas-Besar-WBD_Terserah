@@ -358,13 +358,12 @@ func (s *Service) commitAndFinalizeLedger(ctx context.Context, targetTx pgx.Tx, 
 
 	cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err := s.db.Exec(cleanup, `
-		UPDATE migration_history
-		SET status = $1,
-		    error_code = $2,
-		    finished_at = CASE WHEN $1 IN ('success', 'failed') THEN now() ELSE NULL END
-		WHERE execution_id = $3 AND status IN ('running', 'unknown')
-	`, result.Status, result.ErrorCode, result.ExecutionID)
+	var finished *time.Time
+	if result.Status == "success" || result.Status == "failed" {
+		now := time.Now().UTC()
+		finished = &now
+	}
+	err := s.finalisasiAttempt(cleanup, *result, finished)
 	if err != nil {
 		result.Status = "unknown"
 		code := "ledger_unavailable"

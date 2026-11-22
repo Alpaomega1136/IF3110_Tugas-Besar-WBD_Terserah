@@ -20,6 +20,8 @@ func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("GET /api/v1/databases/{id}/migrations", sessions.Require(s.history))
 	mux.HandleFunc("GET /api/v1/databases/{id}/migrations/{version}", sessions.Require(s.history))
 	mux.HandleFunc("GET /api/v1/databases/{id}/migration-executions/{executionID}", sessions.Require(s.executionDetail))
+	mux.HandleFunc("POST /api/v1/databases/{id}/migration-executions/{executionID}/rollback", sessions.Require(s.rollbackExecution))
+	mux.HandleFunc("POST /api/v1/databases/{id}/migration-executions/{executionID}/forward", sessions.Require(s.forwardExecution))
 	mux.HandleFunc("GET /api/v1/databases/{id}/migration-state", sessions.Require(s.state))
 	mux.HandleFunc("POST /api/v1/databases/{id}/migrations/reconcile", sessions.Require(s.reconcile))
 
@@ -66,6 +68,8 @@ func fail(w http.ResponseWriter, err error) {
 		errors.Is(err, errMigrationUnresolved), errors.Is(err, errMigrationMustForward),
 		errors.Is(err, errMigrationStateInvalid):
 		httpx.Error(w, http.StatusConflict, "migration_state_conflict", err.Error())
+	case errors.Is(err, errActionRetryInvalid):
+		httpx.Error(w, http.StatusConflict, "retry_invalid", err.Error())
 	case errors.Is(err, errRetryInvalid):
 		httpx.Error(w, http.StatusConflict, "retry_invalid", err.Error())
 	case errors.Is(err, errConflict):
@@ -215,6 +219,46 @@ func (s *Service) retry(w http.ResponseWriter, r *http.Request) {
 	}
 	code := http.StatusOK
 	if result.Status == "running" || result.Status == "unknown" {
+		code = http.StatusAccepted
+	}
+	httpx.JSON(w, code, result)
+}
+
+// rollbackExecution dan forwardExecution memakai execution ID sebagai target immutable.
+func (s *Service) rollbackExecution(w http.ResponseWriter, r *http.Request) {
+	s.executeAction(w, r, "rollback")
+}
+
+func (s *Service) forwardExecution(w http.ResponseWriter, r *http.Request) {
+	s.executeAction(w, r, "forward")
+}
+
+func (s *Service) executeAction(w http.ResponseWriter, r *http.Request, action string) {
+	p, dbID, err := s.authorize(r, true)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	targetID := r.PathValue("executionID")
+	if targetID == "" || len(targetID) > 128 {
+		fail(w, connections.ErrInvalid)
+		return
+	}
+	var in struct {
+		FailedExecutionID string `json:"failed_execution_id"`
+	}
+	if r.ContentLength != 0 && !httpx.Decode(w, r, &in) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Second)
+	defer cancel()
+	result, err := s.runAction(ctx, p, dbID, action, targetID, in.FailedExecutionID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	code := http.StatusOK
+	if result.Status == "unknown" || result.Status == "running" {
 		code = http.StatusAccepted
 	}
 	httpx.JSON(w, code, result)

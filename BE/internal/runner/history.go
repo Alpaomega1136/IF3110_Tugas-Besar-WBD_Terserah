@@ -231,11 +231,14 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 		if err != nil {
 			return nil, err
 		}
-		_, err = meta.Exec(ctx, `
-			UPDATE migration_history
-			SET status = $1, error_code = $2, finished_at = $3
-			WHERE database_id = $4 AND version = $5 AND status IN ('running', 'unknown')
-		`, out.Status, out.ErrorCode, finished, dbID, item.version)
+		if item.execution == nil {
+			// Riwayat legacy tanpa execution ID tetap dapat direkonsiliasi.
+			_, err = meta.Exec(ctx, `UPDATE migration_history SET status=$1,error_code=$2,finished_at=$3
+				WHERE database_id=$4 AND version=$5 AND status IN ('running','unknown')`,
+				out.Status, out.ErrorCode, finished, dbID, item.version)
+		} else {
+			err = simpanHasilAttemptTx(ctx, meta, out, finished)
+		}
 		if err != nil {
 			return nil, err
 		}
