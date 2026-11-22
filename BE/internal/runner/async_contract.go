@@ -160,7 +160,7 @@ func prepareAsyncOperation(ctx context.Context, tx pgx.Tx, in AsyncOperationRequ
 			}
 			plan.SQL = *down
 		} else {
-			if targetAction != "rollback" {
+			if targetAction != "rollback" && targetAction != "compensate" {
 				return AsyncOperationPlan{}, errMigrationOrder
 			}
 			if err = state.cekForward(in.TargetExecutionID); err != nil {

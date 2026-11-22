@@ -25,10 +25,12 @@ func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("GET /api/v1/databases/{id}/migration-executions/{executionID}", sessions.Require(s.executionDetail))
 	mux.HandleFunc("POST /api/v1/databases/{id}/migration-executions/{executionID}/rollback", sessions.Require(s.rollbackExecution))
 	mux.HandleFunc("POST /api/v1/databases/{id}/migration-executions/{executionID}/forward", sessions.Require(s.forwardExecution))
+	mux.HandleFunc("POST /api/v1/databases/{id}/migration-executions/{executionID}/compensate", sessions.Require(func(w http.ResponseWriter, r *http.Request) { s.executeAction(w, r, "compensate") }))
 	mux.HandleFunc("GET /api/v1/databases/{id}/migration-state", sessions.Require(s.state))
 	mux.HandleFunc("POST /api/v1/databases/{id}/migrations/reconcile", sessions.Require(s.reconcile))
 
 	base := "/api/v1/databases/{id}/drafts"
+	mux.HandleFunc("POST "+base+"/batch-down-preview", sessions.Require(s.batchDownPreview))
 	mux.HandleFunc("GET "+base, sessions.Require(s.listDrafts))
 	mux.HandleFunc("POST "+base, sessions.Require(s.draft))
 	mux.HandleFunc("GET "+base+"/{draftID}", sessions.Require(s.draft))
@@ -36,6 +38,30 @@ func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("POST "+base+"/{draftID}/execute", sessions.Require(s.execute))
 	mux.HandleFunc("POST "+base+"/{draftID}/retry", sessions.Require(s.retry))
 	mux.HandleFunc("POST "+base+"/{draftID}/explain", sessions.Require(s.explain))
+}
+
+func (s *Service) batchDownPreview(w http.ResponseWriter, r *http.Request) {
+	if _, _, err := s.authorize(r, true); err != nil {
+		fail(w, err)
+		return
+	}
+	var in struct {
+		SQL string `json:"sql"`
+	}
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	config, err := batch.Parse(in.SQL)
+	if err != nil || config == nil {
+		fail(w, errSQL)
+		return
+	}
+	down, err := batch.DownSQL(*config)
+	if err != nil {
+		fail(w, errSQL)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]string{"sql_down": down})
 }
 
 func (s *Service) authorize(r *http.Request, write bool) (auth.Principal, int64, error) {

@@ -32,6 +32,7 @@ type History struct {
 	TargetExecutionID  *string    `json:"target_execution_id"`
 	RetryOfExecutionID *string    `json:"retry_of_execution_id"`
 	JobID              *int64     `json:"job_id,string,omitempty"`
+	ExecutionMode      string     `json:"execution_mode"`
 }
 
 func (s *Service) listHistoryPage(ctx context.Context, dbID, before int64, limit int, hideRollback bool) ([]History, bool, *string, error) {
@@ -91,7 +92,7 @@ func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64,
 			h.error_code,
 			CASE WHEN pair.rollback_execution_id IS NOT NULL AND h.action_type = 'up' THEN 'rollback' ELSE h.action_type END,
 			h.target_execution_id,
-			h.retry_of_execution_id,h.job_id
+			h.retry_of_execution_id,h.job_id,CASE WHEN h.batch_root_execution_id IS NULL THEN 'normal' ELSE 'batch' END
 		FROM migration_history h
 		JOIN users u ON u.id = h.executed_by
 		LEFT JOIN migration_rollback_pairs pair ON pair.database_id = h.database_id
@@ -133,6 +134,7 @@ func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64,
 			&item.TargetExecutionID,
 			&item.RetryOfExecutionID,
 			&item.JobID,
+			&item.ExecutionMode,
 		)
 		if err != nil {
 			return nil, err
@@ -143,13 +145,15 @@ func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64,
 }
 
 type pendingExecution struct {
-	execution *string
-	version   int64
-	sql       string
-	actor     int64
-	format    int
-	isBatch   bool
-	root      string
+	execution        *string
+	version          int64
+	sql              string
+	actor            int64
+	format           int
+	isBatch          bool
+	root             string
+	compensationRoot string
+	action           string
 }
 
 // reconcilePending checks `_terserah.migration_receipts` on the target DB for any
@@ -214,9 +218,9 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	}
 	rows, err := meta.Query(ctx, `
 		SELECT h.execution_id,h.version,h.sql,h.executed_by,h.receipt_version,
- EXISTS(SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id WHERE a.execution_id=h.execution_id AND j.execution_mode='batch'),COALESCE(h.batch_root_execution_id,'')
+ EXISTS(SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id WHERE a.execution_id=h.execution_id AND j.execution_mode='batch'),COALESCE(h.batch_root_execution_id,''),h.action_type,COALESCE((SELECT compensation_root_execution_id FROM migration_jobs WHERE id=h.job_id),'')
 		FROM migration_history h
-		WHERE h.database_id = $1 AND h.status IN ('running', 'unknown','partial')
+		WHERE h.database_id = $1 AND h.status IN ('running', 'unknown','partial','partially_reverted')
  AND NOT EXISTS(SELECT 1 FROM migration_job_attempts sealed WHERE sealed.execution_id=h.execution_id AND sealed.retry_scheduled)
 		ORDER BY h.version
 		LIMIT 100
@@ -228,7 +232,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	items := []pendingExecution{}
 	for rows.Next() {
 		var item pendingExecution
-		if err = rows.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format, &item.isBatch, &item.root); err != nil {
+		if err = rows.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format, &item.isBatch, &item.root, &item.action, &item.compensationRoot); err != nil {
 			break
 		}
 		items = append(items, item)
@@ -246,7 +250,9 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 		var out Result
 		var finished *time.Time
 		var progress batch.Checkpoint
-		if item.isBatch {
+		if item.action == "compensate" {
+			out, finished, progress, err = s.verifyCompensationPending(ctx, tx, dbID, item, item.root, item.compensationRoot)
+		} else if item.isBatch {
 			out, finished, progress, err = s.verifyBatchAttempt(ctx, tx, dbID, item, item.root)
 		} else {
 			out, finished, err = s.verifyPendingAttempt(ctx, tx, dbID, item)

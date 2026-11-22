@@ -413,7 +413,7 @@ func (s *Service) finishBatch(ctx context.Context, result Result, status, code s
 	}
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	updated, err := s.db.Exec(cleanup, `UPDATE migration_history SET status=$1,error_code=NULLIF($2,''),finished_at=CASE WHEN $1 IN ('success','failed') THEN clock_timestamp() ELSE NULL END WHERE execution_id=$3 AND status IN ('running','unknown','partial') AND EXISTS(SELECT 1 FROM migration_job_attempts a JOIN migration_jobs j ON j.id=a.job_id WHERE a.execution_id=$3 AND a.attempt_no=j.attempt_count AND NOT a.retry_scheduled AND j.status='running' AND j.lease_expires_at>clock_timestamp())`, status, code, result.ExecutionID)
+	updated, err := s.db.Exec(cleanup, `UPDATE migration_history SET status=$1,error_code=NULLIF($2,''),finished_at=CASE WHEN $1 IN ('success','failed') THEN clock_timestamp() ELSE NULL END WHERE execution_id=$3 AND status IN ('running','unknown','partial','partially_reverted') AND EXISTS(SELECT 1 FROM migration_job_attempts a JOIN migration_jobs j ON j.id=a.job_id WHERE a.execution_id=$3 AND a.attempt_no=j.attempt_count AND NOT a.retry_scheduled AND j.status='running' AND j.lease_expires_at>clock_timestamp())`, status, code, result.ExecutionID)
 	if err != nil || updated.RowsAffected() != 1 {
 		result.Status = "unknown"
 		code = "ledger_unavailable"

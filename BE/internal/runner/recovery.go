@@ -66,7 +66,9 @@ func (s *Service) RecoverJob(ctx context.Context, r *jobs.Recovery) error {
 	item := pendingExecution{execution: &r.ExecutionID, version: r.Version, sql: r.SQL, actor: r.Job.RequestedBy, format: 1, isBatch: r.Job.ExecutionMode == "batch"}
 	var out Result
 	var progress batch.Checkpoint
-	if item.isBatch {
+	if r.Job.ActionType == "compensate" {
+		out, _, progress, err = s.verifyCompensationPending(ctx, tx, r.Job.DatabaseID, item, r.RootExecutionID, r.CompensationRoot)
+	} else if item.isBatch {
 		out, _, progress, err = s.verifyBatchAttempt(ctx, tx, r.Job.DatabaseID, item, r.RootExecutionID)
 	} else if r.Version == 0 {
 		var exists bool
@@ -88,7 +90,7 @@ func (s *Service) RecoverJob(ctx context.Context, r *jobs.Recovery) error {
 		}
 		return s.deferRecovery(ctx, r, code, 30*time.Second)
 	}
-	if (r.HistoryStatus == jobs.Success && out.Status != "success") || ((r.HistoryStatus == jobs.Failed || r.HistoryStatus == jobs.Partial) && out.Status == "success") {
+	if (r.HistoryStatus == jobs.Success && out.Status != "success") || ((r.HistoryStatus == jobs.Failed || r.HistoryStatus == jobs.Partial || r.HistoryStatus == jobs.PartiallyReverted) && out.Status == "success") {
 		return s.deferRecovery(ctx, r, "receipt_mismatch", 30*time.Second)
 	}
 	cause := ""

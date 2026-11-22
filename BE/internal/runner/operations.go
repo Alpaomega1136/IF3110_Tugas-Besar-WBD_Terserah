@@ -28,7 +28,7 @@ func simpanHasilAttemptTx(ctx context.Context, tx pgx.Tx, result Result, finishe
 		// Reconciliation lain boleh saja telah menyimpan hasil yang sama.
 		return nil
 	}
-	if prior != "running" && prior != "unknown" && prior != "partial" {
+	if prior != "running" && prior != "unknown" && prior != "partial" && prior != "partially_reverted" {
 		return errConflict
 	}
 	_, err := tx.Exec(ctx, `UPDATE migration_history SET status=$1,error_code=$2,finished_at=$3

@@ -27,9 +27,10 @@ func DownSQL(c Config) (string, error) {
 	}
 	sql := DownPrefix + string(data) + "\nUPDATE " + c.Relation() + " AS target SET " + strings.Join(sets, ", ") + `
 FROM (SELECT pg_catalog.jsonb_populate_record(NULL::` + c.Relation() + `, image->'before') AS row_before,
- image->'after' AS row_after FROM pg_catalog.jsonb_array_elements($1::jsonb) AS image) AS saved
+ image->'before' AS original_before, image->'after' AS row_after FROM pg_catalog.jsonb_array_elements($1::jsonb) AS image) AS saved
 WHERE target.` + key + ` = (saved.row_before).` + key + ` AND pg_catalog.to_jsonb(target) = saved.row_after
-RETURNING target.` + key + `, CASE WHEN pg_catalog.octet_length(pg_catalog.to_jsonb(target)::text)<=8388608 THEN pg_catalog.to_jsonb(target) ELSE NULL END`
+RETURNING target.` + key + `, CASE WHEN pg_catalog.octet_length(pg_catalog.to_jsonb(target)::text)<=8388608 THEN pg_catalog.to_jsonb(target) ELSE NULL END,
+ pg_catalog.to_jsonb(target) = saved.original_before`
 	if len(sql) > 48*1024 {
 		return "", ErrInvalid
 	}

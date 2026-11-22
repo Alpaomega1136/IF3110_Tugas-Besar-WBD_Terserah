@@ -52,6 +52,9 @@ func (s *Service) ExecuteJob(ctx context.Context, c *jobs.Claim) (Result, error)
 	}
 	lockSpan.End()
 	telemetry.Event(ctx, "target_lock_acquired", "job_id", c.Job.ID, "database_id", c.Job.DatabaseID, "wait_ms", time.Since(started).Milliseconds())
+	if c.Job.ActionType == "compensate" {
+		return s.runCompensation(ctx, pool, conn, c)
+	}
 	if c.Job.ExecutionMode == "batch" {
 		return s.runBatch(ctx, pool, conn, c)
 	}
@@ -101,6 +104,9 @@ func (s *Service) preflightFailure(ctx context.Context, c *jobs.Claim, cause err
 	if err != nil {
 		return result, err
 	}
+	if c.Job.ActionType == "compensate" {
+		return s.finishBatch(cleanup, result, "partially_reverted", executionCode(cause)), nil
+	}
 	s.commitAndFinalizeLedger(cleanup, nil, cause, &result)
 	return result, nil
 }
@@ -120,7 +126,7 @@ func (s *Service) reserveJob(ctx context.Context, c *jobs.Claim) (Result, error)
 		return result, err
 	}
 	var pending bool
-	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history h WHERE database_id=$1 AND status IN ('running','unknown','partial') AND execution_id IS DISTINCT FROM $2
+	err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_history h WHERE database_id=$1 AND status IN ('running','unknown','partial','partially_reverted') AND execution_id IS DISTINCT FROM $2
  AND NOT EXISTS(SELECT 1 FROM migration_job_attempts a WHERE a.execution_id=h.execution_id AND a.retry_scheduled))`, c.Job.DatabaseID, c.ExecutionID).Scan(&pending)
 	if err != nil {
 		return result, err
@@ -230,6 +236,9 @@ func validateApprovedSnapshot(ctx context.Context, tx pgx.Tx, job jobs.Job, sqlS
 	}
 	if !allowed {
 		return connections.ErrForbidden
+	}
+	if job.ActionType == "compensate" {
+		return validateCompensationSnapshot(ctx, tx, job, sqlSnapshot)
 	}
 	if job.ActionType == "resume" {
 		if err = jobs.ValidateResumeTx(ctx, tx, job, sqlSnapshot); err != nil {
