@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"terserah/backend/internal/batch"
 )
 
 const draftColumns = "d.id, d.database_id, d.title, d.sql, d.sql_down, d.irreversible, d.irreversible_reason, d.revision, d.created_by, u.username, d.created_at, d.updated_at, EXISTS (SELECT 1 FROM migration_history h WHERE h.database_id=d.database_id AND h.draft_id=d.id)"
@@ -44,6 +45,21 @@ func validasiDefinisiDraft(in draftInput) (draftInput, error) {
 	}
 	if in.SQLDown == nil {
 		return in, fmt.Errorf("%w: SQL Down wajib diisi untuk migration reversible", errDraftDefinition)
+	}
+	config, _ := batch.Parse(in.SQL)
+	down, downErr := batch.ParseDown(*in.SQLDown)
+	if downErr != nil {
+		return in, fmt.Errorf("%w: SQL Down batch tidak valid", errDraftDefinition)
+	}
+	if config != nil {
+		expected, err := batch.DownSQL(*config)
+		if err != nil || down == nil || strings.TrimSpace(*in.SQLDown) != expected {
+			return in, fmt.Errorf("%w: batch reversible memerlukan SQL Down pemulihan yang sesuai konfigurasi Up", errDraftDefinition)
+		}
+		// Only this exact generated statement may bind recovery parameters.
+		return in, nil
+	} else if down != nil {
+		return in, fmt.Errorf("%w: SQL Down pemulihan batch hanya untuk Up batch", errDraftDefinition)
 	}
 	if _, err := statements(*in.SQLDown); err != nil {
 		return in, fmt.Errorf("%w: SQL Down kosong, terlalu panjang, atau tidak didukung", errDraftDefinition)

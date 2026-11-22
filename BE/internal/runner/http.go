@@ -228,6 +228,9 @@ func (s *Service) execute(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateDraftSQL(sql string) error {
+	if down, err := batch.ParseDown(sql); err != nil || down != nil {
+		return errSQL
+	}
 	c, err := batch.Parse(sql)
 	if err != nil {
 		return errSQL
