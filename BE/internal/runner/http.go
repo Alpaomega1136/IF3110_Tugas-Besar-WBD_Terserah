@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -62,6 +61,8 @@ func fail(w http.ResponseWriter, err error) {
 		httpx.Error(w, http.StatusConflict, "execution_conflict", "Reload draft or resolve the pending execution before retrying")
 	case errors.Is(err, approval.ErrNotApproved), errors.Is(err, approval.ErrLeaderMissing):
 		httpx.Error(w, http.StatusConflict, "approval_incomplete", "Approval from current group leaders is required before execution")
+	case errors.Is(err, errDraftDefinition):
+		httpx.Error(w, http.StatusBadRequest, "invalid_migration_definition", err.Error())
 	case errors.Is(err, connections.ErrInvalid), errors.Is(err, errSQL):
 		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid ID, revision, title or unsupported SQL")
 	case errors.Is(err, errHistorySetup):
@@ -123,22 +124,12 @@ func (s *Service) draft(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &in) {
 		return
 	}
-	in.Title = strings.TrimSpace(in.Title)
-	if len(in.Title) < 1 || len(in.Title) > 200 || strings.ContainsRune(in.Title, 0) {
-		fail(w, connections.ErrInvalid)
-		return
-	}
-	if _, err := statements(in.SQL); err != nil {
-		fail(w, err)
-		return
-	}
-
 	if r.Method == http.MethodPost {
 		if in.Revision != 0 {
 			fail(w, connections.ErrInvalid)
 			return
 		}
-		d, err := s.createDraft(r.Context(), dbID, p.ID, in.Title, in.SQL)
+		d, err := s.createDraft(r.Context(), dbID, p.ID, in)
 		if err != nil {
 			fail(w, err)
 			return
@@ -151,7 +142,7 @@ func (s *Service) draft(w http.ResponseWriter, r *http.Request) {
 		fail(w, connections.ErrInvalid)
 		return
 	}
-	d, err := s.updateDraft(r.Context(), dbID, draftID, in.Revision, in.Title, in.SQL)
+	d, err := s.updateDraft(r.Context(), dbID, draftID, in)
 	if err != nil {
 		fail(w, err)
 		return

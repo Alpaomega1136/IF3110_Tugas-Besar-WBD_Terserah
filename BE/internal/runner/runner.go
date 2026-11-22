@@ -28,21 +28,27 @@ func New(db *pgxpool.Pool, targets *connections.Service, key []byte) *Service {
 }
 
 type Draft struct {
-	ID                int64     `json:"id,string"`
-	DatabaseID        int64     `json:"database_id,string"`
-	Title             string    `json:"title"`
-	SQL               string    `json:"sql"`
-	Revision          int64     `json:"revision,string"`
-	CreatedBy         int64     `json:"created_by,string"`
-	CreatedByUsername string    `json:"created_by_username"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                 int64     `json:"id,string"`
+	DatabaseID         int64     `json:"database_id,string"`
+	Title              string    `json:"title"`
+	SQL                string    `json:"sql"`
+	SQLDown            *string   `json:"sql_down"`
+	Irreversible       bool      `json:"irreversible"`
+	IrreversibleReason *string   `json:"irreversible_reason"`
+	Revision           int64     `json:"revision,string"`
+	CreatedBy          int64     `json:"created_by,string"`
+	CreatedByUsername  string    `json:"created_by_username"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type draftInput struct {
-	Title    string `json:"title"`
-	SQL      string `json:"sql"`
-	Revision int64  `json:"revision,string"`
+	Title              string  `json:"title"`
+	SQL                string  `json:"sql"`
+	SQLDown            *string `json:"sql_down"`
+	Irreversible       bool    `json:"irreversible"`
+	IrreversibleReason *string `json:"irreversible_reason"`
+	Revision           int64   `json:"revision,string"`
 }
 
 type Result struct {
