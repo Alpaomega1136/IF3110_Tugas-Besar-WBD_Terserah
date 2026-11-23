@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { Element, tick } from "./mock-dom.mjs";
 import { clearAuthState } from "../internal/web/static/js/auth.js";
-import { parseExecutionResult, executionFeedback, executeErrorMessage } from "../internal/web/static/js/execution.js";
+import { parseExecutionResult, parseJobResponse, executionFeedback, executeErrorMessage } from "../internal/web/static/js/execution.js";
 
 const databaseID = "9007199254740993";
 const draftID = "9007199254740995";
@@ -35,7 +35,7 @@ async function setup({ access = "edit", selected = true, confirm = true, backend
         "draft-detail-updated", "draft-detail-sql", "draft-detail-down", "draft-detail-down-section", "draft-detail-irreversible", "draft-execution", "draft-execute", "draft-reload",
         "draft-explain", "draft-explain-message", "draft-explain-result",
         "draft-execution-revision", "draft-execution-state", "draft-execution-message",
-        "draft-execution-result", "draft-result-status", "draft-result-version", "draft-result-id", "draft-result-error"
+        "draft-execution-result", "draft-result-status", "draft-result-version", "draft-result-id", "draft-result-error", "draft-job-link"
     ];
     const elements = Object.fromEntries(ids.map((id) => [id, new Element()]));
     const $ = (id) => elements[id];
@@ -85,6 +85,136 @@ async function setup({ access = "edit", selected = true, confirm = true, backend
 }
 
 const executeCalls = (ui) => ui.calls.filter((call) => call.url.endsWith("/execute"));
+
+test("queued jobs keep string IDs and do not claim a committed migration", () => {
+    const job = { id: "9007199254740999", database_id: databaseID, status: "queued", error_code: null };
+    assert.deepEqual(parseJobResponse({ job }, databaseID), job);
+    for (const changed of [{ id: 9007199254740999 }, { database_id: "99" }, { status: "committed" }, { id: "0" }]) {
+        assert.throws(() => parseJobResponse({ job: { ...job, ...changed } }, databaseID), /tidak valid/);
+    }
+    assert.doesNotMatch(executionFeedback("queued").message, /berhasil di-commit/);
+});
+
+test("Execute submits once and polls the job until the worker commits", async () => {
+    let polls = 0;
+    const job = { id: "9007199254740999", database_id: databaseID, status: "queued", error_code: null };
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job, replayed: false }, 202);
+        if (url.endsWith(`/jobs/${job.id}`)) {
+            polls++;
+            return reply({ job: { ...job, status: "success" }, attempts: [{ execution_id: "worker-execution", version: "9" }] });
+        }
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(executeCalls(ui).length, 1);
+    assert.equal(polls, 1);
+    assert.equal(ui.$("draft-result-id").textContent, "worker-execution");
+    assert.equal(ui.$("draft-job-link").href, `/databases/${databaseID}/jobs/${job.id}`);
+    assert.match(ui.$("draft-execution-message").textContent, /berhasil di-commit/);
+});
+
+test("job polling follows recovery and backoff without submitting SQL again", async (t) => {
+    const timer = globalThis.setTimeout;
+    t.mock.method(globalThis, "setTimeout", (fn, delay, ...args) => timer(fn, delay === 1000 ? 0 : delay, ...args));
+    const job = { id: "12", database_id: databaseID, status: "queued", attempt_count: 1, max_attempts: 3,
+        available_at: "2026-11-21T10:00:00Z", committed_batches: "1", committed_rows: "2" };
+    for (const status of ["recovering", "retry_wait"]) {
+        assert.equal(parseJobResponse({ job: { ...job, status } }, databaseID).status, status);
+        assert.doesNotMatch(executionFeedback(status).message, /berhasil di-commit|transaksi telah di-rollback/);
+    }
+    for (const changed of [{ available_at: "bad" }, { available_at: 1 }, { attempt_count: -1 }, { max_attempts: 0 }]) {
+        assert.throws(() => parseJobResponse({ job: { ...job, ...changed } }, databaseID), /tidak valid/);
+    }
+    let polls = 0;
+    const states = ["unknown", "recovering", "retry_wait", "running", "success"];
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job }, 202);
+        if (url.endsWith("/jobs/12")) {
+            const status = states[polls++];
+            return reply({ job: { ...job, status, attempt_count: polls > 3 ? 2 : 1 },
+                attempts: [{ execution_id: "retry-execution", version: "10" }] });
+        }
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(polls, 5);
+    assert.equal(executeCalls(ui).length, 1);
+    assert.equal(ui.$("draft-result-id").textContent, "retry-execution");
+    assert.match(ui.$("draft-execution-message").textContent, /berhasil di-commit/);
+});
+
+test("job polling failure preserves uncertainty and never resubmits SQL", async () => {
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job: { id: "12", database_id: databaseID, status: "queued" } }, 202);
+        if (url.endsWith("/jobs/12")) return apiError(503, "jobs_unavailable");
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(executeCalls(ui).length, 1);
+    assert.doesNotMatch(ui.$("draft-execution-message").textContent, /berhasil di-commit/);
+    assert.match(ui.$("draft-execution-message").textContent, /Jangan retry otomatis/);
+});
+
+test("replayed Execute preserves a resumed job handoff instead of claiming SQL success", async () => {
+    const job = { id: "12", database_id: databaseID, status: "resumed", resumed_by_job_id: "19",
+        committed_batches: "1", committed_rows: "2" };
+    assert.equal(parseJobResponse({ job }, databaseID).resumed_by_job_id, "19");
+    for (const changed of [{ resumed_by_job_id: null }, { resumed_by_job_id: 19 }, { parent_job_id: "0" }, { target_execution_id: 3 }]) {
+        assert.throws(() => parseJobResponse({ job: { ...job, ...changed } }, databaseID), /tidak valid/);
+    }
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job, replayed: true });
+        if (url.endsWith("/jobs/12")) return reply({ job, attempts: [{ execution_id: "old-partial", version: "9" }] });
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(executeCalls(ui).length, 1);
+    assert.equal(ui.$("draft-result-status").textContent, "resumed");
+    assert.equal(ui.$("draft-job-link").href, `/databases/${databaseID}/jobs/19`);
+    assert.match(ui.$("draft-execution-message").textContent, /Job resume: 19/);
+    assert.doesNotMatch(ui.$("draft-execution-message").textContent, /berhasil di-commit|tidak valid|transaksi telah di-rollback/);
+});
+
+test("partial batch keeps exact committed counts and never claims a full rollback", async () => {
+    const job = { id: "12", database_id: databaseID, status: "partial", error_code: "23514",
+        committed_batches: "2", committed_rows: "9007199254740993" };
+    assert.equal(parseJobResponse({ job }, databaseID).status, "partial");
+    for (const bad of [-1, "-1", "9223372036854775808", "1.5"]) {
+        assert.throws(() => parseJobResponse({ job: { ...job, committed_rows: bad } }, databaseID), /tidak valid/);
+    }
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job }, 200);
+        if (url.endsWith("/jobs/12")) return reply({ job, attempts: [{ execution_id: "partial-attempt", version: "9" }] });
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(executeCalls(ui).length, 1);
+    assert.equal(ui.$("draft-result-status").textContent, "partial");
+    assert.match(ui.$("draft-execution-message").textContent, /sebelumnya tetap tersimpan/);
+    assert.match(ui.$("draft-execution-message").textContent, /9007199254740993/);
+    assert.doesNotMatch(ui.$("draft-execution-message").textContent, /berhasil di-commit|transaksi telah di-rollback/);
+});
+
+test("a job finishing on the last poll still displays the committed result", async (t) => {
+    const timer = globalThis.setTimeout;
+    t.mock.method(globalThis, "setTimeout", (fn, delay, ...args) => timer(fn, delay === 1000 ? 0 : delay, ...args));
+    let polls = 0;
+    const job = { id: "12", database_id: databaseID, status: "queued", error_code: null };
+    const ui = await setup({ backend: ({ url }) => {
+        if (url.endsWith("/execute")) return reply({ job }, 202);
+        if (url.endsWith("/jobs/12")) {
+            polls++;
+            return reply({ job: { ...job, status: polls === 30 ? "success" : "running" },
+                attempts: [{ execution_id: "last-poll-execution", version: "9" }] });
+        }
+        return undefined;
+    } });
+    await ui.$("draft-execute").fire("click");
+    assert.equal(polls, 30);
+    assert.equal(executeCalls(ui).length, 1);
+    assert.match(ui.$("draft-execution-message").textContent, /berhasil di-commit/);
+});
 
 test("BE2 Result requires status, string version, execution ID and valid error_code", () => {
     const valid = { execution_id: "id-1", version: "9007199254740997", status: "unknown", error_code: null };

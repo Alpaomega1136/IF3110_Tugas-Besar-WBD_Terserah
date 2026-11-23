@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/policy"
+	"terserah/backend/internal/telemetry"
 )
 
 // PostgresStore implements Store against the platform metadata database.
@@ -87,7 +88,7 @@ func (s *PostgresStore) UpdateUser(ctx context.Context, id int64, params UpdateU
 	if err != nil {
 		return UserView{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	// Acquire the shared admin-count lock before locking user rows so concurrent
 	// deactivations cannot both observe another active admin and remove the last one.
@@ -276,7 +277,7 @@ func (s *PostgresStore) SetGroupLeader(ctx context.Context, groupID, userID int6
 	if err != nil {
 		return GroupView{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	var g GroupView
 	err = tx.QueryRow(ctx, `
@@ -347,7 +348,7 @@ func (s *PostgresStore) AddUserToGroup(ctx context.Context, groupID, userID int6
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	if err := lockGroup(ctx, tx, groupID); err != nil {
 		return err
@@ -377,7 +378,7 @@ func (s *PostgresStore) RemoveUserFromGroup(ctx context.Context, groupID, userID
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	var leaderID *int64
 	err = tx.QueryRow(ctx, `SELECT leader_user_id FROM groups WHERE id = $1 FOR UPDATE`, groupID).Scan(&leaderID)
@@ -409,7 +410,7 @@ func (s *PostgresStore) SetGroupDatabaseGrant(ctx context.Context, groupID, data
 	if err != nil {
 		return GrantView{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	if err := lockGroup(ctx, tx, groupID); err != nil {
 		return GrantView{}, err
@@ -469,7 +470,7 @@ func (s *PostgresStore) RevokeGroupDatabaseGrant(ctx context.Context, groupID, d
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	if err := lockGroup(ctx, tx, groupID); err != nil {
 		return err

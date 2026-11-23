@@ -53,7 +53,7 @@ func (s *Service) explainDraft(ctx context.Context, p auth.Principal, dbID, draf
 		if err == nil {
 			err = tx.QueryRow(ctx, "EXPLAIN (FORMAT JSON) "+part).Scan(&result.Plan)
 		}
-		rollback(tx)
+		rollback(ctx, tx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()

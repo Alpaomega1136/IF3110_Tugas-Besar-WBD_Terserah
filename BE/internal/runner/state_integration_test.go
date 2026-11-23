@@ -34,7 +34,7 @@ func simpanSnapshotPosisi(t *testing.T, pool *pgxpool.Pool, d Draft, execution s
 func simpanPairPosisi(t *testing.T, pool *pgxpool.Pool, dbID int64, applied, rollback string) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `INSERT INTO migration_rollback_pairs
-		(database_id,applied_execution_id,rollback_execution_id) VALUES ($1,$2,$3)`, dbID, applied, rollback)
+		(database_id,applied_execution_id,rollback_execution_id) VALUES ($1,$2,$3) ON CONFLICT(rollback_execution_id) DO NOTHING`, dbID, applied, rollback)
 	if err != nil {
 		t.Fatal(err)
 	}

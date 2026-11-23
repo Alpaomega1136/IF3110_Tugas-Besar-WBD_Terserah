@@ -33,7 +33,7 @@ func TestRetryAttemptAPI(t *testing.T) {
 	}
 	approveDraft(t, a, editor, target.ID, draft.ID, draft.Revision)
 	path := fmt.Sprintf("%s/drafts/%d", base, draft.ID)
-	w = editor.request("POST", path+"/execute", map[string]string{"revision": "1"})
+	w = editor.executeAndWait(t, path+"/execute", map[string]string{"revision": "1"})
 	status(t, w, 200)
 	var first runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &first); err != nil || first.Status != "failed" {
@@ -41,19 +41,19 @@ func TestRetryAttemptAPI(t *testing.T) {
 	}
 	status(t, viewer.request("POST", path+"/retry", map[string]string{"revision": "1", "failed_execution_id": first.ExecutionID}), 403)
 	status(t, editor.request("POST", path+"/retry", map[string]string{"revision": "1", "failed_execution_id": "tidak-ada"}), 409)
-	w = editor.request("POST", path+"/retry", map[string]string{"revision": "1", "failed_execution_id": first.ExecutionID})
+	w = editor.executeAndWait(t, path+"/retry", map[string]string{"revision": "1", "failed_execution_id": first.ExecutionID})
 	status(t, w, 200)
 	var second runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &second); err != nil || second.Status != "failed" || second.ExecutionID == first.ExecutionID || second.Version != first.Version+1 {
 		t.Fatalf("retry tidak membuat attempt baru: %s", w.Body.String())
 	}
-	w = editor.request("POST", path+"/retry", map[string]string{"revision": "1", "failed_execution_id": first.ExecutionID})
+	w = editor.executeAndWait(t, path+"/retry", map[string]string{"revision": "1", "failed_execution_id": first.ExecutionID})
 	status(t, w, 200)
 	var replay runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &replay); err != nil || replay.ExecutionID != second.ExecutionID {
 		t.Fatal("retry duplikat menjalankan SQL ulang")
 	}
-	w = editor.request("POST", path+"/execute", map[string]string{"revision": "1"})
+	w = editor.executeAndWait(t, path+"/execute", map[string]string{"revision": "1"})
 	status(t, w, 200)
 	if err := json.Unmarshal(w.Body.Bytes(), &replay); err != nil || replay.ExecutionID != second.ExecutionID {
 		t.Fatal("endpoint execute tidak mengembalikan attempt terbaru")

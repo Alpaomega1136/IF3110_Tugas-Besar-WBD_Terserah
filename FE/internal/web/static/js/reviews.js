@@ -1,6 +1,7 @@
 import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
 import { positiveInt64, parseCursorPage } from "./pagination.js";
+import { parseJobResponse } from "./execution.js";
 import { byId, addCell, formatDate, setBanner, navigateTo } from "./ui.js";
 
 const page = byId("reviews-page");
@@ -36,6 +37,10 @@ const decisionNote = byId("review-decision-note");
 const approveButton = byId("review-approve-button");
 const rejectButton = byId("review-reject-button");
 const decisionMessage = byId("review-decision-message");
+const enqueueButton = byId("review-enqueue");
+const jobMessage = byId("review-job-message");
+let canQueue = false, queueLocked = false;
+const reviewAlive = () => page?.isConnected !== false;
 
 const STATUS_LABELS = {
     pending_review: "Pending Review",
@@ -81,6 +86,7 @@ function setBusy(value) {
     approveButton.disabled = value;
     rejectButton.disabled = value;
     decisionNote.disabled = value;
+    enqueueButton.disabled = value || !canQueue || queueLocked;
     if (databaseId) {
         prevButton.disabled = value || currentPage === 0;
         nextButton.disabled = value || !hasMore;
@@ -140,6 +146,7 @@ function renderReviewDetail(review) {
         "review-detail-draft": `#${review.draft_id} — ${review.draft_title}`,
         "review-detail-revision": review.draft_revision,
         "review-detail-action": review.action_type,
+        "review-detail-target": review.target_execution_id || "-",
         "review-detail-requester": review.requested_by_username || "-",
         "review-detail-created": formatDate(review.created_at),
         "review-detail-decided": formatDate(review.decided_at),
@@ -173,12 +180,91 @@ function renderReviewDetail(review) {
     setBanner(decisionMessage, "");
     detailContent.hidden = false;
     detail.hidden = false;
+    updateQueueControls(review);
+}
+
+async function updateQueueControls(review) {
+    canQueue = false;
+    enqueueButton.hidden = true;
+    byId("review-job-panel").hidden = false;
+    byId("review-jobs-link").href = `/databases/${encodeURIComponent(review.database_id)}/jobs`;
+    setBanner(jobMessage, review.status === "queued" ? "Job sudah masuk antrean. Periksa monitoring untuk hasil worker." : "");
+    if (review.status !== "approved") return;
+    if (!["up", "resume", "rollback", "forward", "compensate"].includes(review.action_type)) {
+        setBanner(jobMessage, "Eksekusi aksi ini belum tersedia."); return;
+    }
+    try {
+        const result = await authenticatedRequest("/api/v1/databases");
+        if (!reviewAlive() || selectedReview?.id !== review.id || selectedReview.status !== "approved") return;
+        if (!Array.isArray(result?.databases)) throw new Error("Hak akses belum dapat diperiksa.");
+        const database = result.databases.find((d) => d.id === review.database_id);
+        if (!database) {
+            detailSQL.textContent = ""; detailContent.hidden = true;
+            throw new Error("Akses database sudah tidak tersedia.");
+        }
+        canQueue = database.access === "edit";
+        enqueueButton.hidden = !canQueue;
+        enqueueButton.disabled = busy || queueLocked || !canQueue;
+        setBanner(jobMessage, canQueue ? "Approval lengkap. Masukkan job ke antrean untuk diproses worker." : "Memasukkan job ke antrean memerlukan akses Edit.");
+    } catch (error) {
+        if (!reviewAlive() || selectedReview?.id !== review.id) return;
+        setBanner(jobMessage, error.message || "Hak akses belum dapat diperiksa. Buka ulang detail review.", true);
+        if (error.status === 401) navigateTo("/login", { replace: true });
+    }
+}
+
+async function enqueueApprovedReview() {
+    if (busy || !canQueue || queueLocked || !reviewAlive() || selectedReview?.status !== "approved") return;
+    const review = selectedReview;
+    let cancelled = false;
+    setBusy(true);
+    try {
+        const base = `/api/v1/databases/${encodeURIComponent(review.database_id)}`;
+        const [result, access] = await Promise.all([
+            authenticatedRequest(`${base}/reviews/${encodeURIComponent(review.id)}`),
+            authenticatedRequest("/api/v1/databases")
+        ]);
+        if (!reviewAlive()) return;
+        const fresh = result?.review;
+        if (fresh?.id === review.id && fresh.database_id === review.database_id && fresh.status === "queued") {
+            navigateTo(`/databases/${encodeURIComponent(review.database_id)}/jobs`); return;
+        }
+        if (!fresh || fresh.id !== review.id || fresh.database_id !== review.database_id || fresh.status !== "approved" ||
+            fresh.action_type !== review.action_type || fresh.draft_id !== review.draft_id || fresh.draft_revision !== review.draft_revision ||
+            fresh.sql_snapshot !== review.sql_snapshot || fresh.target_execution_id !== review.target_execution_id) {
+            throw new Error("Review sudah berubah. Buka ulang detail dan periksa approval.");
+        }
+        if (!access?.databases?.some((d) => d.id === review.database_id && d.access === "edit")) {
+            canQueue = false; enqueueButton.hidden = true;
+            throw new Error("Akses Edit sudah tidak tersedia.");
+        }
+        const confirmed = await confirmAction({ title: "Masukkan migration ke antrean?", confirmLabel: "Antrekan job",
+            message: `Antrekan aksi ${review.action_type}, draft #${review.draft_id} revisi ${review.draft_revision}, review #${review.id}${review.target_execution_id ? `, target execution ${review.target_execution_id}` : ""}?\n\nWorker akan memeriksa ulang approval dan hak akses. Hasil SQL belum dinyatakan berhasil saat job diterima.` });
+        if (!confirmed || !reviewAlive()) { cancelled = !confirmed; return; }
+        const response = await authenticatedRequest(`${base}/jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ review_id: review.id }) });
+        if (!reviewAlive()) return;
+        const job = parseJobResponse(response, review.database_id);
+        if (job.review_id !== review.id && job.authorization_review_id !== review.id) throw new Error("Identitas job belum dapat dipastikan. Periksa monitoring.");
+        navigateTo(`/databases/${encodeURIComponent(review.database_id)}/jobs/${encodeURIComponent(job.id)}`);
+    } catch (error) {
+        if (!reviewAlive()) return;
+        queueLocked = true;
+        const message = isCSRFError(error) ? "CSRF ditolak. Muat ulang atau login kembali." : error.message;
+        setBanner(jobMessage, `${message || "Hasil permintaan belum pasti."} Periksa Jobs dan buka ulang review sebelum mencoba lagi.`, true);
+        if (error.status === 401) navigateTo("/login", { replace: true });
+    } finally {
+        if (reviewAlive()) {
+            setBusy(false);
+            if (cancelled && selectedReview?.id === review.id && !enqueueButton.hidden && !enqueueButton.disabled) enqueueButton.focus();
+        }
+    }
 }
 
 async function openReviewDetail(dbId, reviewId) {
     if (busy) return;
     decisionNote.value = "";
     selectedReview = null;
+    queueLocked = false; canQueue = false; enqueueButton.hidden = true;
     setBusy(true);
     detail.hidden = false;
     detailContent.hidden = true;
@@ -190,7 +276,8 @@ async function openReviewDetail(dbId, reviewId) {
         const result = await authenticatedRequest(
             `/api/v1/databases/${encodeURIComponent(String(dbId))}/reviews/${encodeURIComponent(String(reviewId))}`
         );
-        if (!result?.review || !positiveInt64(result.review.id)) {
+        if (!reviewAlive()) return;
+        if (!result?.review || result.review.id !== String(reviewId) || result.review.database_id !== String(dbId)) {
             throw new Error("Format detail review dari backend tidak valid.");
         }
         renderReviewDetail(result.review);
@@ -282,7 +369,7 @@ async function submitDecision(approve) {
         };
     }
     const confirmed = await confirmAction(confirmation);
-    if (!confirmed || busy) return;
+    if (!confirmed || busy || !reviewAlive()) return;
 
     setBusy(true);
     setBanner(decisionMessage, "Menyimpan keputusan review...");
@@ -297,6 +384,7 @@ async function submitDecision(approve) {
                 body: JSON.stringify({ note })
             }
         );
+        if (!reviewAlive()) return;
         if (!result?.review) {
             throw new Error("Respons keputusan review tidak valid.");
         }
@@ -326,6 +414,7 @@ async function submitDecision(approve) {
 }
 
 onlyActionable.addEventListener("change", renderList);
+enqueueButton.addEventListener("click", enqueueApprovedReview);
 statusFilter?.addEventListener("change", renderList);
 refreshButton.addEventListener("click", () => loadReviews(0, true));
 prevButton?.addEventListener("click", () => loadReviews(currentPage - 1));

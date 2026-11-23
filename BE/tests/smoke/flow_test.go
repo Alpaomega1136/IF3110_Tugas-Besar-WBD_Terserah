@@ -136,13 +136,11 @@ func TestProductionHTTPFlow(t *testing.T) {
 		}
 	}
 	approve("1")
-	var success runner.Result
-	editor.call(t, "POST", path+"/execute", map[string]string{"revision": "1"}, 200, &success)
+	success := editor.executeAndWait(t, path+"/execute", "1", false)
 	if success.Status != "success" || success.Version != 1 {
 		t.Fatal("migration did not commit")
 	}
-	var replay runner.Result
-	editor.call(t, "POST", path+"/execute", map[string]string{"revision": "1"}, 200, &replay)
+	replay := editor.executeAndWait(t, path+"/execute", "1", true)
 	if replay.ExecutionID != success.ExecutionID || replay.Status != "success" {
 		t.Fatal("execute replay changed attempt")
 	}
@@ -163,16 +161,11 @@ func TestProductionHTTPFlow(t *testing.T) {
 		t.Fatal("viewer NULL contract changed")
 	}
 	badSQL := demoSQL(t, "002_rollback.sql", schema)
-	// Definisi yang sudah dieksekusi tidak dapat diubah; buat draft kedua untuk kegagalan.
 	editor.call(t, "PATCH", path, map[string]string{"title": "Demo rollback", "sql": badSQL, "sql_down": "SELECT 1", "revision": "1"}, 409, nil)
-	editor.call(t, "POST", base+"/drafts", map[string]string{
-		"title": "Demo gagal", "sql": badSQL,
-		"sql_down": "DROP TABLE IF EXISTS " + schema + ".rollback_proof; DELETE FROM " + schema + ".items WHERE id=3",
-	}, 201, &draft)
+	editor.call(t, "POST", base+"/drafts", map[string]string{"title": "Demo failed migration", "sql": badSQL, "sql_down": "SELECT 1"}, 201, &draft)
 	path = fmt.Sprintf("%s/drafts/%d", base, draft.ID)
 	approve("1")
-	var failed runner.Result
-	editor.call(t, "POST", path+"/execute", map[string]string{"revision": "1"}, 200, &failed)
+	failed := editor.executeAndWait(t, path+"/execute", "1", false)
 	if failed.Status != "failed" || failed.Version != 2 || failed.ErrorCode == nil || *failed.ErrorCode != "22012" {
 		t.Fatal("migration failure contract changed")
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"terserah/backend/internal/telemetry"
 )
 
 // BootstrapAdmin is shared by the current bootstrap and legacy seed CLIs.
@@ -22,7 +23,7 @@ func BootstrapAdmin(ctx context.Context, db *pgxpool.Pool, username, password st
 	if err != nil {
 		return errors.New("cannot start bootstrap")
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(3110002)"); err != nil {
 		return errors.New("cannot lock bootstrap")
 	}

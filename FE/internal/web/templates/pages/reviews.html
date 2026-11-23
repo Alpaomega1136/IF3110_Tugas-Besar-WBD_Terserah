@@ -83,6 +83,7 @@
                                 <dt>Draft</dt><dd id="review-detail-draft"></dd>
                                 <dt>Revisi Draft</dt><dd id="review-detail-revision"></dd>
                                 <dt>Jenis Aksi</dt><dd id="review-detail-action"></dd>
+                                <dt>Target execution</dt><dd id="review-detail-target"></dd>
                                 <dt>Status</dt><dd><span id="review-detail-badge"></span></dd>
                                 <dt>Diajukan Oleh</dt><dd id="review-detail-requester"></dd>
                                 <dt>Waktu Pengajuan</dt><dd id="review-detail-created"></dd>
@@ -90,6 +91,11 @@
                                 <dt>Alasan Penolakan</dt><dd id="review-detail-rejection"></dd>
                             </dl>
 
+                            <div id="review-job-panel" class="review-job-actions" hidden>
+                                <button id="review-enqueue" type="button" hidden>Masukkan ke antrean</button>
+                                <a id="review-jobs-link" class="workspace-button workspace-button--subtle">Pantau job database</a>
+                                <p id="review-job-message" role="status" aria-live="polite" hidden></p>
+                            </div>
                             <h3>Status Persetujuan Leader Group</h3>
                             <div class="users-table-wrapper">
                                 <table class="users-table">

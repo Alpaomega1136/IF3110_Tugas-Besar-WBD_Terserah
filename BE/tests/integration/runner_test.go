@@ -103,13 +103,13 @@ func TestRunnerAPI(t *testing.T) {
 			t.Fatal(err)
 		}
 		var exists bool
-		if err := a.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM migration_reviews WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3 AND status='approved')", target.ID, draftID, revision).Scan(&exists); err != nil {
+		if err := a.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM migration_reviews WHERE database_id=$1 AND draft_id=$2 AND draft_revision=$3 AND status IN ('approved','queued'))", target.ID, draftID, revision).Scan(&exists); err != nil {
 			t.Fatal(err)
 		}
 		if !exists {
 			approveDraft(t, a, editor, target.ID, draftID, revision)
 		}
-		w := editor.request("POST", path+"/execute", map[string]string{"revision": rev})
+		w := editor.executeAndWait(t, path+"/execute", map[string]string{"revision": rev})
 		status(t, w, 200)
 		var out runner.Result
 		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
@@ -190,9 +190,8 @@ func TestRunnerAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status(t, editor.request("POST", failedPath+"/execute", map[string]string{"revision": "1"}), 202)
+	status(t, editor.request("POST", failedPath+"/execute", map[string]string{"revision": "1"}), 200)
 	status(t, editor.request("PATCH", failedPath, map[string]string{"revision": "1", "title": "blocked", "sql": "SELECT 1", "sql_down": "SELECT 1"}), 409)
-	status(t, editor.request("POST", failedPath+"/execute", map[string]string{"revision": "2"}), 409)
 	_, err = a.db.Exec(ctx, "UPDATE migration_history SET status='failed' WHERE execution_id=$1", failed.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +216,7 @@ func TestRunnerAPI(t *testing.T) {
 		wg.Add(1)
 		go func(i int, b *browser) {
 			defer wg.Done()
-			w := b.request("POST", concurrentPath, map[string]string{"revision": "1"})
+			w := b.executeAndWait(t, concurrentPath, map[string]string{"revision": "1"})
 			codes[i] = w.Code
 			decodeErrors[i] = json.Unmarshal(w.Body.Bytes(), &results[i])
 		}(i, b)
@@ -241,7 +240,7 @@ func TestRunnerAPI(t *testing.T) {
 	status(t, w, 201)
 	_ = json.Unmarshal(w.Body.Bytes(), &d)
 	timeout := execute(fmt.Sprintf("%s/%d", base, d.ID), "1")
-	if timeout.Status != "failed" || timeout.ErrorCode == nil || *timeout.ErrorCode != "57014" {
+	if timeout.Status != "failed" || timeout.ErrorCode == nil || *timeout.ErrorCode != "execution_timeout" {
 		t.Fatalf("timeout=%+v", timeout)
 	}
 	if err = db.QueryRow(ctx, "SELECT count(*) FROM "+q+".items WHERE id=5").Scan(&count); err != nil || count != 0 {

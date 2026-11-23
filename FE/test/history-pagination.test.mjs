@@ -28,13 +28,25 @@ const ids = [
     "history-action-sql", "history-detail-version", "history-detail-execution-id",
     "history-detail-action-type", "history-detail-target-id", "history-detail-retry-id", "history-detail-draft-revision",
     "history-detail-draft-id", "history-detail-result", "history-detail-executor", "history-detail-started",
-    "history-detail-finished", "history-detail-error-code"
+    "history-detail-finished", "history-detail-error-code", "history-detail-action", "history-detail-target", "history-detail-job", "history-detail-no-job"
 ];
 let generation = 0;
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const fail = (status, code) => json({ error: { code, message: code } }, status);
 
-async function setupHistory({ access = "edit", confirm = true, custom, firstPage = first, more = true } = {}) {
+test("partial history and reconciliation remain visible without rerunning SQL", async () => {
+    const entry = { ...first[0], status: "partial", error_code: "reconciled_partial" };
+    assert.equal(parseReconcileResult({ reconciled: [entry] })[0].status, "partial");
+    const ui = await setupHistory({ more: false, firstPage: [entry], custom: ({ url }) =>
+        url.endsWith("/reconcile") ? json({ reconciled: [entry] }) : undefined });
+    assert.equal(ui.$("history-pending-notice").hidden, false);
+    assert.match(ui.$("history-list-body").textContent, /Sebagian committed/);
+    await ui.$("history-reconcile").fire("click");
+    assert.match(ui.$("history-reconcile-summary").textContent, /1 partial/);
+    assert.equal(ui.calls.some((call) => call.url.endsWith("/execute")), false);
+});
+
+async function setupHistory({ access = "edit", confirm = true, search = "", custom, firstPage = first, more = true } = {}) {
     clearAuthState();
     const elements = Object.fromEntries(ids.map((id) => [id, new Element()]));
     const $ = (id) => elements[id];
@@ -46,7 +58,7 @@ async function setupHistory({ access = "edit", confirm = true, custom, firstPage
         "history-detail-error", "history-detail-content", "history-detail-sql-section", "history-drafts-link", "history-action-panel", "history-action-message"]) $(id).hidden = true;
     const redirects = [], confirms = [], calls = [];
     globalThis.document = { getElementById: (id) => $(id), createElement: (tag) => new Element(tag) };
-    globalThis.window = { location: { replace: (path) => redirects.push(path) }, confirm: (text) => { confirms.push(text); return confirm; } };
+    globalThis.window = { location: { search, replace: (path) => redirects.push(path) }, confirm: (text) => { confirms.push(text); return confirm; } };
     globalThis.fetch = async (url, opts = {}) => {
         const method = opts.method || "GET";
         calls.push({ url, method, body: opts.body ? JSON.parse(opts.body) : null, headers: new Headers(opts.headers), credentials: opts.credentials });
@@ -97,7 +109,7 @@ test("history list uses cursor and returns to previous page; no numeric precisio
     assert.equal(ui.$("history-next").disabled, false);
     assert.match(ui.$("history-list-body").children[0].textContent, /9007199254741199/);
     assert.match(ui.$("history-list-body").children[0].textContent, /exec-0/);
-    assert.match(ui.$("history-pending-notice").textContent, /belum final/);
+    assert.match(ui.$("history-pending-notice").textContent, /Periksa Jobs untuk status pekerjaan terkini/);
     await ui.$("history-next").fire("click");
     assert.equal(ui.$("history-page-number").textContent, "2");
     assert.equal(ui.$("history-next").disabled, true);
@@ -128,6 +140,18 @@ test("view only can read all history but cannot reconcile or open draft", async 
     assert.equal(ui.$("history-drafts-link").hidden, true);
     await ui.$("history-reconcile").fire("click");
     assert.equal(ui.calls.filter((call) => call.method === "POST").length, 0);
+});
+
+test("history deep link opens the exact attempt and links back to its job", async () => {
+    const entry = { ...first[0], job_id: "25", action_type: "resume", target_execution_id: "original-attempt" };
+    const ui = await setupHistory({ firstPage: [entry], more: false, search: `?version=${entry.version}`,
+        custom: ({ url }) => url === `${api}/${entry.version}` ? json({ ...entry, sql: "historical SQL" }) : undefined });
+    assert.equal(ui.$("history-detail-version").textContent, entry.version);
+    assert.equal(ui.$("history-detail-action-type").textContent, "Resume");
+    assert.equal(ui.$("history-detail-target-id").textContent, "original-attempt");
+    assert.equal(ui.$("history-detail-job").href, `/databases/${db}/jobs/25`);
+    assert.equal(ui.$("history-list-body").children[0].children.at(-1).children[1].href, `/databases/${db}/jobs/25`);
+    assert.equal(ui.calls.some((c) => c.method === "POST"), false);
 });
 
 test("reconcile requires confirmation and POST with CSRF; refreshes history; never executes SQL", async () => {
@@ -182,7 +206,7 @@ const draftIds = [
     "draft-target-name", "draft-access", "draft-list-status", "draft-list-error", "draft-list-empty",
     "draft-list-table", "draft-list-body", "draft-new", "draft-pagination", "draft-prev", "draft-next",
     "draft-page-number", "draft-form", "draft-editor-heading", "draft-current-id", "draft-title",
-    "draft-sql", "draft-sql-down", "draft-irreversible", "draft-reason", "draft-down-group", "draft-reason-group", "draft-immutable-note",
+    "draft-sql", "draft-sql-down", "draft-batch-down", "draft-irreversible", "draft-reason", "draft-down-group", "draft-reason-group", "draft-immutable-note",
     "draft-title-error", "draft-sql-error", "draft-sql-down-error", "draft-reason-error", "draft-save", "draft-save-message", "draft-detail",
     "draft-detail-author", "draft-detail-created", "draft-detail-updated", "draft-detail-sql", "draft-detail-down", "draft-detail-down-section", "draft-detail-irreversible",
     "draft-execution", "draft-execute", "draft-reload", "draft-execution-revision", "draft-execution-state",
@@ -245,6 +269,20 @@ test("draft pagination errors are displayed without opening imaginary rows", asy
     assert.equal(ui.$("draft-next").disabled, true);
 });
 
+test("batch Down generation previews server SQL without saving or executing a draft", async () => {
+    const sql = "-- terserah-batch-v1 structured-config\nUPDATE scoped_data";
+    const down = "-- terserah-compensation-v1 structured-config\nUPDATE verified_images";
+    const ui = await setupDrafts({ custom: ({ url, method }) => url.endsWith("/batch-down-preview") ? json({ sql_down: down }) :
+        url === "/api/v1/auth/csrf" ? json({ csrf_token: "preview-csrf" }) : undefined });
+    ui.$("draft-sql").value = sql;
+    await ui.$("draft-sql").fire("input");
+    assert.equal(ui.$("draft-batch-down").hidden, false);
+    await ui.$("draft-batch-down").fire("click");
+    assert.equal(ui.$("draft-sql-down").value, down);
+    assert.equal(ui.calls.filter((c) => c.method === "POST").length, 1);
+    assert.equal(ui.calls.some((c) => c.url.endsWith("/execute")), false);
+});
+
 
 test("Hide rollback dikirim sebagai filter backend dan mengulang pagination", async () => {
     const ui = await setupHistory({ more: false, custom: ({ url }) =>
@@ -264,7 +302,7 @@ test("UI rollback meminta approval terlebih dahulu dan menjalankan hanya target 
         if (url === `/api/v1/databases/${db}/migration-state`) return json(state);
         if (url === `/api/v1/databases/${db}/reviews` && method === "POST") return json({ review: { id: "13" } }, 201);
         if (url === `/api/v1/databases/${db}/migration-executions/${up.execution_id}/rollback` && method === "POST")
-            return json({ version: "9007199254741299", execution_id: "rolled-back", status: "success", error_code: null });
+            return json({ job: { id: "9007199254741299", database_id: db, status: "queued" } }, 202);
         return undefined;
     } });
     await ui.$("history-list-body").children[0].children.at(-1).children[0].fire("click");
@@ -280,7 +318,8 @@ test("UI rollback meminta approval terlebih dahulu dan menjalankan hanya target 
     const executed = ui.calls.find((c) => c.method === "POST" && c.url.endsWith("/rollback"));
     assert.ok(executed);
     assert.equal(executed.credentials, "same-origin");
-    assert.match(ui.$("history-action-message").textContent, /di-commit/);
+    assert.deepEqual(ui.redirects, [`/databases/${db}/jobs/9007199254741299`]);
+    assert.doesNotMatch(ui.$("history-action-message").textContent, /berhasil di-commit/);
 });
 
 test("UI forward menggunakan execution rollback, bukan draft ID", async () => {
@@ -304,6 +343,19 @@ test("pengguna View Only tidak bisa mengajukan review maupun eksekusi", async ()
     await ui.$("history-list-body").children[0].children.at(-1).children[0].fire("click");
     assert.equal(ui.$("history-action-panel").hidden, true);
     assert.equal(ui.calls.filter((c) => c.method === "POST").length, 0);
+});
+
+test("failed Up can request fresh approval without treating the failed execution as an Up target", async () => {
+    const failed = { ...first[0], status: "failed", action_type: "up" };
+    const ui = await setupHistory({ firstPage: [failed], more: false, custom: ({ url, method }) => {
+        if (url === `${api}/${failed.version}`) return json({ ...failed, sql: "SELECT 1" });
+        if (url.endsWith("/reviews") && method === "POST") return json({ review: { id: "14" } }, 201);
+    } });
+    await ui.$("history-list-body").children[0].children.at(-1).children[0].fire("click");
+    assert.equal(ui.$("history-action-review").hidden, false);
+    await ui.$("history-action-review").fire("click");
+    assert.deepEqual(ui.calls.find((c) => c.url.endsWith("/reviews") && c.method === "POST").body,
+        { draft_id: failed.draft_id, revision: failed.draft_revision, action_type: "up" });
 });
 
 test("posisi migration berubah sebelum eksekusi: POST harus ditolak di frontend", async () => {

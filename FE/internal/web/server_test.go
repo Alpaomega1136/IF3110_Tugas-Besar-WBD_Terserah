@@ -37,19 +37,19 @@ func TestLoginPage(t *testing.T) {
 }
 
 func TestSharedConfirmationModal(t *testing.T) {
-    h := testHandler(t, "http://localhost:8080")
-    for _, route := range []string{"/login", "/admin/databases", "/admin/grants", "/databases/1/drafts", "/databases/1/history"} {
-        w := httptest.NewRecorder()
-        h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, route, nil))
-        if w.Code != http.StatusOK {
-            t.Fatalf("GET %s returned %d", route, w.Code)
-        }
-        for _, expected := range []string{`id="global-confirm-dialog"`, `id="global-confirm-accept"`, `id="global-confirm-cancel"`, `aria-labelledby="global-confirm-title"`} {
-            if !strings.Contains(w.Body.String(), expected) {
-                t.Fatalf("GET %s is missing %s", route, expected)
-            }
-        }
-    }
+	h := testHandler(t, "http://localhost:8080")
+	for _, route := range []string{"/login", "/admin/databases", "/admin/grants", "/databases/1/drafts", "/databases/1/history"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, route, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s returned %d", route, w.Code)
+		}
+		for _, expected := range []string{`id="global-confirm-dialog"`, `id="global-confirm-accept"`, `id="global-confirm-cancel"`, `aria-labelledby="global-confirm-title"`} {
+			if !strings.Contains(w.Body.String(), expected) {
+				t.Fatalf("GET %s is missing %s", route, expected)
+			}
+		}
+	}
 }
 
 func TestRootRedirectAndStatic(t *testing.T) {

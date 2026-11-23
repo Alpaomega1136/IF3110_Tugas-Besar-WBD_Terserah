@@ -48,6 +48,8 @@ export async function spaNavigate(path, { replace = false, pushState = true } = 
             return false;
         }
 
+        if (typeof window.__spaCleanup === "function") window.__spaCleanup();
+        window.__spaCleanup = null;
         window.__spaBeforeNavigate = null;
         if (parsed.title) {
             document.title = parsed.title;

@@ -122,7 +122,7 @@ func TestApprovalSQLDanTargetTepat(t *testing.T) {
 		t.Fatal(err)
 	}
 	approveDraft(t, a, editor, target.ID, draft.ID, draft.Revision)
-	w = editor.request("POST", fmt.Sprintf("%s/drafts/%d/execute", base, draft.ID), map[string]string{"revision": fmt.Sprint(draft.Revision)})
+	w = editor.executeAndWait(t, fmt.Sprintf("%s/drafts/%d/execute", base, draft.ID), map[string]string{"revision": fmt.Sprint(draft.Revision)})
 	status(t, w, 200)
 	var executed runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &executed); err != nil || executed.Status != "success" {

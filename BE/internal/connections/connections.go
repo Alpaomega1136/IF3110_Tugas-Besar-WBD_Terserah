@@ -16,6 +16,7 @@ import (
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/policy"
 	"terserah/backend/internal/secretbox"
+	"terserah/backend/internal/telemetry"
 )
 
 var (
@@ -150,7 +151,7 @@ func (s *Service) Create(ctx context.Context, p auth.Principal, input Input) (Co
 	if err != nil {
 		return Connection{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	c, err := scan(tx.QueryRow(ctx, `
 		INSERT INTO database_connections (name, host, port, database_name, username, password_encrypted, sslmode)
@@ -225,7 +226,7 @@ func (s *Service) Update(ctx context.Context, p auth.Principal, id int64, patch 
 	if err != nil {
 		return Connection{}, err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	c, err := scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id = $1 FOR UPDATE", id))
 	if err != nil {
@@ -297,7 +298,7 @@ func (s *Service) Delete(ctx context.Context, p auth.Principal, id int64) error 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(ctx, tx)
 
 	if _, err = scan(tx.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id = $1 FOR UPDATE", id)); err != nil {
 		return err
@@ -359,6 +360,19 @@ func (s *Service) OpenTarget(ctx context.Context, p auth.Principal, id int64, wr
 	return s.open(ctx, c)
 }
 
+// OpenForRecovery is internal to receipt/checkpoint verification after an actor loses access.
+// It must never execute user SQL; execution still requires OpenTarget and fresh authorization.
+func (s *Service) OpenForRecovery(ctx context.Context, id int64) (*pgxpool.Pool, error) {
+	if id < 1 {
+		return nil, ErrInvalid
+	}
+	c, err := scan(s.db.QueryRow(ctx, "SELECT "+columns+" FROM database_connections WHERE id=$1", id))
+	if err != nil {
+		return nil, err
+	}
+	return s.open(ctx, c)
+}
+
 func (s *Service) open(ctx context.Context, c Connection) (*pgxpool.Pool, error) {
 	password, err := s.box.Open(c.passwordEncrypted, fmt.Sprintf("target:%d", c.ID))
 	if err != nil {
@@ -377,6 +391,7 @@ func (s *Service) open(ctx context.Context, c Connection) (*pgxpool.Pool, error)
 		return nil, ErrTargetUnavailable
 	}
 	cfg.MaxConns = 3
+	cfg.ConnConfig.Tracer = telemetry.SQLTracer{Role: "target", DatabaseID: c.ID}
 	cfg.ConnConfig.RuntimeParams = map[string]string{"application_name": "terserah-target"}
 
 	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

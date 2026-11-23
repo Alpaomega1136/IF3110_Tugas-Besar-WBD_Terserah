@@ -136,7 +136,7 @@ func TestRecoveryIgnoresTargetSearchPath(t *testing.T) {
 			t.Fatal(err)
 		}
 		approveDraft(t, a, editor, target.ID, d.ID, 1)
-		w = editor.request("POST", fmt.Sprintf("%s/drafts/%d/execute", base, d.ID), map[string]string{"revision": "1"})
+		w = editor.executeAndWait(t, fmt.Sprintf("%s/drafts/%d/execute", base, d.ID), map[string]string{"revision": "1"})
 		status(t, w, 200)
 		var out runner.Result
 		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.Status != "success" {
@@ -169,7 +169,7 @@ func TestRecoveryIgnoresTargetSearchPath(t *testing.T) {
 	if err = json.Unmarshal(w.Body.Bytes(), &results); err != nil || len(results.Items) != 1 || results.Items[0].Status != "success" || results.Items[0].ExecutionID != first.ExecutionID {
 		t.Fatalf("real committed migration was not recovered: %s", w.Body.String())
 	}
-	w = editor.request("POST", fmt.Sprintf("%s/drafts/%d/execute", base, d.ID), map[string]string{"revision": "1"})
+	w = editor.executeAndWait(t, fmt.Sprintf("%s/drafts/%d/execute", base, d.ID), map[string]string{"revision": "1"})
 	status(t, w, 200)
 	var replay runner.Result
 	if err = json.Unmarshal(w.Body.Bytes(), &replay); err != nil || replay.ExecutionID != first.ExecutionID || replay.Status != "success" {

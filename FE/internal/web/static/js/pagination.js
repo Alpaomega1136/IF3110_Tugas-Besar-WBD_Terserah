@@ -32,7 +32,7 @@ export function parseReconcileResult(payload) {
     for (const item of payload.reconciled) {
         if (!item || !positiveInt64(item.version) ||
             typeof item.execution_id !== "string" ||
-            !["running", "unknown", "success", "failed"].includes(item.status) ||
+            !["running", "unknown", "success", "failed", "partial", "partially_reverted"].includes(item.status) ||
             !(item.error_code == null || typeof item.error_code === "string")) {
             throw new Error("Format hasil reconcile dari backend tidak valid.");
         }

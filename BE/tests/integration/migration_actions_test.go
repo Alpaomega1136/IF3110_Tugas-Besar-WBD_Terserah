@@ -12,8 +12,63 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"terserah/backend/internal/approval"
+	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/runner"
 )
+
+func TestRollbackQueueDoesNotExecuteInline(t *testing.T) {
+	f := newQueueFixture(t)
+	db, schema := batchTarget(t)
+	ctx := context.Background()
+	table := pgx.Identifier{schema, "rollback_queue"}.Sanitize()
+	base := fmt.Sprintf("/api/v1/databases/%d", f.first)
+	w := f.editor.request("POST", base+"/drafts", map[string]string{
+		"title": "Queued reversible migration", "sql": "CREATE TABLE " + table + "(id int)", "sql_down": "DROP TABLE " + table,
+	})
+	status(t, w, 201)
+	var draft runner.Draft
+	if err := json.Unmarshal(w.Body.Bytes(), &draft); err != nil {
+		t.Fatal(err)
+	}
+	approveDraft(t, f.a, f.editor, f.first, draft.ID, 1)
+	if _, _, err := f.service.EnqueueDraft(ctx, f.actor, f.first, draft.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	worker := queueWorker(t, f)
+	if _, err := worker.ProcessNext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var execution string
+	if err := f.a.db.QueryRow(ctx, `SELECT execution_id FROM migration_history WHERE database_id=$1 AND status='success'`, f.first).Scan(&execution); err != nil {
+		t.Fatal(err)
+	}
+	setujuiAksiMigration(t, f.a, f.editor, f.first, draft.ID, 1, "rollback", execution, "DROP TABLE "+table)
+	path := base + "/migration-executions/" + execution + "/rollback"
+	w = f.editor.request("POST", path, nil)
+	status(t, w, 202)
+	var queued struct {
+		Job jobs.Job `json:"job"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &queued); err != nil || queued.Job.ActionType != "rollback" || queued.Job.Status != jobs.Queued || queued.Job.AttemptCount != 0 {
+		t.Fatal("rollback did not return a queued job", err)
+	}
+	var exists bool
+	if err := db.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil || !exists {
+		t.Fatal("HTTP handler executed SQL before a worker claimed the job", err)
+	}
+	var attempts int
+	if err := f.a.db.QueryRow(ctx, `SELECT count(*) FROM migration_history WHERE database_id=$1`, f.first).Scan(&attempts); err != nil || attempts != 1 {
+		t.Fatal("enqueue created a premature execution attempt", err)
+	}
+	status(t, f.editor.request("POST", path, nil), 200)
+	if _, err := worker.ProcessNext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	jobPhase(t, f, queued.Job, jobs.Success)
+	if err := db.QueryRow(ctx, `SELECT to_regclass($1) IS NULL`, table).Scan(&exists); err != nil || !exists {
+		t.Fatal("worker did not apply the approved Down SQL", err)
+	}
+}
 
 // setujuiAksiMigration menguji bahwa seluruh leader menerima SQL dan target yang benar.
 func setujuiAksiMigration(t *testing.T, a *m1App, editor *browser, dbID, draftID, revision int64, action, target, expectedSQL string) {
@@ -68,7 +123,7 @@ func TestRollbackForwardAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	approveDraft(t, a, editor, target.ID, draft.ID, draft.Revision)
-	w = editor.request("POST", fmt.Sprintf("%s/drafts/%d/execute", base, draft.ID), map[string]string{"revision": fmt.Sprint(draft.Revision)})
+	w = editor.executeAndWait(t, fmt.Sprintf("%s/drafts/%d/execute", base, draft.ID), map[string]string{"revision": fmt.Sprint(draft.Revision)})
 	status(t, w, 200)
 	var applied runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &applied); err != nil || applied.Status != "success" {
@@ -96,7 +151,7 @@ func TestRollbackForwardAPI(t *testing.T) {
 	status(t, editor.request("POST", rollbackPath, nil), 409) // Belum disetujui.
 	status(t, editor.request("POST", base+"/migration-executions/tidak-ada/rollback", nil), 404)
 	setujuiAksiMigration(t, a, editor, target.ID, draft.ID, draft.Revision, "rollback", applied.ExecutionID, down)
-	w = editor.request("POST", rollbackPath, nil)
+	w = editor.executeAndWait(t, rollbackPath, nil)
 	status(t, w, 200)
 	var rolled runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &rolled); err != nil || rolled.Status != "success" || rolled.ExecutionID == applied.ExecutionID {
@@ -105,7 +160,7 @@ func TestRollbackForwardAPI(t *testing.T) {
 	if terdaftar() {
 		t.Fatal("SQL Down tidak membatalkan schema")
 	}
-	w = editor.request("POST", rollbackPath, nil)
+	w = editor.executeAndWait(t, rollbackPath, nil)
 	status(t, w, 200)
 	var replay runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &replay); err != nil || replay.ExecutionID != rolled.ExecutionID {
@@ -128,7 +183,7 @@ func TestRollbackForwardAPI(t *testing.T) {
 	forwardPath := base + "/migration-executions/" + rolled.ExecutionID + "/forward"
 	status(t, editor.request("POST", forwardPath, nil), 409)
 	setujuiAksiMigration(t, a, editor, target.ID, draft.ID, draft.Revision, "forward", rolled.ExecutionID, up)
-	w = editor.request("POST", forwardPath, nil)
+	w = editor.executeAndWait(t, forwardPath, nil)
 	status(t, w, 200)
 	var forwarded runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &forwarded); err != nil || forwarded.Status != "success" || forwarded.ExecutionID == rolled.ExecutionID {
@@ -184,7 +239,7 @@ func TestRollbackForwardRetryAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	approveDraft(t, a, editor, target.ID, draft.ID, draft.Revision)
-	w = editor.request("POST", fmt.Sprintf("%s/drafts/%d/execute", base, draft.ID), map[string]string{"revision": fmt.Sprint(draft.Revision)})
+	w = editor.executeAndWait(t, fmt.Sprintf("%s/drafts/%d/execute", base, draft.ID), map[string]string{"revision": fmt.Sprint(draft.Revision)})
 	status(t, w, 200)
 	var applied runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &applied); err != nil || applied.Status != "success" {
@@ -201,7 +256,7 @@ func TestRollbackForwardRetryAPI(t *testing.T) {
 	}
 	setujuiAksiMigration(t, a, editor, target.ID, draft.ID, draft.Revision, "rollback", applied.ExecutionID, down)
 	path := base + "/migration-executions/" + applied.ExecutionID + "/rollback"
-	w = editor.request("POST", path, nil)
+	w = editor.executeAndWait(t, path, nil)
 	status(t, w, 200)
 	var failed runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &failed); err != nil || failed.Status != "failed" {
@@ -214,13 +269,13 @@ func TestRollbackForwardRetryAPI(t *testing.T) {
 	if _, err := conn.Exec(ctx, up); err != nil {
 		t.Fatal(err)
 	}
-	w = editor.request("POST", path, map[string]string{"failed_execution_id": failed.ExecutionID})
+	w = editor.executeAndWait(t, path, map[string]string{"failed_execution_id": failed.ExecutionID})
 	status(t, w, 200)
 	var rolled runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &rolled); err != nil || rolled.Status != "success" || rolled.ExecutionID == failed.ExecutionID {
 		t.Fatalf("retry rollback gagal: %s", w.Body.String())
 	}
-	w = editor.request("POST", path, map[string]string{"failed_execution_id": failed.ExecutionID})
+	w = editor.executeAndWait(t, path, map[string]string{"failed_execution_id": failed.ExecutionID})
 	status(t, w, 200)
 	var replay runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &replay); err != nil || replay.ExecutionID != rolled.ExecutionID {
@@ -231,7 +286,7 @@ func TestRollbackForwardRetryAPI(t *testing.T) {
 	if _, err := conn.Exec(ctx, up); err != nil {
 		t.Fatal(err)
 	}
-	w = editor.request("POST", forwardPath, nil)
+	w = editor.executeAndWait(t, forwardPath, nil)
 	status(t, w, 200)
 	var forwardFailed runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &forwardFailed); err != nil || forwardFailed.Status != "failed" {
@@ -240,7 +295,7 @@ func TestRollbackForwardRetryAPI(t *testing.T) {
 	if _, err := conn.Exec(ctx, down); err != nil {
 		t.Fatal(err)
 	}
-	w = editor.request("POST", forwardPath, map[string]string{"failed_execution_id": forwardFailed.ExecutionID})
+	w = editor.executeAndWait(t, forwardPath, map[string]string{"failed_execution_id": forwardFailed.ExecutionID})
 	status(t, w, 200)
 	var forwardSuccess runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &forwardSuccess); err != nil || forwardSuccess.Status != "success" || forwardSuccess.ExecutionID == forwardFailed.ExecutionID {

@@ -5,14 +5,17 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"terserah/backend/internal/approval"
 	"terserah/backend/internal/auth"
+	"terserah/backend/internal/batch"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/httpx"
+	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/policy"
 )
 
@@ -22,10 +25,12 @@ func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("GET /api/v1/databases/{id}/migration-executions/{executionID}", sessions.Require(s.executionDetail))
 	mux.HandleFunc("POST /api/v1/databases/{id}/migration-executions/{executionID}/rollback", sessions.Require(s.rollbackExecution))
 	mux.HandleFunc("POST /api/v1/databases/{id}/migration-executions/{executionID}/forward", sessions.Require(s.forwardExecution))
+	mux.HandleFunc("POST /api/v1/databases/{id}/migration-executions/{executionID}/compensate", sessions.Require(func(w http.ResponseWriter, r *http.Request) { s.executeAction(w, r, "compensate") }))
 	mux.HandleFunc("GET /api/v1/databases/{id}/migration-state", sessions.Require(s.state))
 	mux.HandleFunc("POST /api/v1/databases/{id}/migrations/reconcile", sessions.Require(s.reconcile))
 
 	base := "/api/v1/databases/{id}/drafts"
+	mux.HandleFunc("POST "+base+"/batch-down-preview", sessions.Require(s.batchDownPreview))
 	mux.HandleFunc("GET "+base, sessions.Require(s.listDrafts))
 	mux.HandleFunc("POST "+base, sessions.Require(s.draft))
 	mux.HandleFunc("GET "+base+"/{draftID}", sessions.Require(s.draft))
@@ -33,6 +38,30 @@ func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	mux.HandleFunc("POST "+base+"/{draftID}/execute", sessions.Require(s.execute))
 	mux.HandleFunc("POST "+base+"/{draftID}/retry", sessions.Require(s.retry))
 	mux.HandleFunc("POST "+base+"/{draftID}/explain", sessions.Require(s.explain))
+}
+
+func (s *Service) batchDownPreview(w http.ResponseWriter, r *http.Request) {
+	if _, _, err := s.authorize(r, true); err != nil {
+		fail(w, err)
+		return
+	}
+	var in struct {
+		SQL string `json:"sql"`
+	}
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	config, err := batch.Parse(in.SQL)
+	if err != nil || config == nil {
+		fail(w, errSQL)
+		return
+	}
+	down, err := batch.DownSQL(*config)
+	if err != nil {
+		fail(w, errSQL)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]string{"sql_down": down})
 }
 
 func (s *Service) authorize(r *http.Request, write bool) (auth.Principal, int64, error) {
@@ -53,14 +82,16 @@ func (s *Service) authorize(r *http.Request, write bool) (auth.Principal, int64,
 
 func fail(w http.ResponseWriter, err error) {
 	var pgerr *pgconn.PgError
-	if errors.As(err, &pgerr) && pgerr.Code == "55P03" {
+	if (errors.As(err, &pgerr) && pgerr.Code == "55P03") || errors.Is(err, errActiveJob) {
 		httpx.Error(w, http.StatusConflict, "migration_busy", "A target migration is still active; retry later")
 		return
 	}
 	switch {
-	case errors.Is(err, connections.ErrForbidden):
+	case errors.Is(err, errBatchEvidence):
+		httpx.Error(w, http.StatusConflict, "batch_evidence_invalid", "Batch evidence cannot be verified; the target remains blocked")
+	case errors.Is(err, connections.ErrForbidden), errors.Is(err, jobs.ErrForbidden):
 		httpx.Error(w, http.StatusForbidden, "forbidden", "Database access denied")
-	case errors.Is(err, pgx.ErrNoRows):
+	case errors.Is(err, pgx.ErrNoRows), errors.Is(err, jobs.ErrNotFound):
 		httpx.Error(w, http.StatusNotFound, "not_found", "Database object not found")
 	case errors.Is(err, errDraftLocked):
 		httpx.Error(w, http.StatusConflict, "migration_immutable", err.Error())
@@ -68,18 +99,18 @@ func fail(w http.ResponseWriter, err error) {
 		errors.Is(err, errMigrationUnresolved), errors.Is(err, errMigrationMustForward),
 		errors.Is(err, errMigrationStateInvalid):
 		httpx.Error(w, http.StatusConflict, "migration_state_conflict", err.Error())
-	case errors.Is(err, errActionRetryInvalid):
-		httpx.Error(w, http.StatusConflict, "retry_invalid", err.Error())
 	case errors.Is(err, errRetryInvalid):
 		httpx.Error(w, http.StatusConflict, "retry_invalid", err.Error())
-	case errors.Is(err, errConflict):
+	case errors.Is(err, errConflict), errors.Is(err, jobs.ErrConflict):
 		httpx.Error(w, http.StatusConflict, "execution_conflict", "Reload draft or resolve the pending execution before retrying")
 	case errors.Is(err, approval.ErrNotApproved), errors.Is(err, approval.ErrLeaderMissing):
 		httpx.Error(w, http.StatusConflict, "approval_incomplete", "Approval from current group leaders is required before execution")
 	case errors.Is(err, errDraftDefinition):
 		httpx.Error(w, http.StatusBadRequest, "invalid_migration_definition", err.Error())
-	case errors.Is(err, connections.ErrInvalid), errors.Is(err, errSQL):
+	case errors.Is(err, connections.ErrInvalid), errors.Is(err, errSQL), errors.Is(err, jobs.ErrInvalid):
 		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid ID, revision, title or unsupported SQL")
+	case errors.Is(err, jobs.ErrUnsupported):
+		httpx.Error(w, 409, "unsupported_job_action", "Batch rollback/forward requires approved checkpoint compensation; normal actions use the job queue")
 	case errors.Is(err, errHistorySetup):
 		httpx.Error(w, http.StatusConflict, "target_history_unprotected", "Provision target history and use a dedicated restricted executor per database")
 	case errors.Is(err, errTargetIdentity):
@@ -139,6 +170,27 @@ func (s *Service) draft(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &in) {
 		return
 	}
+	in.Title = strings.TrimSpace(in.Title)
+	if len(in.Title) < 1 || len(in.Title) > 200 || strings.ContainsRune(in.Title, 0) {
+		fail(w, connections.ErrInvalid)
+		return
+	}
+	if in.Batch != nil {
+		if in.SQL != "" {
+			fail(w, errSQL)
+			return
+		}
+		in.SQL, err = batch.Encode(*in.Batch)
+		if err != nil {
+			fail(w, errSQL)
+			return
+		}
+	}
+	if err := validateDraftSQL(in.SQL); err != nil {
+		fail(w, err)
+		return
+	}
+
 	if r.Method == http.MethodPost {
 		if in.Revision != 0 {
 			fail(w, connections.ErrInvalid)
@@ -175,20 +227,45 @@ func (s *Service) execute(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Leave time for rollback and ledger persistence inside the session's 10s budget.
-	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Second)
-	defer cancel()
-
-	result, err := s.run(ctx, p, dbID, draftID, revision)
+	draft, err := s.getDraft(r.Context(), dbID, draftID)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	code := http.StatusOK
-	if result.Status == "unknown" || result.Status == "running" {
-		code = http.StatusAccepted
+	if draft.Revision != revision {
+		fail(w, errConflict)
+		return
 	}
-	httpx.JSON(w, code, result)
+	if err = validateDraftSQL(draft.SQL); err != nil {
+		fail(w, err)
+		return
+	}
+	job, replayed, err := jobs.New(s.db).EnqueueDraft(r.Context(), p, dbID, draftID, revision)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	code := http.StatusAccepted
+	if replayed {
+		code = http.StatusOK
+	}
+	w.Header().Set("Location", "/api/v1/databases/"+strconv.FormatInt(dbID, 10)+"/jobs/"+strconv.FormatInt(job.ID, 10))
+	httpx.JSON(w, code, map[string]any{"job": job, "replayed": replayed})
+}
+
+func validateDraftSQL(sql string) error {
+	if down, err := batch.ParseDown(sql); err != nil || down != nil {
+		return errSQL
+	}
+	c, err := batch.Parse(sql)
+	if err != nil {
+		return errSQL
+	}
+	if c != nil {
+		return nil
+	}
+	_, err = statements(sql)
+	return err
 }
 
 // retry mewajibkan referensi attempt gagal agar tidak terjadi retry implisit.
@@ -212,16 +289,28 @@ func (s *Service) retry(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Second)
 	defer cancel()
-	result, err := s.retryFailed(ctx, p, dbID, draftID, in.Revision, in.FailedExecutionID)
+	var actualDraft, actualRevision int64
+	if err = s.db.QueryRow(ctx, `SELECT draft_id,draft_revision FROM migration_history WHERE database_id=$1 AND execution_id=$2`, dbID, in.FailedExecutionID).Scan(&actualDraft, &actualRevision); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			err = errRetryInvalid
+		}
+		fail(w, err)
+		return
+	}
+	if draftID != actualDraft || in.Revision != actualRevision {
+		fail(w, errRetryInvalid)
+		return
+	}
+	job, replayed, err := jobs.New(s.db).RetryExecution(ctx, p, dbID, in.FailedExecutionID, "up", nil)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	code := http.StatusOK
-	if result.Status == "running" || result.Status == "unknown" {
-		code = http.StatusAccepted
+	code := http.StatusAccepted
+	if replayed {
+		code = http.StatusOK
 	}
-	httpx.JSON(w, code, result)
+	httpx.JSON(w, code, map[string]any{"job": job, "replayed": replayed})
 }
 
 // rollbackExecution dan forwardExecution memakai execution ID sebagai target immutable.
@@ -252,16 +341,22 @@ func (s *Service) executeAction(w http.ResponseWriter, r *http.Request, action s
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 7*time.Second)
 	defer cancel()
-	result, err := s.runAction(ctx, p, dbID, action, targetID, in.FailedExecutionID)
+	var job jobs.Job
+	var replayed bool
+	if in.FailedExecutionID != "" {
+		job, replayed, err = jobs.New(s.db).RetryExecution(ctx, p, dbID, in.FailedExecutionID, action, &targetID)
+	} else {
+		job, replayed, err = jobs.New(s.db).EnqueueOperation(ctx, p, dbID, action, targetID)
+	}
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	code := http.StatusOK
-	if result.Status == "unknown" || result.Status == "running" {
-		code = http.StatusAccepted
+	code := http.StatusAccepted
+	if replayed {
+		code = http.StatusOK
 	}
-	httpx.JSON(w, code, result)
+	httpx.JSON(w, code, map[string]any{"job": job, "replayed": replayed})
 }
 
 func (s *Service) executionDetail(w http.ResponseWriter, r *http.Request) {
@@ -370,7 +465,7 @@ func (s *Service) state(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	defer rollback(tx)
+	defer rollback(r.Context(), tx)
 	var id int64
 	if err := tx.QueryRow(r.Context(), `SELECT id FROM database_connections WHERE id=$1 FOR SHARE`, dbID).Scan(&id); err != nil {
 		fail(w, err)

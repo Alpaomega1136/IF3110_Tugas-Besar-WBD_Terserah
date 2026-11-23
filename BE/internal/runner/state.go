@@ -58,7 +58,8 @@ func bacaPosisiMigration(ctx context.Context, db migrationQueryer, dbID int64) (
 // direvalidasi worker. Attempt pending lain tetap memblokir eksekusi.
 func bacaPosisiMigrationTanpaAttempt(ctx context.Context, db migrationQueryer, dbID int64, ownExecutionID string) (migrationState, error) {
 	rows, err := db.Query(ctx, `
-		SELECT h.draft_id, h.draft_revision, h.execution_id, h.version, h.status,
+		SELECT h.draft_id, h.draft_revision, h.execution_id, h.version, CASE WHEN h.status='success' AND h.action_type='compensate' AND pair.applied_execution_id IS NULL THEN 'failed' WHEN h.status IN ('partial','unknown','partially_reverted') AND EXISTS(
+ SELECT 1 FROM migration_job_attempts a JOIN migration_jobs j ON j.id=a.job_id WHERE a.execution_id=h.execution_id AND (a.retry_scheduled OR j.status='resumed')) THEN 'failed' ELSE h.status END,
 		       pair.applied_execution_id,
 		       COALESCE(NOT snap.irreversible AND snap.sql_down IS NOT NULL, false)
 		FROM migration_history h

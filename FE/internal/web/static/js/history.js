@@ -1,8 +1,8 @@
 import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
 import { positiveInt64, parseCursorPage, parseReconcileResult } from "./pagination.js";
-import { byId, addCell, formatDate, setBanner } from "./ui.js";
-import { parseExecutionResult, executionFeedback, executeErrorMessage } from "./execution.js";
+import { byId, addCell, formatDate, setBanner, navigateTo } from "./ui.js";
+import { parseExecutionResult, parseJobResponse, executionFeedback, executeErrorMessage } from "./execution.js";
 import { ACTION_LABELS, migrationAction, operationRequest } from "./migration-actions.js";
 
 const page = byId("history-page");
@@ -62,7 +62,7 @@ const STATUS_LABELS = {
     success: "Berhasil",
     failed: "Gagal",
     unknown: "Tidak pasti",
-    partial: "Parsial", partially_reverted: "Sebagian dibatalkan"
+    partial: "Sebagian committed", partially_reverted: "Sebagian dibatalkan"
 };
 
 let busy = false;
@@ -87,7 +87,7 @@ const statusLabel = (status) => STATUS_LABELS[status] ?? String(status ?? "-");
 function makeStatus(status) {
     const span = document.createElement("span");
     span.className = "migration-status";
-    if (["running", "success", "failed", "unknown"].includes(status)) {
+    if (["running", "success", "failed", "unknown", "partial", "partially_reverted"].includes(status)) {
         span.className += ` migration-status--${status}`;
     }
     span.textContent = statusLabel(status);
@@ -165,6 +165,7 @@ function handleRequestError(error, target) {
         target_history_unprotected: "History target atau isolasi executor belum aman. Minta administrator PostgreSQL menjalankan BE/sql/provision_target_history.sql dan menyiapkan executor khusus database ini.",
         target_identity_conflict: "Identitas target berubah atau bentrok. Periksa konfigurasi koneksi.",
         target_unavailable: "Database target tidak dapat dijangkau. Pulihkan koneksi, lalu coba kembali secara manual.",
+        batch_evidence_invalid: "Bukti checkpoint batch tidak dapat diverifikasi. Target tetap ditahan; jangan menjalankan ulang SQL atau mengubah bukti target.",
         migration_unavailable: "Layanan migration belum tersedia. Periksa backend/target dan coba kembali secara manual."
     };
     const msg = error.status === 404
@@ -217,6 +218,13 @@ function renderHistory(entries) {
             button.addEventListener("click", () => openHistory(version));
         }
         actionCell.appendChild(button);
+        if (positiveInt64(entry.job_id)) {
+            const job = document.createElement("a");
+            job.className = "workspace-button workspace-button--subtle";
+            job.textContent = `Job #${entry.job_id}`;
+            job.href = `/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(entry.job_id)}`;
+            actionCell.appendChild(job);
+        }
         row.appendChild(actionCell);
         listBody.appendChild(row);
     }
@@ -224,11 +232,11 @@ function renderHistory(entries) {
     listEmpty.hidden = entries.length !== 0;
     listTable.hidden = entries.length === 0;
 
-    const pendingCount = entries.filter((item) => ["running", "unknown"].includes(item.status)).length;
+    const pendingCount = entries.filter((item) => ["running", "unknown", "partial", "partially_reverted"].includes(item.status)).length;
     showMessage(
         pendingNotice,
         pendingCount
-            ? `${pendingCount} eksekusi pada halaman ini belum final. ${canEdit ? "Gunakan Reconcile jika diperlukan." : "Mintalah pengguna Edit memeriksa statusnya."}`
+            ? `${pendingCount} catatan pada halaman ini berstatus running, unknown, partial, atau partially reverted. Periksa Jobs untuk status pekerjaan terkini. ${canEdit ? "Gunakan Reconcile jika hasil belum pasti." : "Reconcile memerlukan akses Edit."}`
             : ""
     );
 
@@ -258,6 +266,14 @@ function showHistory(entry, version) {
     for (const [id, value] of Object.entries(fields)) {
         byId(id).textContent = String(value);
     }
+    const job = byId("history-detail-job"), noJob = byId("history-detail-no-job");
+    if (job) {
+        const valid = positiveInt64(entry.job_id);
+        job.hidden = !valid;
+        if (noJob) noJob.hidden = valid;
+        if (valid) { job.href = `/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(entry.job_id)}`; job.textContent = `Pantau Job #${entry.job_id}`; }
+        else job.removeAttribute("href");
+    }
     detailSQL.textContent = entry.sql;
     selectedHistory = entry;
     detailContent.hidden = false;
@@ -276,6 +292,7 @@ async function openHistory(version) {
 
     try {
         const result = await authenticatedRequest(`${apiPath}/${encodeURIComponent(version)}`);
+        if (page.isConnected === false) return;
         showHistory(result, version);
         if (canEdit) await refreshAction();
     } catch (error) {
@@ -334,7 +351,7 @@ async function loadHistory(index = currentPage, reset = false) {
 
 function renderReconciled(items) {
     reconcileBody.replaceChildren();
-    const counts = { success: 0, failed: 0, running: 0, unknown: 0 };
+    const counts = { success: 0, failed: 0, running: 0, unknown: 0, partial: 0, partially_reverted: 0 };
     for (const item of items) {
         counts[item.status]++;
         const row = document.createElement("tr");
@@ -349,8 +366,8 @@ function renderReconciled(items) {
     reconcileResult.hidden = false;
     reconcileTable.hidden = items.length === 0;
     reconcileSummary.textContent = items.length === 0
-        ? "Tidak ada eksekusi running/unknown yang perlu direconcile. Tidak ada SQL yang dijalankan."
-        : `${items.length} eksekusi diperiksa: ${counts.success} success, ${counts.failed} failed, ${counts.unknown} unknown, ${counts.running} running. Tidak ada SQL yang dijalankan ulang.`;
+        ? "Tidak ada eksekusi running/unknown/partial yang perlu direconcile. Tidak ada SQL yang dijalankan."
+        : `${items.length} eksekusi diperiksa: ${counts.success} success, ${counts.failed} failed, ${counts.unknown} unknown, ${counts.running} running, ${counts.partial} partial, ${counts.partially_reverted} partially reverted. Tidak ada SQL yang dijalankan ulang.`;
 }
 
 async function reconcileHistory() {
@@ -401,15 +418,15 @@ async function refreshAction() {
         // Preview SQL berasal dari definisi immutable, bukan SQL pada attempt sebelumnya.
         const draft = await authenticatedRequest(`${base}/drafts/${encodeURIComponent(selectedHistory.draft_id)}`);
         if (!draft?.immutable || draft.revision !== selectedHistory.draft_revision ||
-            typeof draft.sql !== "string" || (selectedAction.type.includes("rollback") && typeof draft.sql_down !== "string")) {
+            typeof draft.sql !== "string" || ((selectedAction.type.includes("rollback") || selectedAction.type === "compensate") && typeof draft.sql_down !== "string")) {
             throw new Error("Definisi immutable tidak tersedia atau revisinya berubah. Periksa backend sebelum menjalankan aksi.");
         }
-        const isRollback = selectedAction.type.includes("rollback");
+        const isRollback = selectedAction.type.includes("rollback") || selectedAction.type === "compensate";
         actionSQLHeading.textContent = isRollback ? "SQL Down Immutable (Rollback)" : "SQL Up Immutable (Forward/Retry)";
         actionSQL.textContent = isRollback ? draft.sql_down : draft.sql;
         actionSQLSection.hidden = false;
         actionPanel.hidden = false;
-        actionReview.hidden = selectedAction.type.startsWith("retry_");
+        actionReview.hidden = false;
         actionReview.disabled = busy || actionReview.hidden;
         actionRun.disabled = busy;
         actionRun.textContent = selectedAction.label;
@@ -425,7 +442,7 @@ async function refreshAction() {
 }
 
 async function submitActionReview() {
-    if (busy || !canEdit || !selectedHistory || !selectedAction || selectedAction.type.startsWith("retry_")) return;
+    if (busy || !canEdit || !selectedHistory || !selectedAction) return;
     const detailEntry = selectedHistory, action = selectedAction;
     if (!(await confirmAction({
         title: `Ajukan Review ${action.label}?`,
@@ -441,7 +458,7 @@ async function submitActionReview() {
         const result = await authenticatedRequest(`${base}/reviews`, {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ draft_id: detailEntry.draft_id, revision: detailEntry.draft_revision,
-                action_type: action.type, target_execution_id: action.target })
+                action_type: action.type.replace("retry_", ""), ...(action.type === "retry_up" ? {} : { target_execution_id: action.target }) })
         });
         if (!positiveInt64(result?.review?.id)) throw new Error("Respons pengajuan review tidak valid.");
         showMessage(actionStatus, `Review #${result.review.id} dibuat. Tunggu persetujuan semua leader sebelum eksekusi.`);
@@ -471,9 +488,15 @@ async function runMigrationAction() {
         if (!current || current.type !== action.type || current.target !== action.target) throw new Error("Posisi migration berubah. Muat ulang History sebelum eksekusi.");
         const request = operationRequest(base, detailEntry, action);
         sent = true;
-        const result = parseExecutionResult(await authenticatedRequest(request.url, {
+        const response = await authenticatedRequest(request.url, {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.body)
-        }));
+        });
+        if (response?.job) {
+            const job = parseJobResponse(response, databaseId);
+            navigateTo(`/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(job.id)}`);
+            return;
+        }
+        const result = parseExecutionResult(response);
         const feedback = executionFeedback(result.status);
         setBanner(actionMessage, `${action.label} #${result.version}: ${feedback.message} Execution ID ${result.execution_id}.`, feedback.isError);
         setBusy(false);
@@ -522,6 +545,8 @@ async function initialize() {
         workspace.hidden = false;
 
         await loadHistory(0, true);
+        const initialVersion = new URLSearchParams(window.location.search).get("version");
+        if (!workspace.hidden && positiveInt64(initialVersion) && page.isConnected !== false) await openHistory(initialVersion);
     } catch (error) {
         handleRequestError(error, pageError);
     } finally {

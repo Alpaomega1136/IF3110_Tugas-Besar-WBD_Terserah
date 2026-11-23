@@ -20,6 +20,15 @@ test("forward mengacu execution rollback bukan nama draft", () => {
     assert.equal(migrationAction(s, entry), null);
 });
 
+test("batch cancellation uses the compensation endpoint and completed compensation can be forwarded", () => {
+    const batch = { ...entry, execution_mode: "batch" };
+    const action = migrationAction(state, batch);
+    assert.equal(action.type, "compensate");
+    assert.deepEqual(operationRequest(base, batch, action), { url: `${base}/migration-executions/exec-1/compensate`, body: {} });
+    const completed = { ...batch, execution_id: "comp-1", action_type: "compensate" };
+    assert.equal(migrationAction({ has_unresolved: false, next_forward: { rollback_execution_id: "comp-1" } }, completed).type, "forward");
+});
+
 test("retry hanya untuk attempt gagal dan target yang tepat", () => {
     const failedUp = { ...entry, status: "failed" };
     assert.equal(migrationAction(state, failedUp).type, "retry_up");

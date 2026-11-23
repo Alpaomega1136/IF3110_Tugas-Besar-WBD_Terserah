@@ -9,7 +9,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"terserah/backend/internal/auth"
+	"terserah/backend/internal/batch"
 	"terserah/backend/internal/connections"
+	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/policy"
 )
 
@@ -29,6 +31,8 @@ type History struct {
 	ActionType         string     `json:"action_type"`
 	TargetExecutionID  *string    `json:"target_execution_id"`
 	RetryOfExecutionID *string    `json:"retry_of_execution_id"`
+	JobID              *int64     `json:"job_id,string,omitempty"`
+	ExecutionMode      string     `json:"execution_mode"`
 }
 
 func (s *Service) listHistoryPage(ctx context.Context, dbID, before int64, limit int, hideRollback bool) ([]History, bool, *string, error) {
@@ -88,7 +92,7 @@ func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64,
 			h.error_code,
 			CASE WHEN pair.rollback_execution_id IS NOT NULL AND h.action_type = 'up' THEN 'rollback' ELSE h.action_type END,
 			h.target_execution_id,
-			h.retry_of_execution_id
+			h.retry_of_execution_id,h.job_id,CASE WHEN h.batch_root_execution_id IS NULL THEN 'normal' ELSE 'batch' END
 		FROM migration_history h
 		JOIN users u ON u.id = h.executed_by
 		LEFT JOIN migration_rollback_pairs pair ON pair.database_id = h.database_id
@@ -129,6 +133,8 @@ func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64,
 			&item.ActionType,
 			&item.TargetExecutionID,
 			&item.RetryOfExecutionID,
+			&item.JobID,
+			&item.ExecutionMode,
 		)
 		if err != nil {
 			return nil, err
@@ -139,11 +145,15 @@ func (s *Service) queryHistory(ctx context.Context, dbID, version, before int64,
 }
 
 type pendingExecution struct {
-	execution *string
-	version   int64
-	sql       string
-	actor     int64
-	format    int
+	execution        *string
+	version          int64
+	sql              string
+	actor            int64
+	format           int
+	isBatch          bool
+	root             string
+	compensationRoot string
+	action           string
 }
 
 // reconcilePending checks `_terserah.migration_receipts` on the target DB for any
@@ -160,7 +170,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	if err != nil {
 		return nil, err
 	}
-	defer rollback(tx)
+	defer rollback(ctx, tx)
 
 	if _, err = tx.Exec(ctx, `SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='2s'`); err != nil {
 		return nil, err
@@ -170,7 +180,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	}
 	// Acquiring the same advisory lock used by `run` proves no in-flight runner
 	// transaction can still commit a pending attempt while we inspect receipts.
-	if _, err = tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003)`); err != nil {
+	if _, err = tx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003); SELECT pg_catalog.pg_advisory_xact_lock(3110004)`); err != nil {
 		return nil, err
 	}
 	if err = protectedHistory(ctx, tx); err != nil {
@@ -188,7 +198,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	if err != nil {
 		return nil, err
 	}
-	defer rollback(meta)
+	defer rollback(ctx, meta)
 
 	var locked int64
 	if err = meta.QueryRow(ctx, `SELECT id FROM database_connections WHERE id = $1 FOR UPDATE`, dbID).Scan(&locked); err != nil {
@@ -197,12 +207,22 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	if err = bindTarget(ctx, meta, tx, dbID); err != nil {
 		return nil, err
 	}
-
+	var live bool
+	err = meta.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id AND a.attempt_no=j.attempt_count
+ JOIN migration_history h ON h.execution_id=a.execution_id WHERE j.database_id=$1 AND j.status='running' AND j.lease_expires_at>clock_timestamp() AND h.status='running')`, dbID).Scan(&live)
+	if err != nil {
+		return nil, err
+	}
+	if live {
+		return nil, errActiveJob
+	}
 	rows, err := meta.Query(ctx, `
-		SELECT execution_id, version, sql, executed_by, receipt_version
-		FROM migration_history
-		WHERE database_id = $1 AND status IN ('running', 'unknown')
-		ORDER BY version
+		SELECT h.execution_id,h.version,h.sql,h.executed_by,h.receipt_version,
+ EXISTS(SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id WHERE a.execution_id=h.execution_id AND j.execution_mode='batch'),COALESCE(h.batch_root_execution_id,''),h.action_type,COALESCE((SELECT compensation_root_execution_id FROM migration_jobs WHERE id=h.job_id),'')
+		FROM migration_history h
+		WHERE h.database_id = $1 AND h.status IN ('running', 'unknown','partial','partially_reverted')
+ AND NOT EXISTS(SELECT 1 FROM migration_job_attempts sealed WHERE sealed.execution_id=h.execution_id AND sealed.retry_scheduled)
+		ORDER BY h.version
 		LIMIT 100
 		FOR UPDATE
 	`, dbID)
@@ -212,7 +232,7 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	items := []pendingExecution{}
 	for rows.Next() {
 		var item pendingExecution
-		if err = rows.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format); err != nil {
+		if err = rows.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format, &item.isBatch, &item.root, &item.action, &item.compensationRoot); err != nil {
 			break
 		}
 		items = append(items, item)
@@ -227,7 +247,16 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 
 	results := []Result{}
 	for _, item := range items {
-		out, finished, err := s.verifyPendingAttempt(ctx, tx, dbID, item)
+		var out Result
+		var finished *time.Time
+		var progress batch.Checkpoint
+		if item.action == "compensate" {
+			out, finished, progress, err = s.verifyCompensationPending(ctx, tx, dbID, item, item.root, item.compensationRoot)
+		} else if item.isBatch {
+			out, finished, progress, err = s.verifyBatchAttempt(ctx, tx, dbID, item, item.root)
+		} else {
+			out, finished, err = s.verifyPendingAttempt(ctx, tx, dbID, item)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -241,6 +270,20 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 		}
 		if err != nil {
 			return nil, err
+		}
+		if item.isBatch || out.Status == "success" || out.Status == "failed" {
+			outcome := jobs.Outcome{Status: jobs.Status(out.Status)}
+			if out.ErrorCode != nil {
+				outcome.ErrorCode = *out.ErrorCode
+			}
+			if item.isBatch {
+				err = jobs.ResolveBatchTx(ctx, meta, out.ExecutionID, outcome, progress.BatchNo, progress.CommittedRows)
+			} else {
+				err = jobs.ResolveUnknownTx(ctx, meta, out.ExecutionID, outcome)
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 		results = append(results, out)
 	}

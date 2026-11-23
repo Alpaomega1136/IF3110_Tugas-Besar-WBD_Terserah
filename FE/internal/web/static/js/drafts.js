@@ -1,6 +1,6 @@
 import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
-import { executionFeedback, parseExecutionResult, executeErrorMessage } from "./execution.js";
+import { executionFeedback, parseExecutionResult, parseJobResponse, executeErrorMessage } from "./execution.js";
 import { positiveInt64, parseCursorPage } from "./pagination.js";
 import { initializeSchemaDiff } from "./schema-diff.js";
 import { byId, addCell, formatDate, setBanner, setFieldError } from "./ui.js";
@@ -164,6 +164,11 @@ function updateExecutionControls() {
     const modified = saved && isDirty();
     const immutable = Boolean(selectedDraft?.immutable);
     const locked = saved && lockedExecution === executionKey(selectedDraft);
+	const batchDown = byId("draft-batch-down");
+	if (batchDown) {
+		batchDown.hidden = !sqlInput.value.trimStart().startsWith("-- terserah-batch-v1 ");
+		batchDown.disabled = busy || immutable;
+	}
 
     executionPanel.hidden = !saved;
     executeButton.disabled = busy || !saved || modified || locked || immutable;
@@ -182,6 +187,25 @@ function updateExecutionControls() {
             ? "Ada perubahan belum disimpan. Simpan perubahan sebelum Execute."
             : "SQL tersimpan sudah siap ditinjau. Pastikan target dan revisi benar sebelum Execute.";
 }
+
+byId("draft-batch-down")?.addEventListener("click", async () => {
+    if (busy || selectedDraft?.immutable) return;
+    if (downInput.value.trim() && !(await confirmAction({ title: "Ganti SQL Down?", confirmLabel: "Siapkan SQL Down",
+        message: "SQL Down pada editor akan diganti dengan pemulihan nilai sebelum batch. Periksa hasilnya sebelum menyimpan draft." }))) return;
+    if (busy || page.isConnected === false) return;
+    setBusy(true);
+    try {
+        const result = await authenticatedRequest(`${apiPath}/batch-down-preview`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql: sqlInput.value })
+        });
+        if (page.isConnected === false) return;
+        if (typeof result?.sql_down !== "string" || !result.sql_down.startsWith("-- terserah-compensation-v1 ")) throw new Error("Format SQL Down batch tidak valid.");
+        downInput.value = result.sql_down;
+        irreversibleInput.checked = false; reasonInput.value = "";
+        setBanner(saveMessage, "SQL Down batch sudah disiapkan. Periksa dan simpan draft untuk membekukan definisinya saat dieksekusi.");
+    } catch (error) { handleError(error); }
+    finally { setBusy(false); }
+});
 
 function resetExecutionFeedback() {
     lockedExecution = null;
@@ -370,7 +394,55 @@ function displayExecutionResult(result) {
     executionResult.hidden = false;
 
     const feedback = executionFeedback(result.status);
-    setBanner(executionMessage, feedback.message, feedback.isError);
+    const progress = result.committed_batches != null && result.committed_rows != null
+        ? ` Batch sudah di-commit: ${result.committed_batches}; row sudah di-commit: ${result.committed_rows}.` : "";
+    const attempts = result.attempt_count != null && result.max_attempts != null
+        ? ` Attempt: ${result.attempt_count}/${result.max_attempts}.` : "";
+    const next = ["retry_wait", "recovering"].includes(result.status) && result.available_at
+        ? ` Pemeriksaan/percobaan berikutnya paling cepat: ${formatDate(result.available_at)}.` : "";
+    const handoff = result.resumed_by_job_id ? ` Job resume: ${result.resumed_by_job_id}.` : "";
+    setBanner(executionMessage, feedback.message + progress + attempts + next + handoff, feedback.isError);
+}
+
+async function followJob(response) {
+    const pending = ["queued", "running", "unknown", "recovering", "retry_wait"];
+    let job = parseJobResponse(response, databaseId);
+    const monitor = byId("draft-job-link");
+    const showMonitor = () => {
+        if (!monitor) return;
+        const id = job.resumed_by_job_id || job.id;
+        monitor.href = `/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(id)}`;
+        monitor.textContent = `Pantau Job #${id}`;
+        monitor.hidden = false;
+    };
+    showMonitor();
+    displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
+    for (let poll = 0; poll < 30; poll++) {
+        if (executionResult.isConnected === false) return;
+        response = await authenticatedRequest(`/api/v1/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(job.id)}`);
+        if (executionResult.isConnected === false) return;
+        const current = parseJobResponse(response, databaseId);
+        if (current.id !== job.id) throw new Error("Identitas job berubah. Periksa History.");
+        job = current;
+        showMonitor();
+        if (job.status === "resumed") {
+            displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
+            return;
+        }
+        const attempt = response.attempts?.at(-1);
+        if (attempt?.version && !pending.includes(job.status)) {
+            displayExecutionResult(parseExecutionResult({
+                execution_id: attempt.execution_id, version: attempt.version,
+                status: job.status, error_code: job.error_code,
+                committed_batches: job.committed_batches, committed_rows: job.committed_rows
+            }));
+            return;
+        }
+        displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
+        if (!pending.includes(job.status)) return;
+        if (poll < 29) await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    setBanner(executionMessage, `Job ${job.id} masih ${job.status}. Pekerjaan berlanjut di worker; periksa History untuk hasil akhir.`);
 }
 
 async function executeDraft() {
@@ -381,6 +453,8 @@ async function executeDraft() {
     setBusy(true);
     setBanner(executionMessage, "Memeriksa revisi terbaru dan hak akses...");
     executionResult.hidden = true;
+    const monitor = byId("draft-job-link");
+    if (monitor) { monitor.hidden = true; monitor.removeAttribute("href"); }
 
     try {
         // A fresh GET catches stale editor data before asking the user to confirm.
@@ -412,17 +486,21 @@ async function executeDraft() {
         lockedExecution = revisionKey;
         executing = true;
         updateExecutionControls();
-        setBanner(executionMessage, "Permintaan eksekusi dikirim. Menunggu hasil backend...");
+        setBanner(executionMessage, "Mengirim migration ke antrean...");
 
-        const result = parseExecutionResult(await authenticatedRequest(
+        const response = await authenticatedRequest(
             `${apiPath}/${encodeURIComponent(draft.id)}/execute`,
             {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ revision: draft.revision })
             }
-        ));
-        displayExecutionResult(result);
+        );
+        if (response?.job) {
+            await followJob(response);
+        } else {
+            displayExecutionResult(parseExecutionResult(response));
+        }
     } catch (err) {
         if (err.status === 401) {
             redirectToLogin();

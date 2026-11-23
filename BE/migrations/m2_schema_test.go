@@ -150,6 +150,7 @@ func TestM2SchemaUpgradeExistingHistory(t *testing.T) {
 		}
 	}
 	userID, dbID, draftID := seedSchemaFixture(t, db, "legacy")
+	_, _, pendingDraftID := seedSchemaFixture(t, db, "legacy-pending")
 	const upExec = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	if _, err := db.Exec(ctx, `INSERT INTO migration_history
         (database_id,draft_id,draft_revision,version,sql,executed_by,status,execution_id)
@@ -164,6 +165,12 @@ func TestM2SchemaUpgradeExistingHistory(t *testing.T) {
 	}
 	if err := Apply(ctx, db); err != nil {
 		t.Fatal(err)
+	}
+	var pendingCompatible bool
+	if err := db.QueryRow(ctx, `SELECT sql='SELECT 1' AND revision=1 AND irreversible
+        AND sql_down IS NULL AND irreversible_reason IS NOT NULL
+        FROM migration_drafts WHERE id=$1`, pendingDraftID).Scan(&pendingCompatible); err != nil || !pendingCompatible {
+		t.Fatalf("unexecuted legacy definition was not upgraded without changing SQL or revision: %v", err)
 	}
 	if err := Apply(ctx, db); err != nil {
 		t.Fatalf("upgrade schema tidak idempotent: %v", err)
