@@ -101,6 +101,8 @@ Atur nilai berikut pada `.env`:
 | `TARGET_CREDENTIAL_KEY` | Kunci enkripsi Base64 dari 32 byte acak, wajib untuk backend API |
 | `FE_HTTP_ADDR` | Opsional, default `:3000` (dibaca proses FE) |
 | `FE_BACKEND_URL` | Opsional, default `http://localhost:8080` (dibaca proses FE) |
+| `WORKER_EMBEDDED` | Default `true`, API menjalankan dua slot worker. Atur `false` untuk menjalankan worker terpisah. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Opsional, kirim trace ke endpoint OTLP/HTTP. Tanpa endpoint, span ditulis ke log JSON. |
 
 `APP_ORIGIN` harus sama persis dengan alamat frontend yang dibuka di browser. Misalnya, `http://localhost:3000` berbeda dari `http://127.0.0.1:3000`. Go tidak otomatis membaca file `.env`; environment harus dimuat ke proses saat menjalankan secara manual.
 
@@ -191,16 +193,18 @@ flowchart LR
     U[Pengguna / Browser] --> FE[Frontend Go :3000\nhtml/template + CSS + JS]
     FE -->|Same-origin /api + reverse proxy| BE[Backend Go :8080\nREST API]
     BE --> META[(PostgreSQL\nMetadata Platform)]
-    BE -->|Koneksi target + izin role PostgreSQL| TARGET[(PostgreSQL\nDatabase Target)]
+    BE -->|Viewer dan pemeriksaan koneksi| TARGET[(PostgreSQL\nDatabase Target)]
+    WORKER[Worker Go] -->|Ambil job dari antrean| META
+    WORKER -->|Eksekusi migration| TARGET
 ```
 
-Frontend merender kerangka halaman menggunakan `html/template`; JavaScript ES Modules menggunakan `fetch()` untuk memanggil REST API dan memperbarui DOM tanpa memuat ulang seluruh halaman. Backend menangani autentikasi, otorisasi, penyimpanan metadata, koneksi target, pembacaan schema/data, serta eksekusi migration.
+Frontend merender HTML dengan `html/template`. Router SPA mengambil halaman lewat `fetch()` dan mengganti tampilan tanpa memuat ulang dokumen saat login, logout, dan navigasi internal. API menangani autentikasi, akses target, approval, dan antrean. Worker menjalankan migration dan menyimpan hasilnya.
 
 ### Authentication dan Authorization
 
 1. Pengguna login melalui `/login` dengan CSRF prelogin, lalu backend membuat session menggunakan cookie `HttpOnly`.
 2. `GET /api/v1/auth/me` digunakan untuk memeriksa session pengguna.
-3. Platform Admin mengelola pengguna, grup, keanggotaan grup, koneksi database, dan grant akses `view`/`edit`.
+3. Platform Admin mengelola pengguna, grup, keanggotaan, leader, koneksi database, dan grant `view`/`edit`.
 4. Pengguna biasa hanya melihat database yang diizinkan berdasarkan grant grupnya.
 5. `view` dapat membuka Viewer dan History; `edit` juga dapat mengakses Draft dan Execute Migration.
 6. Platform Admin tidak otomatis memiliki akses ke isi database target tanpa grant. Keputusan otorisasi tetap berada di backend.
@@ -210,20 +214,29 @@ Frontend merender kerangka halaman menggunakan `html/template`; JavaScript ES Mo
 1. Admin mendaftarkan koneksi target PostgreSQL melalui `/admin/databases`, menguji koneksi, lalu memberi grant kepada grup melalui `/admin/grants`.
 2. Pengguna yang memperoleh grant membuka Viewer untuk melihat schema, tabel, kolom, constraint, index, dan data baris secara *read-only*.
 3. Pengguna berizin `edit` dapat membuat atau memperbarui SQL Draft dengan pemeriksaan revision.
-4. Sebelum Execute Migration, pengguna meninjau draft tersimpan dan mengonfirmasi eksekusi. Backend mengeksekusi SQL dalam transaksi.
-5. Hasil `success` menandakan COMMIT, `failed` menandakan ROLLBACK, sedangkan `running`/`unknown` belum definitif.
-6. History menyimpan status, version, pelaksana, dan detail SQL. Pengguna `edit` dapat menjalankan Reconcile secara eksplisit untuk status ambigu tanpa mengeksekusi ulang SQL.
+4. Pengguna mengajukan revisi untuk ditinjau. Semua leader grup yang punya akses `view` atau `edit` pada target harus menyetujui pengajuan.
+5. Pengguna `edit` mengirim revisi yang disetujui ke antrean. API merespons `202 Accepted` dengan ID job. Worker memeriksa ulang izin dan approval, lalu mengeksekusi migration. Halaman Jobs menampilkan progres.
+6. History menampilkan hasil dan detail eksekusi. Rollback, forward, dan resume batch mengikuti alur review dan antrean yang sama. Untuk hasil yang belum pasti, Reconcile memeriksa receipt di target dan memperbarui status.
+
+### Menjalankan Worker Terpisah
+
+API sudah menjalankan worker secara bawaan. Untuk memisahkan proses, atur `WORKER_EMBEDDED=false` sebelum menyalakan API. Di terminal worker, muat `DATABASE_URL` dan `TARGET_CREDENTIAL_KEY` yang sama, lalu jalankan dari folder `BE/`:
+
+```powershell
+go run ./cmd/worker
+```
 
 ## Fitur Utama
 
 | Area | Fitur |
 |---|---|
 | Autentikasi | Login, logout, session cookie, CSRF |
-| Administrasi | Manajemen user, group, membership, serta grant `view`/`edit` |
+| Administrasi | Manajemen user, group, membership, leader, dan grant `view`/`edit` |
 | Target PostgreSQL | Daftar, tambah, ubah, hapus, dan test koneksi |
 | Database Viewer | Schema, table, column, constraint, index, data baris, pagination |
 | Migration Draft | Membuat, membaca, mengubah draft SQL dan revision checking |
-| Execute Migration | Konfirmasi, eksekusi SQL transaksional, status hasil dan penanganan konflik |
+| Review dan Jobs | Approval per grup, antrean, pemantauan status dan progres |
+| Execute Migration | SQL transaksional, batch dengan checkpoint, rollback, forward, dan resume |
 | History | Daftar/detail riwayat, cursor pagination, SQL detail, status eksekusi |
 | Reconciliation | Pemeriksaan eksplisit status `running`/`unknown` bagi pengguna berizin `edit` |
 
@@ -243,7 +256,18 @@ Backend memvalidasi permission untuk setiap operasi. Frontend menyesuaikan navig
 
 ### Migration dan Recovery
 
-Migration dijalankan pada database target yang berbeda dari metadata, dengan role executor PostgreSQL terbatas. Riwayat target perlu diprovision oleh administrator database; status `unknown` atau koneksi terputus tidak memicu retry otomatis. Reconcile adalah aksi tersendiri untuk memastikan status eksekusi.
+Migration dijalankan pada database target yang berbeda dari metadata, dengan role executor PostgreSQL terbatas. Administrator database menyiapkan schema riwayat target. Worker memakai receipt untuk memulihkan hasil commit dan checkpoint untuk melanjutkan batch dari posisi terakhir. Pengguna berizin `edit` juga bisa menjalankan Reconcile dari halaman History.
+
+### Log dan Trace
+
+Contoh ringkas log pengajuan review dan span HTTP dengan ID yang sama:
+
+```jsonl
+{"level":"INFO","event":"migration_review_submitted","actor_id":3,"database_id":1,"review_id":42,"status":"pending_review","trace_id":"0123456789abcdef0123456789abcdef","span_id":"0123456789abcdef"}
+{"level":"INFO","event":"trace_span","name":"POST /api/v1/databases/{id}/reviews","trace_id":"0123456789abcdef0123456789abcdef","span_id":"0123456789abcdef","duration_ms":12}
+```
+
+Untuk eksekusi, gunakan `trace_id` dari permintaan antrekan untuk menemukan span worker. Log SQL mencatat hash query, durasi, dan hasil dengan nilai parameter disamarkan.
 
 ## Technology Stack
 
@@ -309,6 +333,7 @@ Semua endpoint API diakses oleh browser melalui `http://localhost:3000/api/v1/..
 | GET / POST | `/api/v1/admin/users` | Daftar / tambah pengguna |
 | PATCH | `/api/v1/admin/users/{id}` | Ubah pengguna |
 | GET / POST | `/api/v1/admin/groups` | Daftar / buat grup |
+| PUT | `/api/v1/admin/groups/{id}/leader` | Tetapkan leader grup |
 | PUT / DELETE | `/api/v1/admin/groups/{id}/users/{userID}` | Atur anggota grup |
 | PUT / DELETE | `/api/v1/admin/groups/{id}/databases/{databaseID}` | Atur / cabut grant |
 | GET / POST | `/api/v1/admin/databases` | Daftar / tambah koneksi target |
@@ -326,11 +351,19 @@ Semua endpoint API diakses oleh browser melalui `http://localhost:3000/api/v1/..
 | GET | `/api/v1/databases/{id}/schemas/{schema}/tables/{table}/rows` | Data tabel dan pagination |
 | GET / POST | `/api/v1/databases/{id}/drafts` | Daftar / tambah draft |
 | GET / PATCH | `/api/v1/databases/{id}/drafts/{draftID}` | Detail / ubah draft |
-| POST | `/api/v1/databases/{id}/drafts/{draftID}/execute` | Execute migration |
+| GET | `/api/v1/reviews` | Daftar review lintas database dengan filter dan cursor |
+| GET / POST | `/api/v1/databases/{id}/reviews` | Daftar / ajukan review pada database target |
+| POST | `/api/v1/databases/{id}/reviews/{reviewID}/approve` | Setujui pengajuan |
+| POST | `/api/v1/databases/{id}/reviews/{reviewID}/reject` | Tolak pengajuan dengan alasan |
+| GET / POST | `/api/v1/databases/{id}/jobs` | Daftar / antrekan job dari review |
+| GET | `/api/v1/databases/{id}/jobs/{jobID}` | Status, progres, dan percobaan job |
+| POST | `/api/v1/databases/{id}/drafts/{draftID}/execute` | Antrekan eksekusi revisi yang disetujui |
 | POST | `/api/v1/databases/{id}/drafts/{draftID}/explain` | Analisis query draft tersimpan |
 | GET | `/api/v1/databases/{id}/migrations` | Daftar history |
 | GET | `/api/v1/databases/{id}/migrations/{version}` | Detail history |
 | POST | `/api/v1/databases/{id}/migrations/reconcile` | Reconcile status ambigu |
+
+Daftar review menerima `limit`, `before`, `status`, dan `only_actionable`. Gunakan nilai `next_before` dari respons sebagai cursor berikutnya. Halaman pertama dengan `only_actionable=true` juga mengembalikan `total` review yang cocok.
 
 ## Pengujian
 
@@ -348,6 +381,33 @@ go test ./...
 go vet ./...
 node --test
 ```
+
+### Tes Integrasi Backend
+
+Siapkan PostgreSQL khusus pengujian sesuai [fixture CI](.github/workflows/backend.yml), lalu isi `TEST_DATABASE_URL`, `TEST_TARGET_DATABASE_URL`, `TEST_SECOND_TARGET_DATABASE_URL`, dan `TEST_TARGET_ADMIN_DATABASE_URL` pada terminal. Dari `BE/` jalankan:
+
+```powershell
+go test -p 1 -tags=integration ./... -count=1 -timeout=1200s
+```
+
+### Perbandingan UPDATE Tunggal dan Batch
+
+Dengan fixture yang sama, jalankan:
+
+```powershell
+go test -tags='integration batchdemo' ./tests/integration -run '^TestBatchPerformanceComparison$' -count=1 -v
+```
+
+Tes membuat dua tabel identik dengan 120.000 baris dan indeks ekspresi. UPDATE tunggal diukur dari pengiriman SQL sampai commit. Jalur batch diukur dari worker mengambil job hingga selesai, termasuk penyimpanan snapshot dan checkpoint. Keduanya diverifikasi mengubah 120.000 baris. Batch membagi pekerjaan menjadi 24 commit terpisah agar progres dapat dipantau dan dilanjutkan dari checkpoint.
+
+Hasil satu kali pengukuran di Windows 11, Intel Core Ultra 5 225H, PostgreSQL 18.6 lokal:
+
+| Jalur | Durasi |
+|---|---:|
+| UPDATE tunggal | 6,393 detik |
+| Batch via worker | 16,875 detik |
+
+Untuk mendemokan pemulihan setelah satu batch berhasil commit, jalankan `TestLargeBatchApprovedResumePreservesCommittedPrefixAndFrozenScope` dengan tag `integration`.
 
 ## Bonus dan Batasan
 
