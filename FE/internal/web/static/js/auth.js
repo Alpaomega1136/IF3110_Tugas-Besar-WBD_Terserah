@@ -1,13 +1,20 @@
 import { apiRequest } from "./api.js";
+import { navigateTo } from "./ui.js";
 
 let csrfToken = null;
 let csrfPending = null;
 let authVersion = 0;
+let sessionVersion = 0;
 
 export function clearAuthState() {
     authVersion += 1;
     csrfToken = null;
     csrfPending = null;
+}
+
+export function resetAuthSession() {
+    sessionVersion += 1;
+    clearAuthState();
 }
 
 export function isCSRFError(error) {
@@ -24,11 +31,12 @@ export async function getCurrentUser() {
 }
 
 export async function requireAuthenticatedUser() {
+    const adminNav = document.getElementById("admin-nav");
+    const logoutButton = document.getElementById("logout-button");
+    const navStatus = document.getElementById("navigation-status");
     try {
         const user = await getCurrentUser();
-        const adminNav = document.getElementById("admin-nav");
-        const logoutButton = document.getElementById("logout-button");
-        const navStatus = document.getElementById("navigation-status");
+        if (logoutButton?.isConnected === false) return null;
         if (adminNav) adminNav.hidden = !user.is_platform_admin;
         if (logoutButton) {
             logoutButton.disabled = false;
@@ -37,7 +45,7 @@ export async function requireAuthenticatedUser() {
                 if (navStatus) navStatus.hidden = true;
                 try {
                     await logout();
-                    window.location.replace("/login");
+                    navigateTo("/login", { replace: true });
                 } catch (error) {
                     if (navStatus) {
                         navStatus.textContent = error.message || "Logout gagal. Silakan coba lagi.";
@@ -50,8 +58,10 @@ export async function requireAuthenticatedUser() {
         return user;
     } catch (error) {
         if (error.status === 401) {
-            clearAuthState();
-            window.location.replace("/login");
+            if (logoutButton?.isConnected !== false) {
+                clearAuthState();
+                navigateTo("/login", { replace: true });
+            }
             return null;
         }
         throw error;
@@ -81,26 +91,34 @@ export async function getCSRFToken() {
 }
 
 export async function authenticatedRequest(path, options = {}) {
+    const session = sessionVersion;
     const method = (options.method ?? "GET").toUpperCase();
     const headers = new Headers(options.headers);
     if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
         headers.set("X-CSRF-Token", await getCSRFToken());
     }
 
+    let result;
     try {
-        return await apiRequest(path, { ...options, headers });
+        result = await apiRequest(path, { ...options, headers });
     } catch (error) {
-        if (error.status === 401 || isCSRFError(error)) clearAuthState();
-        throw error;
+        if (session === sessionVersion) {
+            if (error.status === 401 || isCSRFError(error)) clearAuthState();
+            throw error;
+        }
     }
+    if (session !== sessionVersion) throw new Error("Sesi berubah. Silakan ulangi tindakan.");
+    return result;
 }
 
 export async function logout() {
     try {
         await authenticatedRequest("/api/v1/auth/logout", { method: "POST" });
     } catch (error) {
-        if (error.status !== 401) throw error;
-    } finally {
-        clearAuthState();
+        if (error.status !== 401) {
+            clearAuthState();
+            throw error;
+        }
     }
+    resetAuthSession();
 }

@@ -1,6 +1,6 @@
 import { authenticatedRequest, requireAuthenticatedUser } from "./auth.js";
 import { positiveInt64 } from "./pagination.js";
-import { byId } from "./ui.js";
+import { byId, navigateTo } from "./ui.js";
 
 const databaseId = byId("viewer-page").dataset.databaseId;
 const endpoint = `/api/v1/databases/${encodeURIComponent(databaseId)}`;
@@ -57,7 +57,7 @@ function revokeAccess(message) {
 function handleError(error, target, fallback) {
     if (error.status === 401) {
         revokeAccess("Session telah berakhir. Silakan login kembali.");
-        window.location.replace("/login");
+        navigateTo("/login", { replace: true });
         return;
     }
     if (error.status === 403) {

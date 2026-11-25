@@ -3,7 +3,7 @@ import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./a
 import { executionFeedback, parseExecutionResult, parseJobResponse, executeErrorMessage } from "./execution.js";
 import { positiveInt64, parseCursorPage } from "./pagination.js";
 import { initializeSchemaDiff } from "./schema-diff.js";
-import { byId, addCell, formatDate, setBanner, setFieldError } from "./ui.js";
+import { byId, addCell, formatDate, setBanner, setFieldError, navigateTo } from "./ui.js";
 import { normalizeDraftDefinition, draftEditorValues, validateDraftEditor, identicalDraftDefinition } from "./migration-form.js";
 
 const page = byId("draft-page");
@@ -92,7 +92,7 @@ function updatePagination() {
 
 function redirectToLogin() {
     allowNavigation = true;
-    window.location.replace("/login");
+    navigateTo("/login", { replace: true });
 }
 
 function handleError(err, target = saveMessage) {

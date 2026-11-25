@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Element, tick } from "./mock-dom.mjs";
-import { clearAuthState } from "../internal/web/static/js/auth.js";
+import { authenticatedRequest, clearAuthState, resetAuthSession } from "../internal/web/static/js/auth.js";
 
 let generation = 0;
 const account = { id: "22", username: "existing", is_platform_admin: false, is_active: true, group_ids: [] };
@@ -103,7 +103,7 @@ test("edit user can change flags without supplying a new password", async () => 
     assert.deepEqual(mutations(ui)[0].body, { is_active: false });
 });
 
-test("login still submits a valid legacy password shorter than 12 bytes", async () => {
+test("login submits a legacy password and replaces the login entry via SPA", async () => {
     clearAuthState();
     const elements = Object.fromEntries(["login-form", "login-button", "login-message"].map((id) => [id, new Element()]));
     elements["login-form"].reset = () => {};
@@ -111,7 +111,10 @@ test("login still submits a valid legacy password shorter than 12 bytes", async 
     const originalFormData = globalThis.FormData;
     globalThis.FormData = class { get(name) { return name === "username" ? "legacy" : "old-pass"; } };
     globalThis.document = { getElementById: (id) => elements[id] };
-    globalThis.window = { location: { replace: (path) => redirects.push(path) } };
+    globalThis.window = {
+        __spaNavigate: (path, options) => redirects.push([path, options]),
+        location: { replace: () => assert.fail("login reloaded the page") }
+    };
     globalThis.fetch = async (url, options = {}) => {
         if (url === "/api/v1/auth/csrf") return json({ csrf_token: "fixture-csrf" });
         calls.push({ url, body: JSON.parse(options.body) });
@@ -122,8 +125,17 @@ test("login still submits a valid legacy password shorter than 12 bytes", async 
         await elements["login-form"].fire("submit");
         assert.equal(calls.length, 1);
         assert.equal(calls[0].body.password, "old-pass");
-        assert.deepEqual(redirects, ["/dashboard"]);
+        assert.deepEqual(redirects, [["/dashboard", { replace: true }]]);
     } finally {
         globalThis.FormData = originalFormData;
     }
+});
+
+test("a late 401 is discarded after the session changes", async () => {
+    let finish;
+    globalThis.fetch = () => new Promise((resolve) => { finish = resolve; });
+    const request = authenticatedRequest("/api/v1/databases");
+    resetAuthSession();
+    finish(new Response(null, { status: 401 }));
+    await assert.rejects(request, (error) => error.status === undefined && /Sesi berubah/.test(error.message));
 });

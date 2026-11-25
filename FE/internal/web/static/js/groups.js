@@ -1,6 +1,6 @@
 import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
-import { byId, addCell, addOption, setBanner, setFieldError, utf8Bytes } from "./ui.js";
+import { byId, addCell, addOption, setBanner, setFieldError, utf8Bytes, navigateTo } from "./ui.js";
 
 const status = byId("groups-status");
 const error = byId("groups-error");
@@ -238,7 +238,7 @@ async function removeMember(group, userId, label) {
             { method: "DELETE" }
         );
         if (isSelf) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         const refreshed = await loadGroups();
@@ -251,7 +251,7 @@ async function removeMember(group, userId, label) {
         );
     } catch (err) {
         if (err.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         if (err.status === 403 && isCSRFError(err)) {
@@ -310,7 +310,7 @@ async function loadGroups() {
     } catch (err) {
         status.hidden = true;
         if (err.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return false;
         }
         error.textContent = err.status === 403
@@ -362,7 +362,7 @@ createForm.addEventListener("submit", async (event) => {
         );
     } catch (err) {
         if (err.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         if (err.status === 409) {
@@ -424,7 +424,7 @@ membershipForm.addEventListener("submit", async (event) => {
         );
     } catch (err) {
         if (err.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         if (err.status === 403 && isCSRFError(err)) {
@@ -489,7 +489,7 @@ leaderForm?.addEventListener("submit", async (event) => {
         );
     } catch (err) {
         if (err.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         if (err.status === 403 && isCSRFError(err)) {
@@ -520,7 +520,7 @@ async function initializePage() {
         renderGroupsTable();
     } catch (err) {
         if (err.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         membershipSection.hidden = false;

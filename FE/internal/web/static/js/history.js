@@ -149,7 +149,7 @@ function handleRequestError(error, target) {
     if (error.status === 401) {
         clearPrivateData();
         workspace.hidden = true;
-        window.location.replace("/login");
+        navigateTo("/login", { replace: true });
         return;
     }
     if (error.status === 403 && !isCSRFError(error)) {

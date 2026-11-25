@@ -246,10 +246,13 @@ test("admin without group grant sees empty state rather than target bypass", asy
 
 test("navigation logout uses the authenticated session", async () => {
     const ui = await setupDashboard({ admin: true });
+    const navigations = [];
+    window.__spaNavigate = (path, options) => navigations.push([path, options]);
     assert.equal(ui.$("logout-button").disabled, false);
     await ui.$("logout-button").fire("click");
     assert.equal(ui.calls.some((call) => call.url === "/api/v1/auth/logout" && call.method === "POST"), true);
-    assert.deepEqual(ui.redirects, ["/login"]);
+    assert.deepEqual(navigations, [["/login", { replace: true }]]);
+    assert.deepEqual(ui.redirects, []);
 });
 
 test("revoked session redirects and rejected database list hides previous entries", async () => {

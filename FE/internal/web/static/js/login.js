@@ -1,4 +1,5 @@
-import { authenticatedRequest, clearAuthState, isCSRFError } from "./auth.js";
+import { authenticatedRequest, isCSRFError, resetAuthSession } from "./auth.js";
+import { navigateTo } from "./ui.js";
 
 const form = document.getElementById("login-form");
 const button = document.getElementById("login-button");
@@ -27,9 +28,9 @@ form.addEventListener("submit", async (event) => {
             throw new Error("Format respons login dari backend tidak valid.");
         }
         // The prelogin token belongs to the old cookie; the new session has its own CSRF token.
-        clearAuthState();
+        resetAuthSession();
         form.reset();
-        window.location.replace("/dashboard");
+        navigateTo("/dashboard", { replace: true });
     } catch (error) {
         message.textContent = isCSRFError(error)
             ? "Validasi CSRF ditolak. Muat ulang halaman dan pastikan APP_ORIGIN sesuai origin frontend."

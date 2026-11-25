@@ -1,6 +1,6 @@
 import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
-import { byId, addCell, formatDate, setBanner, utf8Bytes } from "./ui.js";
+import { byId, addCell, formatDate, setBanner, utf8Bytes, navigateTo } from "./ui.js";
 
 const status = byId("connections-status");
 const pageError = byId("connections-error");
@@ -61,7 +61,7 @@ function errorText(error, operation = "Permintaan") {
 
 function handleError(error, target, operation) {
     if (error.status === 401) {
-        window.location.replace("/login");
+        navigateTo("/login", { replace: true });
         return;
     }
     if (error.status === 403 && !isCSRFError(error)) {

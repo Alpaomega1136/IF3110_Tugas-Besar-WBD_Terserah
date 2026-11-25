@@ -1,6 +1,6 @@
 import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
-import { byId, formatDate, setBanner, setFieldError, utf8Bytes } from "./ui.js";
+import { byId, formatDate, setBanner, setFieldError, utf8Bytes, navigateTo } from "./ui.js";
 
 const status = byId("users-status");
 const errorMessage = byId("users-error");
@@ -144,7 +144,7 @@ async function refreshUsers() {
     } catch (error) {
         status.hidden = true;
         if (error.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return false;
         }
         showError(error.status === 403
@@ -208,7 +208,7 @@ createForm.addEventListener("submit", async (event) => {
         );
     } catch (error) {
         if (error.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         if (error.status === 409) {
@@ -314,7 +314,7 @@ editForm.addEventListener("submit", async (event) => {
             body: JSON.stringify(payload)
         });
         if (selfSessionRevoked) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         selectedUser = result.user;
@@ -332,7 +332,7 @@ editForm.addEventListener("submit", async (event) => {
         );
     } catch (error) {
         if (error.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         if (error.status === 403 && isCSRFError(error)) {

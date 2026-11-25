@@ -1,7 +1,7 @@
 import { confirmAction } from "./confirmation.js";
 import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
 import { positiveInt64 } from "./pagination.js";
-import { byId, addCell, addOption, setBanner } from "./ui.js";
+import { byId, addCell, addOption, setBanner, navigateTo } from "./ui.js";
 
 const status = byId("grants-status");
 const errorBox = byId("grants-error");
@@ -152,7 +152,7 @@ async function reloadGroups() {
 
 function handleError(err) {
     if (err.status === 401) {
-        window.location.replace("/login");
+        navigateTo("/login", { replace: true });
         return;
     }
     if (err.status === 403 && isCSRFError(err)) {
@@ -212,7 +212,7 @@ form.addEventListener("submit", async (event) => {
             }
         );
         if (downgrade && groupContainsSelf(group)) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         try {
@@ -220,7 +220,7 @@ form.addEventListener("submit", async (event) => {
             showMessage("Grant berhasil disimpan.");
         } catch (refreshError) {
             if (refreshError.status === 401) {
-                window.location.replace("/login");
+                navigateTo("/login", { replace: true });
                 return;
             }
             showMessage("Grant tersimpan, tetapi daftar terbaru gagal dimuat.", true);
@@ -251,7 +251,7 @@ async function revokeGrant(group, grant) {
             { method: "DELETE" }
         );
         if (groupContainsSelf(group)) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         try {
@@ -259,7 +259,7 @@ async function revokeGrant(group, grant) {
             showMessage("Grant berhasil dicabut.");
         } catch (refreshError) {
             if (refreshError.status === 401) {
-                window.location.replace("/login");
+                navigateTo("/login", { replace: true });
                 return;
             }
             showMessage("Grant dicabut, tetapi daftar terbaru gagal dimuat.", true);
@@ -288,7 +288,7 @@ async function initialize() {
     } catch (err) {
         status.hidden = true;
         if (err.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         errorBox.textContent = err.status === 403
@@ -308,7 +308,7 @@ refreshButton.addEventListener("click", async () => {
         await reloadData();
         errorBox.hidden = true;
     } catch (error) {
-        if (error.status === 401) window.location.replace("/login");
+        if (error.status === 401) navigateTo("/login", { replace: true });
         else {
             if (error.status === 403) panel.hidden = true;
             errorBox.textContent = error.status === 403
