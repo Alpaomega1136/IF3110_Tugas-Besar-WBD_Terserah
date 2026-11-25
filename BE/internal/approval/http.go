@@ -2,13 +2,13 @@ package approval
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/httpx"
+	"terserah/backend/internal/telemetry"
 )
 
 func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
@@ -95,21 +95,19 @@ func (s *Service) HandleSubmitReview(w http.ResponseWriter, r *http.Request) {
 		TargetExecutionID: req.TargetExecutionID,
 	}, s.now())
 	if err != nil {
-		slog.WarnContext(r.Context(), "migration_review_submit_failed",
-			"event", "migration_review_submit",
+		telemetry.WarnEvent(r.Context(), "migration_review_submit_failed",
 			"actor_id", p.ID,
 			"database_id", dbID,
 			"draft_id", req.DraftID,
 			"draft_revision", req.Revision,
 			"action_type", req.ActionType,
 			"status", "failed",
-			"error", err.Error(),
+			"error_code", telemetry.SQLErrorCode(err),
 		)
 		respondError(w, err)
 		return
 	}
-	slog.InfoContext(r.Context(), "migration_review_submitted",
-		"event", "migration_review_submitted",
+	telemetry.Event(r.Context(), "migration_review_submitted",
 		"actor_id", p.ID,
 		"database_id", dbID,
 		"review_id", review.ID,
@@ -163,20 +161,18 @@ func (s *Service) handleDecision(w http.ResponseWriter, r *http.Request, approve
 	}
 	review, err := s.store.DecideReview(r.Context(), p.ID, dbID, reviewID, approve, note, s.now())
 	if err != nil {
-		slog.WarnContext(r.Context(), "migration_review_decision_failed",
-			"event", "migration_review_decision",
+		telemetry.WarnEvent(r.Context(), "migration_review_decision_failed",
 			"actor_id", p.ID,
 			"database_id", dbID,
 			"review_id", reviewID,
 			"approve", approve,
 			"status", "failed",
-			"error", err.Error(),
+			"error_code", telemetry.SQLErrorCode(err),
 		)
 		respondError(w, err)
 		return
 	}
-	slog.InfoContext(r.Context(), "migration_review_decided",
-		"event", "migration_review_decided",
+	telemetry.Event(r.Context(), "migration_review_decided",
 		"actor_id", p.ID,
 		"database_id", dbID,
 		"review_id", review.ID,

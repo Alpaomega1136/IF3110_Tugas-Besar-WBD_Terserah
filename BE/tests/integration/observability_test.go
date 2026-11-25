@@ -32,6 +32,13 @@ func TestObservabilityCoversReadOnlyQueueWorkerBatchAndFailures(t *testing.T) {
 	otel.SetTracerProvider(provider)
 	t.Cleanup(func() { otel.SetTracerProvider(previous); _ = provider.Shutdown(context.Background()) })
 	f := newQueueFixture(t, telemetry.SQLTracer{Role: "metadata"})
+	admin := f.a.browser()
+	admin.login(t, "admin")
+	var groupID int64
+	if err := f.a.db.QueryRow(context.Background(), "SELECT id FROM groups WHERE leader_user_id=$1", f.a.users["viewer"]).Scan(&groupID); err != nil {
+		t.Fatal(err)
+	}
+	status(t, admin.request("PUT", fmt.Sprintf("/api/v1/admin/groups/%d/leader/%d", groupID, f.a.users["viewer"]), nil), 200)
 	status(t, f.viewer.request("GET", fmt.Sprintf("/api/v1/databases/%d/schemas", f.first), nil), 200)
 	j := queuedJob(t, f, f.first, "SELECT 'private-sql-marker'; SELECT 1/0")
 	if _, err := queueWorker(t, f).ProcessNext(context.Background()); err != nil {
@@ -60,10 +67,16 @@ func TestObservabilityCoversReadOnlyQueueWorkerBatchAndFailures(t *testing.T) {
 		}
 	}
 	var read, failed, rollback, commit, batch, snapshot bool
+	traceEvents := map[string]bool{"admin_group_leader_set": false, "migration_review_submitted": false, "migration_review_decided": false}
 	for _, line := range strings.Split(strings.TrimSpace(logged), "\n") {
 		var event map[string]any
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			t.Fatal("non-JSON application log", err)
+		}
+		if name, ok := event["event"].(string); ok {
+			if _, tracked := traceEvents[name]; tracked && event["trace_id"] != nil && event["span_id"] != nil {
+				traceEvents[name] = true
+			}
 		}
 		read = read || event["event"] == "sql_transaction_result" && event["command"] == "commit" && event["status"] == "success" && event["db_role"] == "target" && event["actor_id"] == float64(f.a.users["viewer"]) && event["trace_id"] != nil
 		failed = failed || event["event"] == "sql_result" && event["error_code"] == "22012" && event["job_id"] == float64(j.ID) && event["execution_id"] != nil && event["attempt"] == float64(1)
@@ -74,6 +87,11 @@ func TestObservabilityCoversReadOnlyQueueWorkerBatchAndFailures(t *testing.T) {
 	}
 	if !read || !failed || !rollback || !commit || !batch || !snapshot {
 		t.Fatalf("missing coverage: read=%v failure=%v rollback=%v commit=%v batch=%v snapshot=%v", read, failed, rollback, commit, batch, snapshot)
+	}
+	for name, traced := range traceEvents {
+		if !traced {
+			t.Errorf("event %s has no trace or span ID", name)
+		}
 	}
 	spans := exporter.GetSpans()
 	var producer, consumer, lock, sql bool

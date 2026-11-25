@@ -69,6 +69,14 @@ func WithFields(ctx context.Context, fields ...any) context.Context {
 }
 
 func Event(ctx context.Context, event string, fields ...any) {
+	logEvent(ctx, slog.LevelInfo, event, fields...)
+}
+
+func WarnEvent(ctx context.Context, event string, fields ...any) {
+	logEvent(ctx, slog.LevelWarn, event, fields...)
+}
+
+func logEvent(ctx context.Context, level slog.Level, event string, fields ...any) {
 	if values, ok := ctx.Value(fieldsKey{}).(map[string]any); ok {
 		present := make(map[string]bool)
 		for i := 0; i+1 < len(fields); i += 2 {
@@ -86,7 +94,7 @@ func Event(ctx context.Context, event string, fields ...any) {
 	if sc.IsValid() {
 		fields = append(fields, "trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
 	}
-	slog.InfoContext(ctx, event, append([]any{"event", event}, fields...)...)
+	slog.Log(ctx, level, event, append([]any{"event", event}, fields...)...)
 }
 
 func Failure(span trace.Span, code string) {

@@ -2,7 +2,6 @@ package admin
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/httpx"
 	"terserah/backend/internal/policy"
+	"terserah/backend/internal/telemetry"
 )
 
 func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
@@ -76,8 +76,7 @@ func (s *Service) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := auth.User(r.Context())
-	slog.InfoContext(r.Context(), "admin_user_created",
-		"event", "admin_user_created",
+	telemetry.Event(r.Context(), "admin_user_created",
 		"actor_id", actor.ID,
 		"target_user_id", user.ID,
 		"target_username", user.Username,
@@ -129,8 +128,7 @@ func (s *Service) HandleUpdateUser(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot update user")
 	default:
 		actor, _ := auth.User(r.Context())
-		slog.InfoContext(r.Context(), "admin_user_updated",
-			"event", "admin_user_updated",
+		telemetry.Event(r.Context(), "admin_user_updated",
 			"actor_id", actor.ID,
 			"target_user_id", user.ID,
 			"is_active", user.IsActive,
@@ -172,8 +170,7 @@ func (s *Service) HandleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := auth.User(r.Context())
-	slog.InfoContext(r.Context(), "admin_group_created",
-		"event", "admin_group_created",
+	telemetry.Event(r.Context(), "admin_group_created",
 		"actor_id", actor.ID,
 		"group_id", group.ID,
 		"group_name", group.Name,
@@ -218,8 +215,7 @@ func (s *Service) HandleSetGroupLeader(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot set group leader")
 	default:
 		actor, _ := auth.User(r.Context())
-		slog.InfoContext(r.Context(), "admin_group_leader_set",
-			"event", "admin_group_leader_set",
+		telemetry.Event(r.Context(), "admin_group_leader_set",
 			"actor_id", actor.ID,
 			"group_id", group.ID,
 			"leader_user_id", userID,
@@ -242,8 +238,7 @@ func (s *Service) HandleAddUserToGroup(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot add user to group")
 	default:
 		actor, _ := auth.User(r.Context())
-		slog.InfoContext(r.Context(), "admin_group_member_added",
-			"event", "admin_group_member_added",
+		telemetry.Event(r.Context(), "admin_group_member_added",
 			"actor_id", actor.ID,
 			"group_id", groupID,
 			"user_id", userID,
@@ -268,8 +263,7 @@ func (s *Service) HandleRemoveUserFromGroup(w http.ResponseWriter, r *http.Reque
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot remove user from group")
 	default:
 		actor, _ := auth.User(r.Context())
-		slog.InfoContext(r.Context(), "admin_group_member_removed",
-			"event", "admin_group_member_removed",
+		telemetry.Event(r.Context(), "admin_group_member_removed",
 			"actor_id", actor.ID,
 			"group_id", groupID,
 			"user_id", userID,
@@ -303,8 +297,7 @@ func (s *Service) HandleSetGrant(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot set database grant")
 	default:
 		actor, _ := auth.User(r.Context())
-		slog.InfoContext(r.Context(), "admin_grant_updated",
-			"event", "admin_grant_updated",
+		telemetry.Event(r.Context(), "admin_grant_updated",
 			"actor_id", actor.ID,
 			"group_id", groupID,
 			"database_id", databaseID,
@@ -328,8 +321,7 @@ func (s *Service) HandleRevokeGrant(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "internal_error", "Cannot revoke database grant")
 	default:
 		actor, _ := auth.User(r.Context())
-		slog.InfoContext(r.Context(), "admin_grant_revoked",
-			"event", "admin_grant_revoked",
+		telemetry.Event(r.Context(), "admin_grant_revoked",
 			"actor_id", actor.ID,
 			"group_id", groupID,
 			"database_id", databaseID,
