@@ -17,11 +17,8 @@ type stubReviewStore struct {
 func (s stubReviewStore) SubmitReview(context.Context, int64, int64, SubmitInput, time.Time) (ReviewView, error) {
 	return s.review, s.submitErr
 }
-func (s stubReviewStore) ListDatabaseReviews(context.Context, int64, int64, int64, int) ([]ReviewView, bool, *string, error) {
-	return []ReviewView{s.review}, false, nil, nil
-}
-func (s stubReviewStore) ListAssignedReviews(context.Context, int64) ([]ReviewView, error) {
-	return []ReviewView{s.review}, nil
+func (s stubReviewStore) ListReviews(context.Context, int64, int64, ReviewListOptions) (ReviewPage, error) {
+	return ReviewPage{}, nil
 }
 func (s stubReviewStore) GetReview(context.Context, int64, int64, int64) (ReviewView, error) {
 	return s.review, nil

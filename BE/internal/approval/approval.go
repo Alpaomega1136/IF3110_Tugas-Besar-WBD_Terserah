@@ -118,10 +118,23 @@ func ValidateNote(note string) (string, error) {
 	return trimmed, nil
 }
 
+type ReviewListOptions struct {
+	BeforeID       int64
+	Limit          int
+	OnlyActionable bool
+	Status         string
+}
+
+type ReviewPage struct {
+	Reviews    []ReviewView `json:"reviews"`
+	HasMore    bool         `json:"has_more"`
+	NextBefore *string      `json:"next_before"`
+	Total      *int64       `json:"total,omitempty"`
+}
+
 type Store interface {
 	SubmitReview(ctx context.Context, actorID, dbID int64, input SubmitInput, now time.Time) (ReviewView, error)
-	ListDatabaseReviews(ctx context.Context, actorID, dbID, beforeID int64, limit int) ([]ReviewView, bool, *string, error)
-	ListAssignedReviews(ctx context.Context, actorID int64) ([]ReviewView, error)
+	ListReviews(ctx context.Context, actorID, dbID int64, options ReviewListOptions) (ReviewPage, error)
 	GetReview(ctx context.Context, actorID, dbID, reviewID int64) (ReviewView, error)
 	DecideReview(ctx context.Context, actorID, dbID, reviewID int64, approve bool, note string, now time.Time) (ReviewView, error)
 	EnsureApproved(ctx context.Context, dbID, draftID, revision int64, actionType string) (ReviewView, error)

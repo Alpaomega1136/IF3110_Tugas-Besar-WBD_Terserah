@@ -295,10 +295,12 @@ func (s *PostgresStore) SetGroupLeader(ctx context.Context, groupID, userID int6
 
 	var username string
 	var isActive bool
+	// Use the same user row lock as UpdateUser so deactivation cannot race assignment.
 	err = tx.QueryRow(ctx, `
 		SELECT username, is_active
 		FROM users
 		WHERE id = $1
+		FOR NO KEY UPDATE
 	`, userID).Scan(&username, &isActive)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return GroupView{}, ErrNotFound

@@ -55,7 +55,7 @@ async function setupReviews({ databaseScoped = false, confirm = true, access = "
     clearAuthState();
     const ids = [
         "reviews-page", "reviews-page-status", "reviews-page-error", "reviews-workspace",
-        "reviews-scope-heading", "reviews-scope-description", "reviews-only-actionable", "reviews-refresh",
+        "reviews-scope-heading", "reviews-scope-description", "reviews-only-actionable", "reviews-status-filter", "reviews-refresh",
         "reviews-list-status", "reviews-list-error", "reviews-list-empty", "reviews-list-table",
         "reviews-list-body", "reviews-pagination", "reviews-prev", "reviews-next", "reviews-page-number",
         "review-detail", "review-detail-status", "review-detail-error", "review-detail-content",
@@ -98,7 +98,7 @@ async function setupReviews({ databaseScoped = false, confirm = true, access = "
         if (url === "/api/v1/auth/me") return json({ id: "12", username: "viewer_leader", is_platform_admin: false });
         if (url === "/api/v1/auth/csrf") return json({ csrf_token: "review-csrf" });
         if (url === "/api/v1/databases") return json({ databases: [{ id: dbID, access }] });
-        if (url === "/api/v1/reviews") return json({ reviews: [currentReview] });
+        if (url === "/api/v1/reviews?limit=50") return json({ reviews: [currentReview], has_more: false, next_before: null });
         if (url === `/api/v1/databases/${dbID}/reviews?limit=50`) {
             return json({ reviews: [currentReview], has_more: false, next_before: null });
         }
@@ -130,6 +130,23 @@ async function setupReviews({ databaseScoped = false, confirm = true, access = "
     await tick();
     return { $, calls, redirects };
 }
+
+test("global reviews page by cursor and restart at page one when filtering", async () => {
+    const ui = await setupReviews({ custom: ({ url }) => {
+        if (url === "/api/v1/reviews?limit=50") {
+            return json({ reviews: [sampleReview], has_more: true, next_before: reviewID });
+        }
+        if (url === `/api/v1/reviews?limit=50&before=${reviewID}` || url === "/api/v1/reviews?limit=50&only_actionable=true") {
+            return json({ reviews: [], has_more: false, next_before: null });
+        }
+    } });
+    await ui.$("reviews-next").fire("click");
+    assert.equal(ui.$("reviews-page-number").textContent, "2");
+    ui.$("reviews-only-actionable").checked = true;
+    await ui.$("reviews-only-actionable").fire("change");
+    assert.equal(ui.calls.at(-1).url, "/api/v1/reviews?limit=50&only_actionable=true");
+    assert.equal(ui.$("reviews-page-number").textContent, "1");
+});
 
 test("reviews list renders approval progress and opens detail with safe SQL and leader decision controls", async () => {
     const ui = await setupReviews();

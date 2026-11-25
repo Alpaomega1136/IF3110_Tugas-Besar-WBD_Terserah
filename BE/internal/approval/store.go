@@ -456,109 +456,87 @@ func (s *PostgresStore) GetReview(ctx context.Context, actorID, dbID, reviewID i
 	return loadReviewTx(ctx, tx, actorID, dbID, reviewID, true)
 }
 
-func (s *PostgresStore) ListDatabaseReviews(ctx context.Context, actorID, dbID, beforeID int64, limit int) ([]ReviewView, bool, *string, error) {
-	access, err := policy.DatabaseAccess(ctx, s.pool, actorID, dbID)
-	if err != nil {
-		return nil, false, nil, err
-	}
-	if !policy.Allows(access, false) {
-		return nil, false, nil, ErrForbidden
-	}
+// reviewActionableSQL uses migration_reviews r and the actor ID as $1.
+const reviewActionableSQL = `r.status = 'pending_review' AND EXISTS (
+    SELECT 1 FROM group_database_permissions p
+    JOIN groups g ON g.id = p.group_id
+    JOIN users u ON u.id = g.leader_user_id AND u.is_active
+    JOIN user_groups ug ON ug.group_id = g.id AND ug.user_id = u.id
+    LEFT JOIN migration_review_approvals a ON a.review_id = r.id AND a.group_id = g.id
+    WHERE p.database_id = r.database_id AND g.leader_user_id = $1
+      AND (a.group_id IS NULL OR a.leader_user_id <> g.leader_user_id OR a.decision = 'pending')
+)`
 
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return nil, false, nil, err
-	}
-	defer telemetry.Rollback(ctx, tx)
-
-	rows, err := tx.Query(ctx, `
-		SELECT id
-		FROM migration_reviews
-		WHERE database_id = $1 AND ($2::bigint = 0 OR id < $2)
-		ORDER BY id DESC
-		LIMIT $3
-	`, dbID, beforeID, limit+1)
-	if err != nil {
-		return nil, false, nil, err
-	}
-	ids := []int64{}
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, false, nil, err
-		}
-		ids = append(ids, id)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, false, nil, err
-	}
-
-	more := len(ids) > limit
-	if more {
-		ids = ids[:limit]
-	}
-	items := make([]ReviewView, 0, len(ids))
-	for _, id := range ids {
-		item, err := loadReviewTx(ctx, tx, actorID, dbID, id, false)
+func (s *PostgresStore) ListReviews(ctx context.Context, actorID, dbID int64, options ReviewListOptions) (ReviewPage, error) {
+	if dbID != 0 {
+		access, err := policy.DatabaseAccess(ctx, s.pool, actorID, dbID)
 		if err != nil {
-			return nil, false, nil, err
+			return ReviewPage{}, err
 		}
-		items = append(items, item)
+		if !policy.Allows(access, false) {
+			return ReviewPage{}, ErrForbidden
+		}
 	}
-	var next *string
-	if more {
-		val := strconv.FormatInt(items[len(items)-1].ID, 10)
-		next = &val
-	}
-	return items, more, next, nil
-}
 
-func (s *PostgresStore) ListAssignedReviews(ctx context.Context, actorID int64) ([]ReviewView, error) {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly, IsoLevel: pgx.RepeatableRead})
 	if err != nil {
-		return nil, err
+		return ReviewPage{}, err
 	}
 	defer telemetry.Rollback(ctx, tx)
 
+	countFirstPage := options.OnlyActionable && options.BeforeID == 0
+	totalSQL := "0::bigint"
+	if countFirstPage {
+		totalSQL = "count(*) OVER ()"
+	}
 	rows, err := tx.Query(ctx, `
-		SELECT DISTINCT r.id, r.database_id
+		SELECT r.id, r.database_id, `+totalSQL+`
 		FROM migration_reviews r
-		JOIN group_database_permissions p ON p.database_id = r.database_id
-		JOIN user_groups ug ON ug.group_id = p.group_id
-		JOIN users u ON u.id = ug.user_id
-		WHERE ug.user_id = $1 AND u.is_active = true
+		WHERE ($2::bigint = 0 OR r.database_id = $2)
+		  AND ($3::bigint = 0 OR r.id < $3)
+		  AND ($4::text = '' OR r.status = $4)
+		  AND (NOT $5 OR (`+reviewActionableSQL+`))
+		  AND EXISTS (
+			SELECT 1
+			FROM group_database_permissions p
+			JOIN user_groups ug ON ug.group_id = p.group_id
+			JOIN users u ON u.id = ug.user_id AND u.is_active
+			WHERE p.database_id = r.database_id AND ug.user_id = $1
+		  )
 		ORDER BY r.id DESC
-		LIMIT 100
-	`, actorID)
+		LIMIT $6
+	`, actorID, dbID, options.BeforeID, options.Status, options.OnlyActionable, options.Limit+1)
 	if err != nil {
-		return nil, err
+		return ReviewPage{}, err
 	}
-	type pair struct{ id, dbID int64 }
-	pairs := []pair{}
-	for rows.Next() {
-		var p pair
-		if err := rows.Scan(&p.id, &p.dbID); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		pairs = append(pairs, p)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
+	type entry struct{ ID, DBID, Total int64 }
+	entries, err := pgx.CollectRows(rows, pgx.RowToStructByPos[entry])
+	if err != nil {
+		return ReviewPage{}, err
 	}
 
-	items := make([]ReviewView, 0, len(pairs))
-	for _, p := range pairs {
-		item, err := loadReviewTx(ctx, tx, actorID, p.dbID, p.id, false)
-		if err != nil {
-			return nil, err
+	page := ReviewPage{HasMore: len(entries) > options.Limit}
+	if countFirstPage {
+		var total int64
+		if len(entries) > 0 {
+			total = entries[0].Total
 		}
-		items = append(items, item)
+		page.Total = &total
 	}
-	return items, nil
+	if page.HasMore {
+		entries = entries[:options.Limit]
+		next := strconv.FormatInt(entries[len(entries)-1].ID, 10)
+		page.NextBefore = &next
+	}
+	page.Reviews = make([]ReviewView, 0, len(entries))
+	for _, entry := range entries {
+		item, err := loadReviewTx(ctx, tx, actorID, entry.DBID, entry.ID, false)
+		if err != nil {
+			return ReviewPage{}, err
+		}
+		page.Reviews = append(page.Reviews, item)
+	}
+	return page, nil
 }
 
 // EnsureApproved verifies that an approved review exists for (dbID, draftID, revision, actionType)
@@ -658,19 +636,20 @@ func loadReviewTx(ctx context.Context, tx pgx.Tx, actorID, dbID, reviewID int64,
 			r.draft_revision,
 			r.action_type,
 			r.target_execution_id,
-			CASE WHEN $3 THEN r.sql_snapshot ELSE '' END,
+			CASE WHEN $4 THEN r.sql_snapshot ELSE '' END,
 			r.status,
 			r.requested_by,
 			u.username,
 			r.rejection_reason,
 			r.created_at,
-			r.decided_at
+			r.decided_at,
+			`+reviewActionableSQL+`
 		FROM migration_reviews r
 		JOIN database_connections dc ON dc.id = r.database_id
 		JOIN migration_drafts d ON d.id = r.draft_id
 		JOIN users u ON u.id = r.requested_by
-		WHERE r.id = $1 AND r.database_id = $2
-	`, reviewID, dbID, includeSQL).Scan(
+		WHERE r.id = $2 AND r.database_id = $3
+	`, actorID, reviewID, dbID, includeSQL).Scan(
 		&rv.ID,
 		&rv.DatabaseID,
 		&rv.DatabaseName,
@@ -686,6 +665,7 @@ func loadReviewTx(ctx context.Context, tx pgx.Tx, actorID, dbID, reviewID int64,
 		&rv.RejectionReason,
 		&rv.CreatedAt,
 		&rv.DecidedAt,
+		&rv.CanCurrentUserAct,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ReviewView{}, ErrNotFound
@@ -695,24 +675,7 @@ func loadReviewTx(ctx context.Context, tx pgx.Tx, actorID, dbID, reviewID int64,
 	}
 
 	rv.Approvals, err = loadApprovalsTx(ctx, tx, reviewID)
-	if err != nil {
-		return ReviewView{}, err
-	}
-	if rv.Status == StatusPendingReview && actorID > 0 {
-		err = tx.QueryRow(ctx, `SELECT EXISTS (
-			SELECT 1 FROM group_database_permissions p
-			JOIN groups g ON g.id = p.group_id
-			JOIN users u ON u.id = g.leader_user_id AND u.is_active
-			JOIN user_groups ug ON ug.group_id = g.id AND ug.user_id = u.id
-			LEFT JOIN migration_review_approvals a ON a.review_id = $1 AND a.group_id = g.id
-			WHERE p.database_id = $2 AND g.leader_user_id = $3
-			  AND (a.group_id IS NULL OR a.leader_user_id <> g.leader_user_id OR a.decision = 'pending')
-		)`, reviewID, dbID, actorID).Scan(&rv.CanCurrentUserAct)
-		if err != nil {
-			return ReviewView{}, err
-		}
-	}
-	return rv, nil
+	return rv, err
 }
 
 func loadApprovalsTx(ctx context.Context, tx pgx.Tx, reviewID int64) ([]GroupApprovalView, error) {

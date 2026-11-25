@@ -1,6 +1,6 @@
 import { authenticatedRequest, requireAuthenticatedUser } from "./auth.js";
 import { positiveInt64 } from "./pagination.js";
-import { byId, addCell } from "./ui.js";
+import { byId, addCell, navigateTo } from "./ui.js";
 
 const status = byId("dashboard-status");
 const content = byId("dashboard-content");
@@ -31,15 +31,17 @@ function actionLink(cell, id, resource, label, variant = "secondary") {
 async function loadPendingReviews() {
     if (!reviewsPanel) return;
     try {
-        const result = await authenticatedRequest("/api/v1/reviews");
-        const reviews = Array.isArray(result?.reviews) ? result.reviews : [];
-        const actionable = reviews.filter((r) => r.can_current_user_act);
-        if (statPendingReviews) statPendingReviews.textContent = String(actionable.length);
+        const result = await authenticatedRequest("/api/v1/reviews?limit=5&only_actionable=true");
+        if (!Array.isArray(result?.reviews) || !Number.isSafeInteger(result.total) || result.total < 0) {
+            throw new Error("Format daftar review dari backend tidak valid.");
+        }
+        const actionable = result.reviews;
+        if (statPendingReviews) statPendingReviews.textContent = String(result.total);
 
         if (reviewsList && reviewsEmpty) {
             reviewsList.replaceChildren();
             reviewsEmpty.textContent = "Tidak ada pengajuan migration yang menunggu keputusan Anda.";
-            for (const review of actionable.slice(0, 5)) {
+            for (const review of actionable) {
                 const item = document.createElement("li");
                 item.className = "pending-review-item";
 
@@ -120,7 +122,7 @@ async function loadDatabases(isAdmin) {
     } catch (error) {
         databasesBody.replaceChildren();
         if (error.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
         databasesError.textContent = error.status === 403

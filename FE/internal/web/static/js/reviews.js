@@ -87,10 +87,8 @@ function setBusy(value) {
     rejectButton.disabled = value;
     decisionNote.disabled = value;
     enqueueButton.disabled = value || !canQueue || queueLocked;
-    if (databaseId) {
-        prevButton.disabled = value || currentPage === 0;
-        nextButton.disabled = value || !hasMore;
-    }
+    prevButton.disabled = value || currentPage === 0;
+    nextButton.disabled = value || !hasMore;
     for (const button of listBody.querySelectorAll("button")) {
         button.disabled = value;
     }
@@ -98,14 +96,7 @@ function setBusy(value) {
 
 function renderList() {
     listBody.replaceChildren();
-    const selectedStatus = statusFilter?.value || "";
-    const filtered = allItems.filter((item) => {
-        if (onlyActionable.checked && !item.can_current_user_act) return false;
-        if (selectedStatus && item.status !== selectedStatus) return false;
-        return true;
-    });
-
-    for (const item of filtered) {
+    for (const item of allItems) {
         const row = document.createElement("tr");
         addCell(row, item.id);
         addCell(row, item.database_name || `DB ${item.database_id}`);
@@ -134,8 +125,8 @@ function renderList() {
         listBody.appendChild(row);
     }
 
-    listEmpty.hidden = filtered.length !== 0;
-    listTable.hidden = filtered.length === 0;
+    listEmpty.hidden = allItems.length !== 0;
+    listTable.hidden = allItems.length === 0;
 }
 
 function renderReviewDetail(review) {
@@ -299,6 +290,12 @@ async function loadReviews(index = currentPage, reset = false) {
     if (reset) {
         cursors = [null];
         index = 0;
+        currentPage = 0;
+        hasMore = false;
+        nextCursor = null;
+        listTable.hidden = true;
+        listEmpty.hidden = true;
+        pagination.hidden = true;
     }
     setBusy(true);
     listError.hidden = true;
@@ -306,30 +303,20 @@ async function loadReviews(index = currentPage, reset = false) {
     listStatus.hidden = false;
 
     try {
-        if (databaseId) {
-            const cursor = cursors[index];
-            const query = new URLSearchParams({ limit: String(pageLimit) });
-            if (cursor !== null) query.set("before", cursor);
-            const pageResult = parseCursorPage(
-                await authenticatedRequest(`/api/v1/databases/${encodeURIComponent(databaseId)}/reviews?${query}`),
-                "reviews",
-                "next_before"
-            );
-            allItems = pageResult.entries;
-            currentPage = index;
-            hasMore = pageResult.hasMore;
-            nextCursor = pageResult.nextCursor;
-            cursors = cursors.slice(0, index + 1);
-            pagination.hidden = false;
-            pageNumber.textContent = String(currentPage + 1);
-        } else {
-            const result = await authenticatedRequest("/api/v1/reviews");
-            if (!Array.isArray(result?.reviews)) {
-                throw new Error("Format daftar review dari backend tidak valid.");
-            }
-            allItems = result.reviews;
-            pagination.hidden = true;
-        }
+        const path = databaseId ? `/api/v1/databases/${encodeURIComponent(databaseId)}/reviews` : "/api/v1/reviews";
+        const query = new URLSearchParams({ limit: String(pageLimit) });
+        const cursor = cursors[index];
+        if (cursor) query.set("before", cursor);
+        if (onlyActionable.checked) query.set("only_actionable", "true");
+        if (statusFilter?.value) query.set("status", statusFilter.value);
+        const pageResult = parseCursorPage(await authenticatedRequest(`${path}?${query}`), "reviews", "next_before");
+        allItems = pageResult.entries;
+        currentPage = index;
+        hasMore = pageResult.hasMore;
+        nextCursor = pageResult.nextCursor;
+        cursors = cursors.slice(0, index + 1);
+        pagination.hidden = !hasMore && currentPage === 0;
+        pageNumber.textContent = String(currentPage + 1);
         renderList();
     } catch (error) {
         if (error.status === 401) {
@@ -413,9 +400,9 @@ async function submitDecision(approve) {
     await loadReviews(currentPage, false);
 }
 
-onlyActionable.addEventListener("change", renderList);
+onlyActionable.addEventListener("change", () => loadReviews(0, true));
 enqueueButton.addEventListener("click", enqueueApprovedReview);
-statusFilter?.addEventListener("change", renderList);
+statusFilter?.addEventListener("change", () => loadReviews(0, true));
 refreshButton.addEventListener("click", () => loadReviews(0, true));
 prevButton?.addEventListener("click", () => loadReviews(currentPage - 1));
 nextButton?.addEventListener("click", () => {

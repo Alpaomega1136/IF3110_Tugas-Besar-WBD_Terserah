@@ -21,48 +21,56 @@ func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 }
 
 func (s *Service) HandleListAssignedReviews(w http.ResponseWriter, r *http.Request) {
-	p, _ := auth.User(r.Context())
-	items, err := s.store.ListAssignedReviews(r.Context(), p.ID)
-	if err != nil {
-		respondError(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"reviews": items})
+	s.listReviews(w, r, 0, 100)
 }
 
 func (s *Service) HandleListDatabaseReviews(w http.ResponseWriter, r *http.Request) {
-	p, _ := auth.User(r.Context())
 	dbID, err := parsePositiveID(r.PathValue("id"))
 	if err != nil {
 		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid database ID")
 		return
 	}
-	limit := 50
-	var before int64
-	if r.URL.Query().Has("limit") {
-		limit, err = strconv.Atoi(r.URL.Query().Get("limit"))
-		if err != nil || limit < 1 || limit > 100 {
+	s.listReviews(w, r, dbID, 50)
+}
+
+func (s *Service) listReviews(w http.ResponseWriter, r *http.Request, dbID int64, defaultLimit int) {
+	p, _ := auth.User(r.Context())
+	query := r.URL.Query()
+	options := ReviewListOptions{Limit: defaultLimit, Status: query.Get("status")}
+	var err error
+	if query.Has("limit") {
+		options.Limit, err = strconv.Atoi(query.Get("limit"))
+		if err != nil || options.Limit < 1 || options.Limit > 100 {
 			httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid limit")
 			return
 		}
 	}
-	if r.URL.Query().Has("before") {
-		before, err = parsePositiveID(r.URL.Query().Get("before"))
+	if query.Has("before") {
+		options.BeforeID, err = parsePositiveID(query.Get("before"))
 		if err != nil {
 			httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid before cursor")
 			return
 		}
 	}
-	items, more, next, err := s.store.ListDatabaseReviews(r.Context(), p.ID, dbID, before, limit)
+	if query.Has("only_actionable") {
+		options.OnlyActionable, err = strconv.ParseBool(query.Get("only_actionable"))
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid only_actionable filter")
+			return
+		}
+	}
+	switch options.Status {
+	case "", StatusPendingReview, StatusApproved, StatusRejected, StatusQueued, StatusCancelled:
+	default:
+		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid review status")
+		return
+	}
+	page, err := s.store.ListReviews(r.Context(), p.ID, dbID, options)
 	if err != nil {
 		respondError(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{
-		"reviews":     items,
-		"has_more":    more,
-		"next_before": next,
-	})
+	httpx.JSON(w, http.StatusOK, page)
 }
 
 func (s *Service) HandleSubmitReview(w http.ResponseWriter, r *http.Request) {

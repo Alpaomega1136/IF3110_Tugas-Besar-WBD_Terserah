@@ -3,11 +3,15 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"terserah/backend/internal/admin"
 	"terserah/backend/internal/approval"
 	"terserah/backend/internal/runner"
 )
@@ -135,5 +139,108 @@ func TestGroupLeaderAndApprovalWorkflowIntegration(t *testing.T) {
 	}
 	if submitted.Review.Status != approval.StatusApproved {
 		t.Fatalf("expected approved after all leaders approved, got %s", submitted.Review.Status)
+	}
+}
+
+func TestReviewInboxFiltersBeforePagination(t *testing.T) {
+	f := newQueueFixture(t)
+	draft := f.draft(t, f.first, "SELECT 1")
+	hiddenDraft := f.draft(t, f.second, "SELECT 2")
+	ctx := context.Background()
+	var oldest int64
+	if err := f.a.db.QueryRow(ctx, `INSERT INTO migration_reviews
+		(database_id, draft_id, draft_revision, requested_by, sql_snapshot)
+		VALUES ($1,$2,1,$3,'SELECT 1') RETURNING id`, f.first, draft.ID, f.actor.ID).Scan(&oldest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.a.db.Exec(ctx, `INSERT INTO migration_reviews
+		(database_id, draft_id, draft_revision, requested_by, sql_snapshot, status)
+		SELECT $1::bigint,$2::bigint,1,$3::bigint,'SELECT 1','cancelled' FROM generate_series(1,101)
+		UNION ALL SELECT $4::bigint,$5::bigint,1,$3,'SELECT 2','pending_review'
+		UNION ALL SELECT $1,$2,1,$3,'SELECT 1','pending_review'`, f.first, draft.ID, f.actor.ID, f.second, hiddenDraft.ID); err != nil {
+		t.Fatal(err)
+	}
+	base := "/api/v1/reviews?only_actionable=true&limit=1"
+	request := func(path string) approval.ReviewPage {
+		t.Helper()
+		w := f.viewer.request("GET", path, nil)
+		status(t, w, 200)
+		var page approval.ReviewPage
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+	p := request(base)
+	if p.Total == nil || *p.Total != 2 || !p.HasMore || p.NextBefore == nil || len(p.Reviews) != 1 ||
+		p.Reviews[0].DatabaseID != f.first || p.Reviews[0].ID <= oldest || !p.Reviews[0].CanCurrentUserAct {
+		t.Fatalf("unexpected actionable inbox: %+v", p)
+	}
+	p = request(base + "&before=" + *p.NextBefore)
+	if p.HasMore || p.NextBefore != nil || len(p.Reviews) != 1 || p.Reviews[0].ID != oldest || !p.Reviews[0].CanCurrentUserAct {
+		t.Fatalf("second page lost the old pending review: %+v", p)
+	}
+	p = request(fmt.Sprintf("/api/v1/databases/%d/reviews?limit=1&status=cancelled", f.first))
+	if !p.HasMore || len(p.Reviews) != 1 || p.Reviews[0].Status != approval.StatusCancelled {
+		t.Fatalf("database review filter did not run before pagination: %+v", p)
+	}
+}
+
+func TestLeaderAssignmentWaitsForUserDeactivation(t *testing.T) {
+	a := newM1App(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store := admin.NewPostgresStore(a.db)
+	group, err := store.CreateGroup(ctx, "concurrent-leader")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := a.users["viewer"]
+	if err := store.AddUserToGroup(ctx, group.ID, user); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := a.db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, "SELECT id FROM users WHERE id=$1 FOR UPDATE", user); err != nil {
+		t.Fatal(err)
+	}
+	var blocker int32
+	if err := tx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&blocker); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.SetGroupLeader(ctx, group.ID, user)
+		result <- err
+	}()
+	for {
+		var waiting bool
+		if err := a.db.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))
+		)`, blocker).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case err := <-result:
+			t.Fatalf("leader assignment completed before the user lock released: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if _, err := tx.Exec(ctx, "UPDATE users SET is_active=false WHERE id=$1", user); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; !errors.Is(err, admin.ErrNotGroupMember) {
+		t.Fatalf("leader assignment should reject the now-inactive member: %v", err)
 	}
 }
