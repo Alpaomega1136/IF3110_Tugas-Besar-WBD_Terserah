@@ -65,7 +65,7 @@
                 </p>
 
                 <div id="history-list-table" class="users-table-wrapper"
-                     hidden>
+                     role="region" aria-labelledby="history-list-heading" tabindex="0" hidden>
                     <table class="users-table">
                         <thead>
                             <tr>
@@ -97,9 +97,9 @@
                 <p id="history-reconcile-status" role="status" aria-live="polite" hidden></p>
                 <p id="history-reconcile-error" class="error-message" role="alert" hidden></p>
                 <div id="history-reconcile-result" hidden>
-                    <h3>Hasil Reconcile</h3>
+                    <h3 id="history-reconcile-heading">Hasil Reconcile</h3>
                     <p id="history-reconcile-summary" role="status" aria-live="polite"></p>
-                    <div id="history-reconcile-table" class="users-table-wrapper" hidden>
+                    <div id="history-reconcile-table" class="users-table-wrapper" role="region" aria-labelledby="history-reconcile-heading" tabindex="0" hidden>
                         <table class="users-table">
                             <thead><tr><th scope="col">Versi</th><th scope="col">Execution ID</th>
                                 <th scope="col">Status</th><th scope="col">Error Code</th></tr></thead>
