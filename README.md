@@ -537,3 +537,59 @@ Hasil initial scan pada 26 November 2026, branch `feat/bonus-codeql`, commit `5f
 Kedua analisis berhasil dan tidak menghasilkan temuan keamanan. Oleh karena itu, tidak terdapat temuan yang memerlukan perbaikan maupun scan ulang terkait perbaikan.
 
 Hasil scan bersih tidak berarti aplikasi pasti aman. Cakupan analisis, batasan, konfigurasi, dan bukti hasil scan dapat dilihat pada [Laporan CodeQL](docs/security/codeql-report.md).
+
+### Stress Testing dengan k6
+
+Stress testing dilakukan menggunakan Grafana k6 pada instance development lokal dengan dua database target PostgreSQL terpisah (`wbd_dev_target_a` dan `wbd_dev_target_b`). Script dan panduan menjalankan pengujian tersedia di [tests/k6](tests/k6/README.md).
+
+`stress.js` membuat migration draft dan review yang unik melalui API, serta memastikan seluruh review telah mendapat approval sebelum pengukuran dimulai. API VU mengakses daftar database, schema, migration history, dan job list secara berulang dengan jeda 0,5 detik per iterasi. Pada setiap level, skenario submission mengirim job ke kedua target secara bersamaan, dengan satu review unik per VU submission. Setiap job dipantau hingga mencapai status terminal dan diperiksa kembali melalui final audit. Respons HTTP 202 hanya berarti job diterima antrean, bukan migration berhasil.
+
+Setiap migration membuat schema unik, membuat satu tabel, memasukkan 1.000 row, dan menjalankan `pg_sleep(0.5)` untuk memberi durasi terkontrol. SQL Down tersedia tetapi tidak dijalankan dalam stress test ini. Pengujian menggunakan profil `full` dengan 10 API VU sebagai beban normal, kemudian dinaikkan menjadi 25 dan 50 VU sebelum diturunkan kembali menjadi 10 VU dan akhirnya nol. VU submission merupakan tambahan terhadap VU API.
+
+#### Lingkungan dan konfigurasi pengujian
+
+- Tanggal: 26 November 2026.
+- Run ID: `mwxinlbu_332f34`.
+- Sistem operasi: Windows (PowerShell).
+- k6: v2.4.0.
+- CPU: 13th Gen Intel(R) Core(TM) i9-13900H.
+- RAM: 15.71 GB.
+- PostgreSQL: 18.6.
+- Aplikasi dan worker: instance development lokal, worker embedded.
+- Threshold per level: HTTP p95 < 1.000 ms dan HTTP error rate < 5%.
+- Threshold migration: seluruh 32 job mencapai `success` pada workload dan final audit.
+
+#### Hasil pengujian API
+
+| Level | API VU | Durasi (s) | Requests | Throughput (req/s) | p50 (ms) | p95 (ms) | Error rate | Threshold |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Normal | 10 | 45 | 2.904 | 64,53 | 9,70 | 83,52 | 0% | PASS |
+| Medium | 25 | 60 | 8.075 | 134,58 | 44,35 | 167,80 | 0% | PASS |
+| Stress | 50 | 75 | 12.377 | 165,03 | 155,79 | 431,10 | 0% | PASS |
+| Recovery | 10 | 45 | 3.390 | 75,33 | 11,71 | 180,03 | 0% | PASS |
+
+Total 26.746 HTTP request terukur tanpa HTTP error. Pengujian berakhir dengan exit code `0` sehingga seluruh threshold k6 terpenuhi.
+
+#### Hasil pengujian migration
+
+| Level | Job A/B | Accepted | Success | Success/s | Queue p50 (ms) | Queue p95 (ms) | Duration p50 (ms) | Duration p95 (ms) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Normal | 2/2 | 4 | 4 | 0,09 | 469 | 872,20 | 688 | 745,60 |
+| Medium | 5/3 | 8 | 8 | 0,13 | 2.471 | 4.951,10 | 998 | 1.303,60 |
+| Stress | 12/4 | 16 | 16 | 0,21 | 7.042 | 16.936,75 | 1.434 | 1.559,25 |
+| Recovery | 2/2 | 4 | 4 | 0,09 | 451 | 845,85 | 740 | 767,70 |
+
+Seluruh 32 migration (21 pada target A dan 11 pada target B) berhasil pada workload dan final audit. Tidak terdapat retry, kegagalan, atau job unresolved. Tidak ada job tersisa pada fase drain.
+
+Dari 32 job dengan timestamp yang dapat dibandingkan, terdapat 0 pasangan job yang overlap pada target yang sama dan 16 pasangan yang overlap pada target berbeda. Hasil tersebut mendukung serialisasi job per database serta pemrosesan paralel antar-database. Interval yang dibandingkan merupakan timestamp eksekusi job, bukan interval kepemilikan SQL lock secara langsung.
+
+#### Analisis setiap level beban
+
+- **Normal:** latency API rendah (p95 83,52 ms). Keempat migration berhasil; queue p95 sebesar 872,20 ms menjadi acuan beban normal.
+- **Medium:** throughput meningkat menjadi 134,58 req/s, tetapi p95 API meningkat menjadi 167,80 ms dan queue p95 menjadi 4.951,10 ms. Penambahan job mulai meningkatkan waktu antrean.
+- **Stress:** penambahan API VU dari 25 ke 50 hanya meningkatkan throughput sekitar 22,6%, sementara p95 API meningkat menjadi 431,10 ms. Hal ini mengindikasikan keterbatasan kapasitas pada workload ini, tetapi tidak menetapkan batas kapasitas maksimum. Queue p95 meningkat menjadi 16.936,75 ms, jauh lebih besar daripada duration p95 sebesar 1.559,25 ms. Penumpukan antrean konsisten dengan submission yang terkonsentrasi pada target A dan serialisasi per target. Meskipun demikian, semua 16 job selesai tanpa error atau retry.
+- **Recovery:** setelah beban diturunkan, queue p95 kembali menjadi 845,85 ms dan duration p95 menjadi 767,70 ms, mendekati kondisi normal. Median API juga mendekati baseline (11,71 ms dibanding 9,70 ms), tetapi p95 masih lebih tinggi (180,03 ms dibanding 83,52 ms). Dengan demikian, pemulihan migration terlihat jelas, sedangkan pemulihan latency API belum sepenuhnya kembali ke baseline pada seluruh fase recovery.
+
+Metrik HTTP mencakup request API terautentikasi, login/logout, enqueue, dan polling; setup serta final audit dikeluarkan dari metrik fase. Queue time dihitung dari pembuatan job hingga pertama kali dimulai, sedangkan migration duration dihitung dari waktu mulai pertama hingga selesai. Throughput adalah jumlah request atau job terminal yang teramati dibagi durasi fase, termasuk ramp. Throughput job yang dilaporkan merupakan rata-rata per fase, bukan kapasitas maksimum worker. Hasil merupakan satu kali pengujian lokal pada workload sintetis dengan `pg_sleep`, bukan jaminan performa production. Fase recovery juga mencakup ramp down sehingga p95 fase tersebut tidak hanya mencerminkan kondisi stabil setelah penurunan beban.
+
+Bukti pengujian tersedia pada [full report](tests/k6/results/full-report.md), [ringkasan k6](tests/k6/results/full-summary.log), dan [event log](tests/k6/results/full-events.log). Hasil quick test sebagai validasi awal tersedia pada [quick report](tests/k6/results/quick-report.md).
