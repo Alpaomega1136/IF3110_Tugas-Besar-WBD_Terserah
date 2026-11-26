@@ -1,4 +1,4 @@
-"""Convert k6 JSON points + raw event log into a reproducible Markdown report."""
+"""Menghasilkan laporan Markdown dari data JSON dan log peristiwa k6."""
 import argparse
 import json
 import re
@@ -19,6 +19,16 @@ def percentile(values, q):
 
 def fmt(value):
     return 'N/A' if value is None else f'{value:.2f}'
+
+
+def phase_label(name):
+    return {
+        'normal': 'Normal',
+        'medium': 'Menengah',
+        'stress': 'Stress',
+        'recovery': 'Pemulihan',
+        'drain': 'Penyelesaian antrean',
+    }.get(name, name)
 
 
 def timing(values):
@@ -50,7 +60,7 @@ def main():
         elif line.startswith(('K6_AUDIT ', 'K6_JOB_ERROR ')):
             audit.append(line)
     if profile is None:
-        raise SystemExit('Missing K6_PROFILE event: check setup and raw log format')
+        raise SystemExit('Peristiwa K6_PROFILE tidak ditemukan: periksa setup dan format log mentah')
     by_phase = defaultdict(lambda: defaultdict(list))
     by_cohort = defaultdict(lambda: defaultdict(list))
     accepted_metrics = {'http_req_duration', 'http_reqs', 'http_req_failed', 'checks'}
@@ -66,8 +76,8 @@ def main():
             by_phase[phase][metric].append(data['value'])
             if tags.get('cohort'):
                 by_cohort[tags['cohort']][metric].append(data['value'])
-    lines = [f'# k6 stress test — {profile["profile"]}', '', f'Run ID: `{profile["runId"]}`. Planned jobs: {profile["totalJobs"]}.', '',
-             '## HTTP workload', '', '| Level | API VU target | Window (s) | Requests | req/s | p50 (ms) | p95 (ms) | HTTP error (%) | Threshold |',
+    lines = [f'# Pengujian beban dengan k6 — {profile["profile"]}', '', f'ID pengujian: `{profile["runId"]}`. Jumlah job yang direncanakan: {profile["totalJobs"]}.', '',
+             '## Beban HTTP', '', '| Tingkat beban | Target VU API | Durasi (detik) | Jumlah request | Request/detik | p50 (ms) | p95 (ms) | Kesalahan HTTP (%) | Ambang batas |',
              '|---|---:|---:|---:|---:|---:|---:|---:|---|']
     for p in profile['phases']:
         m = by_phase[p['name']]
@@ -75,43 +85,43 @@ def main():
         errors = m['http_req_failed']
         rate = sum(errors) / len(errors) * 100 if errors else None
         p50, p95 = (percentile(m['http_req_duration'], q) for q in (.5, .95))
-        threshold = 'N/A' if p95 is None or rate is None else ('PASS' if p95 < 1000 and rate < 5 else 'FAIL')
-        lines.append(f'| {p["name"]} | {p["vus"]} | {p["duration"]} | {req} | {fmt(req/p["duration"])} | {fmt(p50)} | {fmt(p95)} | {fmt(rate)} | {threshold} |')
-    lines.extend(['', '## Migration throughput by observation phase', '',
-                  '| Level | Attempted | Accepted | Terminal observed | Success observed | Non-success | Unresolved events | Terminal/s | Success/s | Queue p50/p95 (ms) | Duration p50/p95 (ms) |',
+        threshold = 'N/A' if p95 is None or rate is None else ('LULUS' if p95 < 1000 and rate < 5 else 'TIDAK LULUS')
+        lines.append(f'| {phase_label(p["name"])} | {p["vus"]} | {p["duration"]} | {req} | {fmt(req/p["duration"])} | {fmt(p50)} | {fmt(p95)} | {fmt(rate)} | {threshold} |')
+    lines.extend(['', '## Throughput migration berdasarkan fase pengamatan', '',
+                  '| Tingkat beban | Dicoba | Diterima | Mencapai status terminal | Berhasil | Tidak berhasil | Belum terkonfirmasi | Terminal/detik | Berhasil/detik | Waktu antre p50/p95 (ms) | Durasi p50/p95 (ms) |',
                   '|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|'])
     for p in [*profile['phases'], {'name': 'drain', 'duration': None}]:
         m = by_phase[p['name']]
         a, b, c, d, e, u = (int(sum(m['stress_jobs_'+key])) for key in ('attempted','accepted','terminal','success','unsuccessful','unresolved'))
         sec = p['duration']
-        lines.append(f'| {p["name"]} | {a} | {b} | {c} | {d} | {e} | {u} | {fmt(c/sec if sec else None)} | {fmt(d/sec if sec else None)} | {timing(m["stress_queue_wait_ms"])} | {timing(m["stress_job_duration_ms"])} |')
-    lines.extend(['', '## Jobs by submission cohort', '', '| Level | Planned A/B | Accepted | Terminal | Success | Retries | Queue p50/p95 (ms) | Duration p50/p95 (ms) |', '|---|---|---:|---:|---:|---:|---|---|'])
+        lines.append(f'| {phase_label(p["name"])} | {a} | {b} | {c} | {d} | {e} | {u} | {fmt(c/sec if sec else None)} | {fmt(d/sec if sec else None)} | {timing(m["stress_queue_wait_ms"])} | {timing(m["stress_job_duration_ms"])} |')
+    lines.extend(['', '## Job berdasarkan fase pengiriman', '', '| Tingkat beban | Rencana A/B | Diterima | Terminal | Berhasil | Percobaan ulang | Waktu antre p50/p95 (ms) | Durasi p50/p95 (ms) |', '|---|---|---:|---:|---:|---:|---|---|'])
     for p in profile['phases']:
         m = by_cohort[p['name']]
         a,b,c,r = (int(sum(m['stress_'+k])) for k in ('jobs_accepted','jobs_terminal','jobs_success','job_retries'))
-        lines.append(f'| {p["name"]} | {p["a"]}/{p["b"]} | {a} | {b} | {c} | {r} | {timing(m["stress_queue_wait_ms"])} | {timing(m["stress_job_duration_ms"])} |')
-    # Use actual backend timestamps rather than client polling timestamps to check overlap.
+        lines.append(f'| {phase_label(p["name"])} | {p["a"]}/{p["b"]} | {a} | {b} | {c} | {r} | {timing(m["stress_queue_wait_ms"])} | {timing(m["stress_job_duration_ms"])} |')
+    # Gunakan timestamp backend, bukan timestamp polling client, untuk memeriksa overlap.
     good = [j for j in jobs if j['status'] == 'success' and j['started_at'] and j['finished_at'] and j['attempts'] == 1]
     overlaps = defaultdict(list)
     for a,b in combinations(good,2):
         if max(stamp(a['started_at']), stamp(b['started_at'])) < min(stamp(a['finished_at']), stamp(b['finished_at'])):
             overlaps['same' if a['target'] == b['target'] else 'different'].append((a['job'], b['job']))
-    lines.extend(['', '## Concurrency evidence (successful jobs, one attempt)', '',
-                  f'- Jobs with comparable timestamps: {len(good)}.',
-                  f'- Same-target overlapping pairs: {len(overlaps["same"])}.',
-                  f'- Different-target overlapping pairs: {len(overlaps["different"])}.',
-                  f'- Example different-target pairs: {overlaps["different"][:5]}.',
-                  '', '## Final audit', '', '```text', *audit, '```', '',
-                  '## Method and limitations', '',
-                  '- HTTP metrics include authenticated API reads, login/logout, enqueue and polling within each measured phase; setup and final audit are excluded. Threshold: p95 < 1000 ms and HTTP error rate < 5%.',
-                  '- Request tags are set at request start; job counts are attributed to the time their terminal status is observed. A job can finish in a later phase than its submission cohort. Throughput is count / phase duration, including ramp; drain has no fixed duration.',
-                  '- Queue time = first start minus creation; duration = final finish minus first start (includes retry delays if any). Only jobs with valid start/finish timestamps contribute timing samples.',
-                  '- Percentiles use linear interpolation on raw k6 samples; missing measurements are N/A. HTTP threshold table is calculated from raw samples; the k6 exit status is authoritative.',
-                  '- Final audit is independent from load metrics. Non-success or unresolved jobs cannot be counted as successful migrations. Concurrency pairs describe worker job timestamp intervals, not precise SQL lock hold intervals.',
-                  '- Fill in the hardware/software environment and interpretation of each level in the root README based on these actual results.', ''])
+    lines.extend(['', '## Bukti konkurensi (job berhasil dalam satu percobaan)', '',
+                  f'- Job dengan timestamp yang dapat dibandingkan: {len(good)}.',
+                  f'- Pasangan job yang bertumpang tindih pada target yang sama: {len(overlaps["same"])}.',
+                  f'- Pasangan job yang bertumpang tindih pada target berbeda: {len(overlaps["different"])}.',
+                  f'- Contoh pasangan ID job pada target berbeda: {overlaps["different"][:5]}.',
+                  '', '## Audit akhir', '', '```text', *audit, '```', '',
+                  '## Metodologi dan batasan', '',
+                  '- Metrik HTTP mencakup pembacaan API terautentikasi, login/logout, pengiriman job ke antrean, dan polling pada setiap fase pengukuran. Setup dan audit akhir tidak disertakan. Ambang batas: p95 < 1000 ms dan tingkat kesalahan HTTP < 5%.',
+                  '- Tag request ditetapkan saat request dimulai. Jumlah job dihitung berdasarkan fase ketika status terminalnya teramati. Job dapat selesai pada fase yang berbeda dari fase pengirimannya. Throughput dihitung dengan membagi jumlah request atau job dengan durasi fase, termasuk perubahan beban (ramp). Fase penyelesaian antrean (drain) tidak memiliki durasi tetap.',
+                  '- Waktu antre dihitung dari waktu pembuatan job hingga pertama kali dimulai. Durasi dihitung dari waktu mulai pertama hingga selesai (termasuk jeda percobaan ulang jika ada). Hanya job dengan timestamp mulai dan selesai yang valid yang digunakan dalam pengukuran waktu.',
+                  '- Persentil dihitung menggunakan interpolasi linear pada sampel mentah k6. N/A menunjukkan bahwa data pengukuran tidak tersedia atau metrik tidak berlaku. Tabel ambang batas HTTP dihitung dari sampel mentah; status keluar k6 menjadi acuan utama.',
+                  '- Audit akhir dilakukan secara terpisah dari metrik beban. Job yang tidak berhasil atau belum terkonfirmasi tidak dihitung sebagai migration berhasil. Pasangan konkurensi menggambarkan interval timestamp job pada worker, bukan interval kepemilikan SQL lock secara langsung.',
+                  '- Lingkungan pengujian dan analisis hasil setiap tingkat beban didokumentasikan pada bagian Stress Testing dengan k6 di README utama repositori.', ''])
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text('\n'.join(lines), encoding='utf-8')
-    print(f'Report saved: {args.report}')
+    print(f'Laporan disimpan: {args.report}')
 
 
 if __name__ == '__main__':

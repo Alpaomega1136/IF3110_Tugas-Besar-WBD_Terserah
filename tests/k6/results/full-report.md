@@ -1,43 +1,43 @@
-# k6 stress test — full
+# Pengujian beban dengan k6 — full
 
-Run ID: `mwxinlbu_332f34`. Planned jobs: 32.
+ID pengujian: `mwxinlbu_332f34`. Jumlah job yang direncanakan: 32.
 
-## HTTP workload
+## Beban HTTP
 
-| Level | API VU target | Window (s) | Requests | req/s | p50 (ms) | p95 (ms) | HTTP error (%) | Threshold |
+| Tingkat beban | Target VU API | Durasi (detik) | Jumlah request | Request/detik | p50 (ms) | p95 (ms) | Kesalahan HTTP (%) | Ambang batas |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| normal | 10 | 45 | 2904 | 64.53 | 9.70 | 83.52 | 0.00 | PASS |
-| medium | 25 | 60 | 8075 | 134.58 | 44.35 | 167.80 | 0.00 | PASS |
-| stress | 50 | 75 | 12377 | 165.03 | 155.79 | 431.10 | 0.00 | PASS |
-| recovery | 10 | 45 | 3390 | 75.33 | 11.71 | 180.03 | 0.00 | PASS |
+| Normal | 10 | 45 | 2904 | 64.53 | 9.70 | 83.52 | 0.00 | LULUS |
+| Menengah | 25 | 60 | 8075 | 134.58 | 44.35 | 167.80 | 0.00 | LULUS |
+| Stress | 50 | 75 | 12377 | 165.03 | 155.79 | 431.10 | 0.00 | LULUS |
+| Pemulihan | 10 | 45 | 3390 | 75.33 | 11.71 | 180.03 | 0.00 | LULUS |
 
-## Migration throughput by observation phase
+## Throughput migration berdasarkan fase pengamatan
 
-| Level | Attempted | Accepted | Terminal observed | Success observed | Non-success | Unresolved events | Terminal/s | Success/s | Queue p50/p95 (ms) | Duration p50/p95 (ms) |
+| Tingkat beban | Dicoba | Diterima | Mencapai status terminal | Berhasil | Tidak berhasil | Belum terkonfirmasi | Terminal/detik | Berhasil/detik | Waktu antre p50/p95 (ms) | Durasi p50/p95 (ms) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
-| normal | 4 | 4 | 4 | 4 | 0 | 0 | 0.09 | 0.09 | 469.00 / 872.20 | 688.00 / 745.60 |
-| medium | 8 | 8 | 8 | 8 | 0 | 0 | 0.13 | 0.13 | 2471.00 / 4951.10 | 998.00 / 1303.60 |
-| stress | 16 | 16 | 16 | 16 | 0 | 0 | 0.21 | 0.21 | 7042.00 / 16936.75 | 1434.00 / 1559.25 |
-| recovery | 4 | 4 | 4 | 4 | 0 | 0 | 0.09 | 0.09 | 451.00 / 845.85 | 740.00 / 767.70 |
-| drain | 0 | 0 | 0 | 0 | 0 | 0 | N/A | N/A | N/A / N/A | N/A / N/A |
+| Normal | 4 | 4 | 4 | 4 | 0 | 0 | 0.09 | 0.09 | 469.00 / 872.20 | 688.00 / 745.60 |
+| Menengah | 8 | 8 | 8 | 8 | 0 | 0 | 0.13 | 0.13 | 2471.00 / 4951.10 | 998.00 / 1303.60 |
+| Stress | 16 | 16 | 16 | 16 | 0 | 0 | 0.21 | 0.21 | 7042.00 / 16936.75 | 1434.00 / 1559.25 |
+| Pemulihan | 4 | 4 | 4 | 4 | 0 | 0 | 0.09 | 0.09 | 451.00 / 845.85 | 740.00 / 767.70 |
+| Penyelesaian antrean | 0 | 0 | 0 | 0 | 0 | 0 | N/A | N/A | N/A / N/A | N/A / N/A |
 
-## Jobs by submission cohort
+## Job berdasarkan fase pengiriman
 
-| Level | Planned A/B | Accepted | Terminal | Success | Retries | Queue p50/p95 (ms) | Duration p50/p95 (ms) |
+| Tingkat beban | Rencana A/B | Diterima | Terminal | Berhasil | Percobaan ulang | Waktu antre p50/p95 (ms) | Durasi p50/p95 (ms) |
 |---|---|---:|---:|---:|---:|---|---|
-| normal | 2/2 | 4 | 4 | 4 | 0 | 469.00 / 872.20 | 688.00 / 745.60 |
-| medium | 5/3 | 8 | 8 | 8 | 0 | 2471.00 / 4951.10 | 998.00 / 1303.60 |
-| stress | 12/4 | 16 | 16 | 16 | 0 | 7042.00 / 16936.75 | 1434.00 / 1559.25 |
-| recovery | 2/2 | 4 | 4 | 4 | 0 | 451.00 / 845.85 | 740.00 / 767.70 |
+| Normal | 2/2 | 4 | 4 | 4 | 0 | 469.00 / 872.20 | 688.00 / 745.60 |
+| Menengah | 5/3 | 8 | 8 | 8 | 0 | 2471.00 / 4951.10 | 998.00 / 1303.60 |
+| Stress | 12/4 | 16 | 16 | 16 | 0 | 7042.00 / 16936.75 | 1434.00 / 1559.25 |
+| Pemulihan | 2/2 | 4 | 4 | 4 | 0 | 451.00 / 845.85 | 740.00 / 767.70 |
 
-## Concurrency evidence (successful jobs, one attempt)
+## Bukti konkurensi (job berhasil dalam satu percobaan)
 
-- Jobs with comparable timestamps: 32.
-- Same-target overlapping pairs: 0.
-- Different-target overlapping pairs: 16.
-- Example different-target pairs: [('19', '20'), ('21', '22'), ('24', '23'), ('23', '26'), ('25', '26')].
+- Job dengan timestamp yang dapat dibandingkan: 32.
+- Pasangan job yang bertumpang tindih pada target yang sama: 0.
+- Pasangan job yang bertumpang tindih pada target berbeda: 16.
+- Contoh pasangan ID job pada target berbeda: [('19', '20'), ('21', '22'), ('24', '23'), ('23', '26'), ('25', '26')].
 
-## Final audit
+## Audit akhir
 
 ```text
 K6_AUDIT review=19 target=a job=20 status=success
@@ -74,11 +74,11 @@ K6_AUDIT review=49 target=b job=49 status=success
 K6_AUDIT review=50 target=b job=47 status=success
 ```
 
-## Method and limitations
+## Metodologi dan batasan
 
-- HTTP metrics include authenticated API reads, login/logout, enqueue and polling within each measured phase; setup and final audit are excluded. Threshold: p95 < 1000 ms and HTTP error rate < 5%.
-- Request tags are set at request start; job counts are attributed to the time their terminal status is observed. A job can finish in a later phase than its submission cohort. Throughput is count / phase duration, including ramp; drain has no fixed duration.
-- Queue time = first start minus creation; duration = final finish minus first start (includes retry delays if any). Only jobs with valid start/finish timestamps contribute timing samples.
-- Percentiles use linear interpolation on raw k6 samples; missing measurements are N/A. HTTP threshold table is calculated from raw samples; the k6 exit status is authoritative.
-- Final audit is independent from load metrics. Non-success or unresolved jobs cannot be counted as successful migrations. Concurrency pairs describe worker job timestamp intervals, not precise SQL lock hold intervals.
-- Fill in the hardware/software environment and interpretation of each level in the root README based on these actual results.
+- Metrik HTTP mencakup pembacaan API terautentikasi, login/logout, pengiriman job ke antrean, dan polling pada setiap fase pengukuran. Setup dan audit akhir tidak disertakan. Ambang batas: p95 < 1000 ms dan tingkat kesalahan HTTP < 5%.
+- Tag request ditetapkan saat request dimulai. Jumlah job dihitung berdasarkan fase ketika status terminalnya teramati. Job dapat selesai pada fase yang berbeda dari fase pengirimannya. Throughput dihitung dengan membagi jumlah request atau job dengan durasi fase, termasuk perubahan beban (ramp). Fase penyelesaian antrean (drain) tidak memiliki durasi tetap.
+- Waktu antre dihitung dari waktu pembuatan job hingga pertama kali dimulai. Durasi dihitung dari waktu mulai pertama hingga selesai (termasuk jeda percobaan ulang jika ada). Hanya job dengan timestamp mulai dan selesai yang valid yang digunakan dalam pengukuran waktu.
+- Persentil dihitung menggunakan interpolasi linear pada sampel mentah k6. N/A menunjukkan bahwa data pengukuran tidak tersedia atau metrik tidak berlaku. Tabel ambang batas HTTP dihitung dari sampel mentah; status keluar k6 menjadi acuan utama.
+- Audit akhir dilakukan secara terpisah dari metrik beban. Job yang tidak berhasil atau belum terkonfirmasi tidak dihitung sebagai migration berhasil. Pasangan konkurensi menggambarkan interval timestamp job pada worker, bukan interval kepemilikan SQL lock secara langsung.
+- Lingkungan pengujian dan analisis hasil setiap tingkat beban didokumentasikan pada bagian Stress Testing dengan k6 di README utama repositori.

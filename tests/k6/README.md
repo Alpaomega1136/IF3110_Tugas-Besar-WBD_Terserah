@@ -1,8 +1,17 @@
 # Stress Testing dengan k6
 
-Jalankan hanya pada instance lokal dan dua database disposable. Gunakan akun requester dan leader berbeda; seluruh group yang mempunyai grant ke target harus dapat disetujui oleh leader pengujian. Setup memakai API aplikasi untuk membuat draft, submit review, dan approval; tidak memodifikasi metadata langsung.
+Direktori ini berisi script stress testing k6, generator laporan, dan hasil pengujian Database Management Platform pada Milestone 2. Analisis hasil pengujian tersedia pada [README utama](../../README.md#stress-testing-dengan-k6).
 
-## Environment (PowerShell)
+## Prasyarat
+
+- Grafana k6 CLI dan Python 3.9 atau lebih baru.
+- Frontend, backend, PostgreSQL, dan worker berjalan pada instance development lokal (`.\dev.cmd`).
+- Dua database PostgreSQL khusus pengujian yang telah terdaftar pada platform: `wbd_dev_target_a` dan `wbd_dev_target_b`. Jangan gunakan database berisi data penting.
+- Dua akun berbeda, `k6_requester` dan `k6_leader`, dalam group pengujian dengan grant `View + Edit` pada kedua target. Tetapkan `k6_leader` sebagai group leader. Jika terdapat group lain yang memiliki akses ke target, seluruh approval yang diperlukan harus dapat diberikan oleh leader pengujian.
+
+Setup fixture menggunakan API aplikasi untuk membuat draft, mengajukan review, dan memberikan approval tanpa memodifikasi metadata secara langsung.
+
+## Konfigurasi environment (PowerShell)
 
 ```powershell
 $env:K6_BASE_URL = 'http://localhost:3000'
@@ -16,7 +25,17 @@ $env:K6_PASSWORD = [System.Net.NetworkCredential]::new('', (Read-Host 'Password 
 $env:K6_LEADER_PASSWORD = [System.Net.NetworkCredential]::new('', (Read-Host 'Password leader' -AsSecureString)).Password
 ```
 
-Jalankan aplikasi dan worker (`.\dev.cmd`). Smoke test: `k6 run tests/k6/smoke.js`. Tidak perlu reset database sebelum stress test, tetapi pastikan tidak ada job lain yang sedang berjalan. Setiap run membuat schema baru yang unik; fixture tetap tersimpan pada target.
+Nilai `K6_TARGET_A` dan `K6_TARGET_B` adalah nama database PostgreSQL, bukan nama tampilan koneksi. Environment variable diatur pada terminal yang digunakan untuk menjalankan k6.
+
+## Smoke test
+
+Jalankan dari root repositori:
+
+```powershell
+k6 run --no-color --log-output=stdout tests/k6/smoke.js
+```
+
+Smoke test memvalidasi authentication, CSRF, pembuatan tiga migration, approval, enqueue, dan keberhasilan eksekusi. Database tidak perlu di-reset sebelum stress test, tetapi pastikan tidak ada job lain yang sedang berjalan. Setiap pengujian membuat schema dan review baru yang unik; fixture tetap tersimpan pada target.
 
 ## Stress test
 
@@ -39,7 +58,7 @@ python tests/k6/analyze.py tmp/k6/full-points.json tmp/k6/full-events.log tmp/k6
 
 Gunakan nama file baru (atau hapus hanya output pengujian lama) jika mengulang run supaya event tidak tercampur. Jika `python` tidak tersedia, gunakan `py -3`. Jangan commit raw JSON atau credentials. Simpan laporan Markdown dan evidence yang relevan untuk dokumentasi. Jika threshold gagal, laporkan kegagalan dan analisis; jangan menyembunyikan hasil.
 
-## Workload dan pengukuran
+## Beban dan pengukuran
 
 | Level full | Ramp + hold | API VU target | Job A | Job B |
 |---|---:|---:|---:|---:|
@@ -52,4 +71,13 @@ API VU melakukan read database list, schema, migration history, dan job list, de
 
 Threshold HTTP per level: p95 < 1.000 ms dan error rate < 5%. Threshold migration: seluruh planned job harus mencapai `success` pada workload dan final audit. Setup/audit tidak masuk metrik fase beban. Laporan generator memisahkan job accepted, terminal, success, retry, timing, dan throughput; juga memeriksa overlap waktu job berdasarkan timestamp backend. HTTP 202 hanya diterima antrean, bukan keberhasilan eksekusi. Jika job tidak selesai, catat status unresolved/timeout dan hasil audit, jangan klaim sukses.
 
-Hasil pengujian dan analisis aktual dimasukkan ke README root setelah pengujian. Belum ada angka stress test yang diasumsikan.
+## Hasil pengujian
+
+Hasil aktual yang tersimpan dalam repositori:
+
+| Profil | Laporan | Migration berhasil |
+|---|---|---:|
+| `quick` | [Laporan quick test](results/quick-report.md) | 15/15 |
+| `full` | [Laporan full stress test](results/full-report.md) | 32/32 |
+
+Kedua pengujian menghasilkan exit code `0`. Rincian performa API, waktu antre, durasi migration, throughput, pemulihan sistem, serta batasan pengujian dibahas pada [README utama](../../README.md#stress-testing-dengan-k6). Laporan menyimpan log audit akhir dalam format asli untuk mempertahankan bukti status setiap job.
