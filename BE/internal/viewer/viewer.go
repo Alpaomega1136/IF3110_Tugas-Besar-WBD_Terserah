@@ -19,12 +19,14 @@ import (
 type Service struct{ targets *connections.Service }
 
 var errResultTooLarge = errors.New("viewer result too large")
+var errTooManyTables = errors.New("schema exceeds 100 tables")
 
 func New(targets *connections.Service) *Service { return &Service{targets: targets} }
 
 func (s *Service) Register(mux *http.ServeMux, sessions *auth.Service) {
 	for _, path := range []string{
 		"/api/v1/databases/{id}/schemas",
+		"/api/v1/databases/{id}/schemas/{schema}/structure",
 		"/api/v1/databases/{id}/schemas/{schema}/tables",
 		"/api/v1/databases/{id}/schemas/{schema}/tables/{table}",
 		"/api/v1/databases/{id}/schemas/{schema}/tables/{table}/rows",
@@ -70,8 +72,10 @@ func fail(w http.ResponseWriter, err error) {
 		}
 	}
 	switch {
+	case errors.Is(err, errTooManyTables):
+		httpx.Error(w, http.StatusRequestEntityTooLarge, "too_many_tables", "Schema Diff mendukung hingga 100 tabel per schema.")
 	case errors.Is(err, errResultTooLarge):
-		httpx.Error(w, http.StatusRequestEntityTooLarge, "result_too_large", "Reduce the row limit; result exceeds 4 MiB")
+		httpx.Error(w, http.StatusRequestEntityTooLarge, "result_too_large", "Viewer result exceeds 4 MiB")
 	case errors.Is(err, connections.ErrForbidden):
 		httpx.Error(w, http.StatusForbidden, "forbidden", "Access denied")
 	case errors.Is(err, connections.ErrNotFound):
@@ -130,7 +134,7 @@ func (s *Service) read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.dispatchRead(r.Context(), tx, schema, table, strings.HasSuffix(r.Pattern, "/rows"), limit, offset)
+	result, err := dispatchRead(r.Context(), tx, schema, table, r.Pattern, limit, offset)
 	if err != nil {
 		fail(w, err)
 		return
@@ -142,7 +146,12 @@ func (s *Service) read(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, result)
 }
 
-func (s *Service) dispatchRead(ctx context.Context, tx pgx.Tx, schema, table string, wantRows bool, limit int, offset int64) (any, error) {
+const schemaTables = `
+	FROM pg_catalog.pg_class c
+	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')`
+
+func dispatchRead(ctx context.Context, tx pgx.Tx, schema, table, pattern string, limit int, offset int64) (any, error) {
 	if schema == "" {
 		items, err := jsonQuery(ctx, tx, `
 			SELECT COALESCE(jsonb_agg(nspname ORDER BY nspname), '[]'::jsonb)
@@ -168,6 +177,9 @@ func (s *Service) dispatchRead(ctx context.Context, tx pgx.Tx, schema, table str
 		return nil, connections.ErrNotFound
 	}
 
+	if strings.HasSuffix(pattern, "/structure") {
+		return schemaStructure(ctx, tx, schema)
+	}
 	if table == "" {
 		items, err := jsonQuery(ctx, tx, `
 			SELECT COALESCE(
@@ -180,10 +192,7 @@ func (s *Service) dispatchRead(ctx context.Context, tx pgx.Tx, schema, table str
 				),
 				'[]'::jsonb
 			)
-			FROM pg_catalog.pg_class c
-			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-			WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')
-		`, schema)
+		`+schemaTables, schema)
 		return map[string]any{"tables": items}, err
 	}
 
@@ -205,14 +214,13 @@ func (s *Service) dispatchRead(ctx context.Context, tx pgx.Tx, schema, table str
 	if _, err = tx.Exec(ctx, "LOCK TABLE "+qualified+" IN ACCESS SHARE MODE"); err != nil {
 		return nil, err
 	}
-	if wantRows {
+	if strings.HasSuffix(pattern, "/rows") {
 		return readRows(ctx, tx, qualified, oid, limit, offset)
 	}
 	return metadata(ctx, tx, oid)
 }
 
-func metadata(ctx context.Context, tx pgx.Tx, oid uint32) (any, error) {
-	columns, err := jsonQuery(ctx, tx, `
+const tableColumns = `
 		SELECT COALESCE(
 			jsonb_agg(
 				jsonb_build_object(
@@ -230,8 +238,57 @@ func metadata(ctx context.Context, tx pgx.Tx, oid uint32) (any, error) {
 		)
 		FROM pg_catalog.pg_attribute a
 		LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-		WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped
-	`, oid)
+		WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped`
+
+func schemaStructure(ctx context.Context, tx pgx.Tx, schema string) (any, error) {
+	var names []string
+	err := tx.QueryRow(ctx, `SELECT ARRAY(SELECT c.relname`+schemaTables+` ORDER BY c.relname LIMIT 101)`, schema).Scan(&names)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) > 100 {
+		return nil, errTooManyTables
+	}
+	if len(names) > 0 {
+		// Use the same target permissions and DDL locks as a single-table metadata read.
+		qualified := make([]string, len(names))
+		for i, name := range names {
+			qualified[i] = pgx.Identifier{schema, name}.Sanitize()
+		}
+		if _, err = tx.Exec(ctx, "LOCK TABLE "+strings.Join(qualified, ",")+" IN ACCESS SHARE MODE"); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT jsonb_build_object(
+			'name', c.relname,
+			'kind', CASE WHEN c.relkind = 'p' THEN 'partitioned_table' ELSE 'table' END,
+			'columns', (`+tableColumns+`),
+			'has_constraints', EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid = c.oid),
+			'has_indexes', EXISTS (SELECT 1 FROM pg_catalog.pg_index WHERE indrelid = c.oid)
+		)`+schemaTables+` ORDER BY c.relname`, schema)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tables := make([]json.RawMessage, 0, len(names))
+	size := 0
+	for rows.Next() {
+		var table json.RawMessage
+		if err := rows.Scan(&table); err != nil {
+			return nil, err
+		}
+		size += len(table)
+		if size > 4<<20 {
+			return nil, errResultTooLarge
+		}
+		tables = append(tables, table)
+	}
+	return map[string]any{"tables": tables}, rows.Err()
+}
+
+func metadata(ctx context.Context, tx pgx.Tx, oid uint32) (any, error) {
+	columns, err := jsonQuery(ctx, tx, `SELECT (`+tableColumns+`) FROM pg_catalog.pg_class c WHERE c.oid = $1`, oid)
 	if err != nil {
 		return nil, err
 	}

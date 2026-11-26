@@ -230,6 +230,64 @@ func TestWorkersRunDifferentTargetsAndSerializeSameTarget(t *testing.T) {
 	assertJob(t, f, next, jobs.Success, "")
 }
 
+func TestWorkerDispatchesWhileRecoveryWaitsForTarget(t *testing.T) {
+	f := newQueueFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	stalled := queuedJob(t, f, f.first, "SELECT 1")
+	claim, err := f.service.Claim(ctx, "stopped-worker", 30*time.Second)
+	if err != nil || claim == nil || claim.Job.ID != stalled.ID {
+		t.Fatal("could not claim the job for recovery", err)
+	}
+	if _, err := f.a.db.Exec(ctx, `UPDATE migration_jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1`, stalled.ID); err != nil {
+		t.Fatal(err)
+	}
+	review, _ := f.approved(t, f.second, "SELECT 2")
+
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if _, err := f.a.db.Exec(ctx, `UPDATE database_connections SET host='127.0.0.1',port=$1 WHERE id=$2`, listener.Addr().(*net.TCPAddr).Port, f.first); err != nil {
+		t.Fatal(err)
+	}
+	w := queueWorker(t, f)
+	done := make(chan struct{})
+	go func() { defer close(done); w.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+
+	// Hold the PostgreSQL handshake open before submitting work to the healthy target.
+	if err := listener.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := listener.Accept()
+	if err != nil {
+		t.Fatal("worker never probed the stalled target", err)
+	}
+	defer conn.Close()
+	healthy, _, err := f.service.Enqueue(ctx, f.actor, f.second, review, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		var status jobs.Status
+		if err := f.a.db.QueryRow(ctx, `SELECT status FROM migration_jobs WHERE id=$1`, healthy.ID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status == jobs.Success {
+			break
+		}
+		if status != jobs.Queued && status != jobs.Running {
+			t.Fatal("healthy target job ended with", status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if current := jobPhase(t, f, stalled, jobs.Running); current.ErrorCode != nil {
+		t.Fatal("healthy job waited for the recovery probe to time out")
+	}
+}
+
 func TestWorkerShutdownRollsBackAndStops(t *testing.T) {
 	f := newQueueFixture(t)
 	j := queuedJob(t, f, f.first, "SELECT pg_sleep(10)")

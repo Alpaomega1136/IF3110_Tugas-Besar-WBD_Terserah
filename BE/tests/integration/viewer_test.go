@@ -6,13 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/jackc/pgx/v5"
 	"net/url"
 	"os"
 	"strings"
-	"terserah/backend/internal/database"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"terserah/backend/internal/database"
 )
 
 func TestViewerAPI(t *testing.T) {
@@ -47,7 +48,9 @@ func TestViewerAPI(t *testing.T) {
 	grant(t, a, "viewer", target.ID, "view")
 	grant(t, a, "editor", target.ID, "edit")
 	base := fmt.Sprintf("/api/v1/databases/%d/schemas", target.ID)
+	structure := base + "/" + schema + "/structure"
 	status(t, a.browser().request("GET", base, nil), 401)
+	status(t, a.browser().request("GET", structure, nil), 401)
 	for _, user := range []string{"viewer", "editor"} {
 		b := a.browser()
 		b.login(t, user)
@@ -78,6 +81,24 @@ func TestViewerAPI(t *testing.T) {
 		if !constraintTypes["p"] || !constraintTypes["c"] {
 			t.Fatal("primary key or check constraint missing")
 		}
+		w = b.request("GET", structure, nil)
+		status(t, w, 200)
+		var summary struct {
+			Tables []struct {
+				Name           string `json:"name"`
+				Kind           string `json:"kind"`
+				Columns        []any  `json:"columns"`
+				HasConstraints bool   `json:"has_constraints"`
+				HasIndexes     bool   `json:"has_indexes"`
+			} `json:"tables"`
+		}
+		if err = json.Unmarshal(w.Body.Bytes(), &summary); err != nil || len(summary.Tables) != 2 {
+			t.Fatalf("schema structure incomplete: %s", w.Body.String())
+		}
+		objectSummary := summary.Tables[1]
+		if objectSummary.Name != name || objectSummary.Kind != "table" || len(objectSummary.Columns) != len(meta.Columns) || !objectSummary.HasConstraints || !objectSummary.HasIndexes {
+			t.Fatalf("table missing columns, constraints or indexes: %+v", objectSummary)
+		}
 		w = b.request("GET", object+"/rows?limit=1", nil)
 		status(t, w, 200)
 		var rows struct {
@@ -105,6 +126,7 @@ func TestViewerAPI(t *testing.T) {
 		status(t, b.request("GET", path+"/missing", nil), 404)
 		status(t, b.request("GET", base+"/missing_schema/tables", nil), 404)
 		status(t, b.request("GET", base+"/pg_catalog/tables/pg_authid/rows", nil), 403)
+		status(t, b.request("GET", base+"/pg_catalog/structure", nil), 403)
 		status(t, b.request("GET", fmt.Sprintf("/api/v1/databases/%d/schemas", other.ID), nil), 403)
 		status(t, b.request("GET", path+"/"+url.PathEscape(`x"; DROP SCHEMA public CASCADE; --`), nil), 404)
 	}
@@ -112,6 +134,7 @@ func TestViewerAPI(t *testing.T) {
 		b := a.browser()
 		b.login(t, user)
 		status(t, b.request("GET", base, nil), 403)
+		status(t, b.request("GET", structure, nil), 403)
 	}
 	offlineInput := input
 	offlineInput.Name = "offline-viewer-target"
@@ -128,5 +151,18 @@ func TestViewerAPI(t *testing.T) {
 	var count int
 	if err = db.QueryRow(ctx, "SELECT count(*) FROM "+qualified).Scan(&count); err != nil || count != 2 {
 		t.Fatal("viewer changed target data")
+	}
+	// Schema Diff must reject an oversized schema rather than comparing a partial result.
+	var ddl strings.Builder
+	for i := 0; i < 99; i++ {
+		fmt.Fprintf(&ddl, "CREATE TABLE %s.extra_%d ();", qSchema, i)
+	}
+	if _, err = db.Exec(ctx, ddl.String()); err != nil {
+		t.Fatal(err)
+	}
+	w = b.request("GET", structure, nil)
+	status(t, w, 413)
+	if !strings.Contains(w.Body.String(), "too_many_tables") {
+		t.Fatalf("unexpected schema limit error: %s", w.Body.String())
 	}
 }

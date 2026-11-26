@@ -156,8 +156,6 @@ type pendingExecution struct {
 	action           string
 }
 
-// reconcilePending checks `_terserah.migration_receipts` on the target DB for any
-// migration_history rows left in 'running' or 'unknown' status.
 func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID int64) ([]Result, error) {
 	pool, err := s.targets.OpenTarget(ctx, p, dbID, true)
 	if err != nil {
@@ -217,35 +215,36 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 		return nil, errActiveJob
 	}
 	rows, err := meta.Query(ctx, `
-		SELECT h.execution_id,h.version,h.sql,h.executed_by,h.receipt_version,
- EXISTS(SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id WHERE a.execution_id=h.execution_id AND j.execution_mode='batch'),COALESCE(h.batch_root_execution_id,''),h.action_type,COALESCE((SELECT compensation_root_execution_id FROM migration_jobs WHERE id=h.job_id),'')
+		SELECT h.execution_id, h.version, h.sql, h.executed_by, h.receipt_version,
+		       EXISTS (
+		           SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id = j.id
+		           WHERE a.execution_id = h.execution_id AND j.execution_mode = 'batch'
+		       ),
+		       COALESCE(h.batch_root_execution_id, ''), h.action_type, COALESCE(job.compensation_root_execution_id, '')
 		FROM migration_history h
-		WHERE h.database_id = $1 AND h.status IN ('running', 'unknown','partial','partially_reverted')
- AND NOT EXISTS(SELECT 1 FROM migration_job_attempts sealed WHERE sealed.execution_id=h.execution_id AND sealed.retry_scheduled)
-		ORDER BY h.version
+		LEFT JOIN migration_jobs job ON job.id = h.job_id
+		WHERE h.database_id = $1 AND h.status IN ('running', 'unknown', 'partial', 'partially_reverted')
+		  AND NOT EXISTS (
+		      SELECT 1 FROM migration_job_attempts a WHERE a.execution_id = h.execution_id AND a.retry_scheduled
+		  )
+		ORDER BY COALESCE(h.last_reconciled_at, h.started_at), h.version
 		LIMIT 100
-		FOR UPDATE
+		FOR UPDATE OF h
 	`, dbID)
 	if err != nil {
 		return nil, err
 	}
-	items := []pendingExecution{}
-	for rows.Next() {
+	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (pendingExecution, error) {
 		var item pendingExecution
-		if err = rows.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format, &item.isBatch, &item.root, &item.action, &item.compensationRoot); err != nil {
-			break
-		}
-		items = append(items, item)
-	}
-	rows.Close()
-	if err == nil {
-		err = rows.Err()
-	}
+		err := row.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format, &item.isBatch, &item.root, &item.action, &item.compensationRoot)
+		return item, err
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	results := []Result{}
+	results := make([]Result, 0, len(items))
+	var unresolved []int64
 	for _, item := range items {
 		var out Result
 		var finished *time.Time
@@ -271,7 +270,8 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 		if err != nil {
 			return nil, err
 		}
-		if item.isBatch || out.Status == "success" || out.Status == "failed" {
+		final := out.Status == "success" || out.Status == "failed"
+		if item.isBatch || final {
 			outcome := jobs.Outcome{Status: jobs.Status(out.Status)}
 			if out.ErrorCode != nil {
 				outcome.ErrorCode = *out.ErrorCode
@@ -285,7 +285,18 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 				return nil, err
 			}
 		}
+		if !final {
+			unresolved = append(unresolved, item.version)
+		}
 		results = append(results, out)
+	}
+	// Put attempts without conclusive evidence behind the rest of the queue.
+	if len(unresolved) > 0 {
+		_, err = meta.Exec(ctx, `UPDATE migration_history SET last_reconciled_at = statement_timestamp()
+			WHERE database_id = $1 AND version = ANY($2)`, dbID, unresolved)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err = meta.Commit(ctx); err != nil {
 		return nil, err

@@ -53,7 +53,7 @@ async function setup({ access = "view", available = true, custom } = {}) {
     const ui = setupDOM();
     const calls = [];
     globalThis.fetch = async (url, options = {}) => {
-        calls.push({ url, method: options.method ?? "GET", credentials: options.credentials });
+        calls.push({ url, method: options.method ?? "GET", credentials: options.credentials, signal: options.signal });
         if (custom) {
             const result = custom(url);
             if (result !== undefined) return result;
@@ -116,6 +116,36 @@ test("pagination uses exact offset and selected limit and supports previous page
     await ui.$("viewer-row-limit").fire("change");
     await tick();
     assert.equal(ui.calls.at(-1).url, `${path}/rows?limit=10&offset=0`);
+});
+
+test("leaving Viewer aborts a pending row request and ignores its late response", async () => {
+    let finishRequest;
+    const ui = await setup({ custom: (url) => {
+        if (url.includes("/rows?")) return new Promise((resolve) => { finishRequest = resolve; });
+    } });
+    const loading = openTable(ui);
+    await tick();
+    assert.match(ui.calls.at(-1).url, /\/rows\?/);
+    const signal = ui.calls.at(-1).signal;
+    window.__spaCleanup();
+    assert.equal(signal.aborted, true);
+    document.getElementById = () => null;
+    finishRequest(reply(dataRows));
+    await loading;
+    assert.equal(ui.$("viewer-rows-body").children.length, 0);
+});
+
+test("leaving Viewer during initialization ignores a late access error", async () => {
+    let finishRequest;
+    const ui = await setup({ custom: (url) => {
+        if (url === "/api/v1/databases") return new Promise((resolve) => { finishRequest = resolve; });
+    } });
+    assert.equal(ui.calls.at(-1).url, "/api/v1/databases");
+    window.__spaCleanup();
+    document.getElementById = () => null;
+    finishRequest(reply({ error: { code: "unauthenticated" } }, 401));
+    await tick();
+    assert.deepEqual(ui.redirects, []);
 });
 
 test("empty schema, empty table, and empty rows present distinct empty states", async () => {

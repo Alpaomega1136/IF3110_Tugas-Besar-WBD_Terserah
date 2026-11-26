@@ -312,7 +312,6 @@ button:focus-visible {
     align-content: start;
 }
 .users-page h2 { margin-bottom: 16px; }
-.users-directory-help { margin-bottom: 16px; font-size: 14px; }
 .users-list-scroll { max-height: none; overflow: visible; }
 .users-list { list-style: none; display: grid; gap: 10px; }
 .users-list-item {
@@ -797,7 +796,6 @@ button:focus-visible {
     background: #991b1b;
 }
 
-.grant-note,
 .form-help {
     margin: 12px 0;
     color: #4b5563;
@@ -1014,7 +1012,6 @@ button:focus-visible {
     gap: 10px;
 }
 .draft-target-actions .database-workspace-links { margin: 0; gap: 8px; }
-.draft-toolbar-actions { display: flex; align-items: center; gap: 8px; }
 #draft-page .draft-heading-row {
     margin-bottom: 14px;
     padding-bottom: 12px;
@@ -1710,8 +1707,6 @@ button:focus-visible {
 .workspace-button:hover { background: #1d4ed8; }
 #history-drafts-link { margin-top: 16px; }
 .history-reconcile-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
-.grant-toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
-.grant-toolbar button { width: auto; }
 #grant-database { min-width: 0; max-width: 100%; }
 .grants-page { max-width: 1200px; }
 .grants-layout {
