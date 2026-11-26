@@ -5,7 +5,7 @@ param([ValidateSet('all', 'fe', 'be', 'setup', 'admin')][string]$Mode = 'all')
 $ErrorActionPreference = 'Stop'
 
 function Import-DevEnvironment([string]$Path) {
-    $allowed = @('DATABASE_URL', 'HTTP_ADDR', 'APP_ORIGIN', 'TARGET_CREDENTIAL_KEY', 'FE_HTTP_ADDR', 'FE_BACKEND_URL', 'WORKER_EMBEDDED', 'OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT')
+    $allowed = @('DATABASE_URL', 'HTTP_ADDR', 'APP_ORIGIN', 'TARGET_CREDENTIAL_KEY', 'FE_HTTP_ADDR', 'FE_BACKEND_URL', 'WORKER_EMBEDDED', 'METRICS_ADDR', 'OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT')
     $values = @{}
     foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
         if ($line -match '^\s*(#|$)') { continue }
@@ -94,7 +94,7 @@ function Wait-DevReady($Service, [string]$URL) {
 function Invoke-DevMain {
     $root = $PSScriptRoot
     $configPath = Join-Path $root '.env'
-    $names = @('DATABASE_URL', 'HTTP_ADDR', 'APP_ORIGIN', 'TARGET_CREDENTIAL_KEY', 'FE_HTTP_ADDR', 'FE_BACKEND_URL', 'GOTOOLCHAIN', 'BOOTSTRAP_USERNAME', 'BOOTSTRAP_PASSWORD', 'WORKER_EMBEDDED', 'OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT')
+    $names = @('DATABASE_URL', 'HTTP_ADDR', 'APP_ORIGIN', 'TARGET_CREDENTIAL_KEY', 'FE_HTTP_ADDR', 'FE_BACKEND_URL', 'GOTOOLCHAIN', 'BOOTSTRAP_USERNAME', 'BOOTSTRAP_PASSWORD', 'WORKER_EMBEDDED', 'METRICS_ADDR', 'OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT')
     $previous = @{}
     foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
     $services = @()

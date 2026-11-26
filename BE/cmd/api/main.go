@@ -18,6 +18,7 @@ import (
 	"terserah/backend/internal/database"
 	"terserah/backend/internal/httpapi"
 	"terserah/backend/internal/jobs"
+	"terserah/backend/internal/metrics"
 	"terserah/backend/internal/runner"
 	"terserah/backend/internal/telemetry"
 	"terserah/backend/internal/viewer"
@@ -55,7 +56,13 @@ func run() error {
 	if err != nil {
 		return errors.New("cannot connect to metadata database; check configuration and availability")
 	}
-	defer pool.Close()
+	trackedPool := metrics.TrackPool(pool, "metadata")
+	defer trackedPool.Close()
+	stopMetrics, err := metrics.Listen("127.0.0.1:9464", pool)
+	if err != nil {
+		return err
+	}
+	defer stopMetrics()
 	sessions, err := auth.New(pool, auth.Options{Origin: cfg.AppOrigin, Key: cfg.SecretKey})
 	if err != nil {
 		return errors.New("cannot initialize sessions")
