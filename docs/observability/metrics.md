@@ -1,11 +1,11 @@
 # Metrik Observability
 
-Backend mengekspos Prometheus text exposition format 0.0.4 tanpa dependensi Go tambahan. Listener metrik terpisah dari API dan default hanya dapat diakses secara lokal:
+Paket `BE/internal/metrics` menyediakan instrumentasi aplikasi dalam Prometheus text exposition format 0.0.4 tanpa dependensi Go tambahan. Listener metrik terpisah dari API, dengan alamat loopback sebagai konfigurasi bawaan:
 
 - API (termasuk embedded worker): `http://127.0.0.1:9464/metrics`.
 - Worker standalone: `http://127.0.0.1:9465/metrics` (metrik proses worker saja).
 
-`METRICS_ADDR` dapat digunakan untuk mengganti alamat listener. Jika API dan worker dijalankan sebagai dua proses, gunakan port berbeda; konfigurasi default sudah berbeda. Jangan publikasikan listener metrik ke internet. Listener ini bukan endpoint untuk pengguna aplikasi dan tidak diteruskan melalui frontend.
+Variabel `METRICS_ADDR` menentukan alamat listener apabila konfigurasi bawaan perlu diganti. Port API dan worker terpisah untuk mencegah konflik listener. Endpoint metrik bersifat internal, tidak diteruskan melalui frontend, dan tidak ditujukan untuk akses publik.
 
 ## Definisi metrik
 
@@ -31,16 +31,33 @@ Histogram mengekspos seri `_bucket`, `_sum`, `_count`. Semua label menggunakan h
 
 Endpoint melakukan agregasi jumlah job per status dan jumlah retry dengan batas waktu dua detik. Jika metadata tidak tersedia, scrape API menghasilkan HTTP 503, bukan angka nol yang menyesatkan. Query scrape juga menggunakan pool metadata sehingga dapat sedikit memengaruhi statistik acquire. Pada volume metadata sangat besar, evaluasi biaya agregasi sebelum menentukan interval scrape. Gauge koneksi/pool merupakan snapshot; pool yang berumur sangat singkat bisa tidak terlihat pada satu scrape.
 
-## Verifikasi lokal
+## Cardinality label
 
-Jalankan unit test backend tanpa tag integration:
+Himpunan nilai label dibatasi di dalam source code, bukan berasal dari ID pengguna atau input SQL.
+
+| Label | Nilai |
+|---|---|
+| `status` | `queued`, `running`, `success`, `failed`, `unknown`, `partial`, `recovering`, `retry_wait`, `resumed`, `partially_reverted`, `other` |
+| `attempt` | `initial`, `retry` |
+| `scope` | `session`, `transaction`, `batch` |
+| `result` | `success`, `failed` |
+| `outcome` | `success`, `failed`, `partial`, `partially_reverted`, `unknown` |
+| `kind` | `migration`, `compensation` |
+| `role` | `metadata`, `target` |
+| `state` | `active`, `idle` |
+
+Status yang tidak dikenali dipetakan ke `other`. Label `le` pada histogram merupakan batas bucket yang ditentukan secara statis. Desain ini menjaga jumlah seri metrik agar tidak bertambah mengikuti jumlah job, pengguna, atau database target.
+
+## Validasi instrumentasi
+
+Unit test backend tanpa tag integration mencakup pengujian paket metrik:
 
 ```powershell
 Push-Location BE
 try { go test ./... } finally { Pop-Location }
 ```
 
-Hentikan server lama dengan Ctrl+C, lalu jalankan `.\dev.cmd` dari root. Tidak perlu reset DB atau mengubah secret. Dari terminal lain:
+Validasi runtime menggunakan instance development aktif (`.\dev.cmd`) dan database pengujian yang telah dikonfigurasi. Snapshot awal endpoint dapat diambil melalui perintah berikut:
 
 ```powershell
 curl.exe -fsS http://127.0.0.1:9464/metrics
@@ -48,7 +65,7 @@ New-Item -ItemType Directory -Force tmp/observability | Out-Null
 curl.exe -fsS http://127.0.0.1:9464/metrics -o tmp/observability/before.prom
 ```
 
-Jalankan smoke test menggunakan environment k6 yang dijelaskan pada [README k6](../../tests/k6/README.md). Setelah tiga migration sukses:
+Smoke test menggunakan environment k6 yang didokumentasikan pada [README k6](../../tests/k6/README.md). Perintah berikut menjalankan tiga migration dan membandingkan snapshot akhir dengan snapshot awal:
 
 ```powershell
 k6 run --no-color --log-output=stdout tests/k6/smoke.js
@@ -56,7 +73,7 @@ curl.exe -fsS http://127.0.0.1:9464/metrics -o tmp/observability/after.prom
 Select-String -Path tmp/observability/before.prom,tmp/observability/after.prom -Pattern '^terserah_migration_jobs\{status="success"\}','^terserah_migration_queue_wait_seconds_count\{attempt="initial"\}','^terserah_migration_duration_seconds_count\{outcome="success"\}','^terserah_migration_lock_wait_seconds_count\{scope="session",result="success"\}','^terserah_db_pool_acquires_total\{role="target"\}','^terserah_db_pool_wait_seconds_total\{role="target"\}'
 ```
 
-Jika tidak ada job lain dan server tidak direstart, status success, jumlah observasi queue initial, duration success, dan lock session success masing-masing bertambah tiga. Counter acquire target bertambah; waktu tunggu target tidak berkurang. Gauge queue/running dan pool target dapat nol setelah pekerjaan selesai. Smoke test menggunakan migration normal, sehingga counter batch/row dapat tetap nol; uji batch terpisah diperlukan untuk memvalidasi keduanya. Retry hanya bertambah jika ada attempt berikutnya pada job yang sama. Jangan sengaja merusak data untuk menguji failure/retry; gunakan fixture khusus di lingkungan development.
+Jika tidak ada job lain dan server tidak direstart, status success, jumlah observasi queue initial, duration success, dan lock session success masing-masing bertambah tiga. Counter acquire target bertambah; waktu tunggu target tidak berkurang. Gauge queue/running dan pool target dapat nol setelah pekerjaan selesai. Smoke test hanya mencakup migration normal sehingga counter batch/row dapat tetap nol. Validasi batch, failure, dan retry dilakukan secara terpisah melalui fixture terisolasi pada `tests/k6/observability.js`. Hasil aktual tersedia pada [log validasi](../../observability/evidence/validation.log) dan [README utama](../../README.md#observability).
 
 ## Contoh PromQL untuk dashboard
 
@@ -67,4 +84,4 @@ Jika tidak ada job lain dan server tidak direstart, status success, jumlah obser
 - Pool active/idle: `sum by (role,state) (terserah_db_pool_connections)`.
 - Batch/row per detik: `sum by (kind) (rate(terserah_migration_batches_total[5m]))` dan `sum by (kind) (rate(terserah_migration_rows_total[5m]))`.
 
-Prometheus, OpenTelemetry Collector, centralized log/trace backend dan provisioning Grafana dikonfigurasi secara terpisah dari instrumentasi ini. Lihat [panduan observability lokal](README.md).
+Konfigurasi Prometheus, OpenTelemetry Collector, penyimpanan log/trace terpusat, dan provisioning Grafana didokumentasikan pada [Observability lokal](README.md).
