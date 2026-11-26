@@ -1,0 +1,30 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: terserah-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 3s
+  - name: Loki
+    uid: terserah-loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      derivedFields:
+        - name: TraceID
+          matcherRegex: '"trace_id"\s*:\s*"([0-9a-f]{32})"'
+          datasourceUid: terserah-tempo
+          url: '$${__value.raw}'
+          urlDisplayLabel: Buka trace di Tempo
+  - name: Tempo
+    uid: terserah-tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false

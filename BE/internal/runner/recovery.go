@@ -10,6 +10,7 @@ import (
 	"terserah/backend/internal/batch"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/jobs"
+	"terserah/backend/internal/metrics"
 	"terserah/backend/internal/telemetry"
 )
 
@@ -25,6 +26,7 @@ func (s *Service) RecoverJob(ctx context.Context, r *jobs.Recovery) error {
 		return s.deferRecovery(ctx, r, "target_unavailable", 5*time.Second)
 	}
 	guard := acquired.Hijack()
+	defer metrics.TrackHijacked()()
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

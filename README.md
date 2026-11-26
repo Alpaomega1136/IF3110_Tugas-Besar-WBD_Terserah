@@ -523,11 +523,84 @@ Hasilnya merupakan perkiraan PostgreSQL, bukan waktu eksekusi aktual: fitur ini 
 
 ## Bonus Milestone 2
 
+### Observability
+
+Observability menyediakan pemantauan terpusat terhadap antrean migration, eksekusi worker, dan penggunaan koneksi PostgreSQL. Implementasi mengintegrasikan tiga jenis telemetry: metrik, log terstruktur, dan distributed trace.
+
+#### Arsitektur dan instrumentasi
+
+Stack development opsional menjalankan Prometheus, OpenTelemetry Collector, Loki, Tempo dan Grafana melalui Docker Compose. Backend, worker embedded, frontend dan PostgreSQL tetap berjalan secara native. Prometheus melakukan scrape endpoint metrics; Collector membaca structured log JSON dan menerima trace OTLP, lalu meneruskannya ke Loki dan Tempo. Dashboard serta datasource tersedia melalui provisioning pada `observability/grafana/`. Label metrics dibatasi pada status, outcome, attempt, scope, result, kind, role dan state; ID job/trace serta SQL tidak digunakan sebagai label.
+
+| Komponen | Implementasi |
+|---|---|
+| Metrik queue dan migration | Status job, retry, histogram waktu tunggu queue dan advisory lock, durasi executor per attempt, counter batch dan row terkonfirmasi |
+| Metrik connection pool | Koneksi active/idle, jumlah pool, durasi acquire, dan waktu tunggu ketika pool kosong |
+| Log dan trace | JSON `log/slog`, OpenTelemetry, Collector, Loki, dan Tempo |
+| Dashboard | 17 panel Grafana dengan provisioning datasource dan [JSON dashboard](observability/grafana/dashboards/terserah.json) |
+
+Konfigurasi infrastruktur tersedia pada [Docker Compose](docker-compose.observability.yml) dan [direktori observability](observability/). Prosedur reproduksi didokumentasikan pada [Observability lokal](docs/observability/README.md); katalog serta semantik metrik tersedia pada [Metrik Observability](docs/observability/metrics.md).
+
+#### Validasi integrasi telemetry
+
+Pada pengujian lokal, Prometheus menunjukkan target `terserah-api` berstatus UP. Grafana menampilkan 59 job sukses, tanpa job gagal atau retry pada saat screenshot diambil. Loki menerima log `execution_finished` dari smoke test, dan Tempo menampilkan trace request enqueue beserta span worker dan operasi database.
+
+| Bukti | Isi |
+|---|---|
+| [Prometheus Targets](observability/evidence/prometheus-targets.png) | Target metrics backend UP |
+| [Log migration Loki](observability/evidence/loki-migration-logs.png) | Structured log penyelesaian migration |
+| [Trace migration Tempo](observability/evidence/tempo-migration-trace.png) | Trace enqueue dan eksekusi worker |
+| [Dashboard Grafana](observability/evidence/grafana-dashboard.png) | Status job, histogram, dan statistik connection pool |
+
+#### Hasil pengujian workload dan validasi metrik
+
+Pengujian dilakukan pada instance development lokal dengan embedded worker dan stack observability aktif. Profil k6 `quick` menambah 15 job sukses (59 menjadi 74), sebagaimana terlihat pada [dashboard saat stress test](observability/evidence/grafana-stress-test.png). Grafik queue, durasi migration, serta connection pool memperlihatkan aktivitas selama workload. Pengukuran performa k6 utama tetap dilaporkan secara terpisah.
+
+Validasi batch dan retry menggunakan `tests/k6/observability.js` pada database development `wbd_dev_target_a` dengan run ID `mwxojez7_6e9361`. Hasilnya 106/106 checks lulus, 4/4 kasus terverifikasi, 49 request HTTP tanpa error, dan seluruh threshold serta sembilan delta metrik sesuai ekspektasi (`OBS_RESULT ... verified=4 metrics=PASS`).
+
+| Kasus | Job ID | Status akhir | Attempt | SQLSTATE |
+|---|---:|---|---:|---|
+| Setup fixture | 75 | success | 1 | — |
+| Batch UPDATE | 76 | success | 1 | — |
+| Permanent failure | 77 | failed | 1 | 22012 |
+| Retryable failure | 78 | failed | 3 | 40001 |
+
+Batch UPDATE memproses 1.000 row dalam 10 batch berukuran 100 row. Dua job gagal merupakan skenario terkontrol: pembagian dengan nol tidak memicu retry, sedangkan fungsi uji yang selalu melempar SQLSTATE 40001 memicu dua retry hingga batas tiga attempt.
+
+| Metrik | Sebelum | Sesudah | Delta |
+|---|---:|---:|---:|
+| Job sukses | 74 | 76 | +2 |
+| Job gagal | 0 | 2 | +2 |
+| Retry attempts | 0 | 2 | +2 |
+| Observasi queue initial | 21 | 25 | +4 |
+| Observasi queue retry | 0 | 2 | +2 |
+| Observasi durasi executor sukses | 21 | 23 | +2 |
+| Observasi durasi executor gagal | 0 | 4 | +4 |
+| Batch migration committed | 0 | 10 | +10 |
+| Row migration committed | 0 | 1.000 | +1.000 |
+
+| Bukti tambahan | Isi |
+|---|---|
+| [Dashboard stress test](observability/evidence/grafana-stress-test.png) | Aktivitas queue, executor, pool, dan 74 job sukses |
+| [Dashboard batch dan retry](observability/evidence/grafana-batch-retry.png) | 76 job sukses, 2 gagal terkontrol, 2 retry, serta grafik batch/row |
+| [Log batch](observability/evidence/loki-batch-logs.png) | `batch_committed`, job 76, batch ke-10, 1.000 row committed |
+| [Log retry](observability/evidence/loki-retry-logs.png) | `job_recovered`, job 78, attempt 2, status `retry_wait`, SQLSTATE 40001 |
+| [Log validasi k6](observability/evidence/validation.log) | Status job, attempt history, sembilan delta metrik dan threshold |
+
+#### Contoh korelasi log, trace, dan metrics
+
+Pada smoke test, [log Loki](observability/evidence/loki-migration-logs.png) mencatat `execution_finished` untuk job 59, dengan status `success`, execution ID `7d5ec9294cf1fa9075e1af4228678984`, dan trace ID `ea5539a812a30b09cc7a037e35fe238e`. Trace ID dari log dapat digunakan untuk mencari trace di Tempo. [Bukti Tempo](observability/evidence/tempo-migration-trace.png) memperlihatkan request `POST /api/v1/databases/{id}/jobs` dengan HTTP 202, 93 span, serta aktivitas worker, lock dan database. Tautan TraceID pada datasource Loki menghubungkan log dengan trace di Tempo. Screenshot Tempo memperlihatkan alur eksekusi pada interval yang sesuai, tetapi nilai trace ID tidak terlihat secara eksplisit pada gambar tersebut.
+
+[Dashboard awal](observability/evidence/grafana-dashboard.png) menunjukkan 59 job sukses dan observasi histogram pada interval pengujian. Pada pengujian berikutnya, log `batch_committed` job 76 dan `job_recovered` job 78 juga dapat dicocokkan dengan job ID, execution ID dan hasil `OBS_ATTEMPT` pada log validasi k6; perubahan counter dan histogram sesuai tabel di atas. Korelasi metrics dilakukan melalui waktu dan aktivitas agregat, bukan dengan menambahkan ID individual sebagai label.
+
+#### Batasan
+
+Hasil ini memvalidasi instrumentasi pada workload lokal terkontrol, bukan jaminan performa production. Histogram Prometheus memberikan estimasi percentile; panel rate dapat kembali nol atau tidak memiliki sampel ketika tidak ada aktivitas. Counter/histogram bersifat process-local, sedangkan gauge status job membaca metadata persisten. Uji 1.000 row ini merupakan validasi metrik batch, bukan pengganti pengujian dataset besar yang diwajibkan pada spesifikasi fitur utama.
+
 ### Security: SAST dengan CodeQL
 
 Static Application Security Testing (SAST) dilakukan menggunakan CodeQL melalui GitHub Actions dengan konfigurasi pada `.github/workflows/codeql.yml`. Analisis mencakup source code Go pada backend dan frontend serta JavaScript pada frontend SPA.
 
-Hasil initial scan pada 26 November 2026, branch `feat/bonus-codeql`, commit `5f44c76`, menggunakan CodeQL 2.27.6:
+Hasil initial scan branch `feat/bonus-codeql`, commit `5f44c76`, menggunakan CodeQL 2.27.6:
 
 | Bahasa | Baris kode terukur | Temuan |
 |---|---:|---:|

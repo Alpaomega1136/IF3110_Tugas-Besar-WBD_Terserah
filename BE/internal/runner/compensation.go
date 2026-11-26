@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"terserah/backend/internal/batch"
 	"terserah/backend/internal/jobs"
+	"terserah/backend/internal/metrics"
 	"terserah/backend/internal/telemetry"
 )
 
@@ -217,6 +218,7 @@ func (s *Service) compensateBatch(ctx context.Context, pool *pgxpool.Pool, guard
 	if err = commitBatch(ctx, tx); err != nil {
 		return fail(err)
 	}
+	metrics.BatchCommitted(true, cp.RowCount)
 	return cp, nil
 }
 
