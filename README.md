@@ -527,6 +527,21 @@ Hasilnya merupakan perkiraan PostgreSQL, bukan waktu eksekusi aktual: fitur ini 
 
 Konfigurasi stack observability lokal dan langkah reproduksi tersedia pada [panduan observability](docs/observability/README.md). Definisi metrik dan batasannya tersedia pada [dokumentasi metrics](docs/observability/metrics.md).
 
+Stack development opsional menjalankan Prometheus, OpenTelemetry Collector, Loki, Tempo dan Grafana melalui Docker Compose. Backend, worker embedded, frontend dan PostgreSQL tetap berjalan secara native. Prometheus melakukan scrape endpoint metrics; Collector membaca structured log JSON dan menerima trace OTLP, lalu meneruskannya ke Loki dan Tempo. Dashboard serta datasource tersedia melalui provisioning pada `observability/grafana/`. Label metrics dibatasi pada status, outcome, attempt, scope, result, kind, role dan state; ID job/trace serta SQL tidak digunakan sebagai label.
+
+#### Bukti validasi awal
+
+Pada pengujian lokal 26 November 2026, Prometheus menunjukkan target `terserah-api` berstatus UP. Grafana menampilkan 59 job sukses, tanpa job gagal atau retry pada saat screenshot diambil. Loki menerima log `execution_finished` dari smoke test, dan Tempo menampilkan trace request enqueue beserta span worker dan operasi database.
+
+| Bukti | Isi |
+|---|---|
+| [Prometheus Targets](observability/evidence/prometheus-targets.png) | Target metrics backend UP |
+| [Log migration Loki](observability/evidence/loki-migration-logs.png) | Structured log penyelesaian migration |
+| [Trace migration Tempo](observability/evidence/tempo-migration-trace.png) | Trace enqueue dan eksekusi worker |
+| [Dashboard Grafana](observability/evidence/grafana-dashboard.png) | Status job, histogram, dan statistik connection pool |
+
+Log dan trace dapat dikorelasikan dengan trace ID yang sama; metrik dikorelasikan berdasarkan interval waktu dan aktivitas agregat, bukan label ID individual. Untuk memvalidasi batch/row dan retry secara terkontrol pada database development, lihat [pengujian observability](docs/observability/README.md#validasi-batch-dan-retry).
+
 
 ### Security: SAST dengan CodeQL
 

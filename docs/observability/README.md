@@ -71,7 +71,42 @@ Setelah job selesai dan data terkirim (export trace bersifat asynchronous), laku
 3. Cari span `migration.worker`, periksa `job.id` dan `execution.id`; cocokkan ID serta intervalnya dengan log. Trace parent enqueue dan worker mengikuti implementasi backend.
 4. Buka dashboard pada rentang waktu yang sama. Jumlah job sukses seharusnya bertambah tiga apabila tidak ada job lain. Histogram queue/lock/duration menerima observasi baru, sedangkan pool dapat berubah selama aktivitas. Metrics tidak memiliki label job/trace ID; korelasi dengan metrics berdasarkan waktu dan aktivitas agregat, bukan relasi satu sampel per trace.
 
-Pengujian penuh, batch/row, failure/retry yang terkendali, serta bukti korelasi aktual didokumentasikan pada tahap validasi berikutnya. Jangan menyatakan semua kasus tersebut telah diuji hanya berdasarkan konfigurasi ini.
+## Validasi workload k6 dengan observability aktif
+
+Gunakan profil `quick` dari [pengujian k6](../../tests/k6/README.md) untuk mengamati perubahan queue, durasi executor dan pool ketika jumlah VU berubah. Jangan menimpa hasil stress test utama yang sudah disimpan.
+
+```powershell
+New-Item -ItemType Directory -Force tmp/observability | Out-Null
+$env:K6_PROFILE = 'quick'
+k6 run --no-color --log-output=stdout tests/k6/stress.js | Tee-Object tmp/observability/stress-summary.log
+$LASTEXITCODE
+```
+
+Buka dashboard Grafana pada rentang yang mencakup pengujian dan ambil bukti grafik. Hasil k6 sebelumnya tetap terpisah karena overhead observability dapat memengaruhi performa.
+
+## Validasi batch dan retry
+
+Script `tests/k6/observability.js` menggunakan API dan workflow approval biasa untuk membuat empat migration baru pada database development `wbd_dev_target_a`. Gunakan konfigurasi environment pada README k6. Jangan jalankan pada database berisi data penting atau bersamaan dengan job lain. Backend tidak boleh di-restart di tengah pengujian karena counter/histogram bersifat process-local.
+
+```powershell
+$env:K6_CONFIRM_OBS_FAILURES = 'YES'
+k6 run --no-color --log-output=stdout tests/k6/observability.js | Tee-Object tmp/observability/validation.log
+$LASTEXITCODE
+Remove-Item Env:\K6_CONFIRM_OBS_FAILURES -ErrorAction SilentlyContinue
+```
+
+| Kasus | Hasil yang diharapkan |
+|---|---|
+| Setup schema `obs_<run>` | Success; tabel 1.000 row dan fungsi fixture |
+| Batch UPDATE | Success; 10 batch masing-masing 100 row |
+| Permanent failure `SELECT 1/0` | Failed, SQLSTATE 22012; 1 attempt |
+| Transient failure `retry_probe()` | Failed, SQLSTATE 40001; 3 attempt (2 retry otomatis) |
+
+Kegagalan pada dua kasus terakhir sengaja dibuat dan tidak mengubah data yang sudah ada. Fungsi uji selalu melempar error untuk menguji batas retry, bukan simulasi bahwa layanan benar-benar terputus. Fixture dan history tetap tersimpan; batch ditandai irreversible hanya untuk pengujian ini. Script memeriksa status terminal dan attempt history melalui API, lalu membandingkan snapshot metrics lokal sebelum/sesudah pengujian.
+
+Perubahan metrics yang diharapkan jika tidak ada job lain: success +2, failed +2, retry attempts +2, queue initial count +4, queue retry count +2, executor success count +2, executor failed count +4, batch migration counter +10 dan row migration counter +1.000. Hasil `OBS_METRIC` dan `OBS_RESULT` di log menunjukkan hasil aktual. Exit code 0 berarti semua checks dan threshold script terpenuhi; dua job failed tetap merupakan outcome yang diharapkan. Jika hasil berbeda, simpan log dan diagnosis; jangan menghapus history atau mengulang pengujian sebelum memeriksa job yang belum terminal.
+
+Bukti awal tersedia pada [direktori evidence](../../observability/evidence/).
 
 ## Troubleshooting
 
