@@ -106,7 +106,11 @@ Kegagalan pada dua kasus terakhir sengaja dibuat dan tidak mengubah data yang su
 
 Perubahan metrics yang diharapkan jika tidak ada job lain: success +2, failed +2, retry attempts +2, queue initial count +4, queue retry count +2, executor success count +2, executor failed count +4, batch migration counter +10 dan row migration counter +1.000. Hasil `OBS_METRIC` dan `OBS_RESULT` di log menunjukkan hasil aktual. Exit code 0 berarti semua checks dan threshold script terpenuhi; dua job failed tetap merupakan outcome yang diharapkan. Jika hasil berbeda, simpan log dan diagnosis; jangan menghapus history atau mengulang pengujian sebelum memeriksa job yang belum terminal.
 
-Bukti awal tersedia pada [direktori evidence](../../observability/evidence/).
+## Hasil pengujian aktual
+
+Pada 26 November 2026, quick stress test dengan observability aktif menambah jumlah job sukses dari 59 menjadi 74. Pengujian batch dan retry berikutnya (run `mwxojez7_6e9361`) menghasilkan 106/106 checks lulus, 4/4 kasus terverifikasi, 49 request HTTP tanpa error, dan seluruh sembilan delta metrik sesuai ekspektasi. Jumlah job sukses menjadi 76, job gagal terkontrol 2, retry attempts 2, batch committed 10, dan row committed 1.000.
+
+Bukti tersedia di [direktori evidence](../../observability/evidence/), termasuk [log validasi](../../observability/evidence/validation.log), [dashboard stress test](../../observability/evidence/grafana-stress-test.png), [dashboard batch/retry](../../observability/evidence/grafana-batch-retry.png), [log batch](../../observability/evidence/loki-batch-logs.png), dan [log retry](../../observability/evidence/loki-retry-logs.png). Tabel lengkap dan contoh korelasi telemetry terdapat pada [README utama](../../README.md#observability). Pengujian 1.000 row ditujukan untuk memvalidasi instrumentasi metrics, bukan menggantikan uji dataset besar untuk fitur batch utama.
 
 ## Troubleshooting
 
