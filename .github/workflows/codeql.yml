@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - main
+      - ml2/main
       - feat/bonus-codeql
   pull_request:
     branches:
       - main
+      - ml2/main
   workflow_dispatch:
 
 permissions:
