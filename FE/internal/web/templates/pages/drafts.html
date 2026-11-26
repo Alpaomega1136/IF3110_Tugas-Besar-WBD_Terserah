@@ -17,32 +17,33 @@
 
         <div id="draft-workspace" hidden>
 
-            <section class="dashboard-panel"
+            <section class="dashboard-panel draft-target-panel"
                      aria-labelledby="draft-database-heading">
-                <h2 id="draft-database-heading">
-                    Database: <span id="draft-database-name"></span>
-                </h2>
+                <div class="draft-target-info">
+                    <h2 id="draft-database-heading">
+                        Database: <span id="draft-database-name"></span>
+                    </h2>
+                    <p>
+                        Database target:
+                        <span id="draft-target-name"></span>
+                    </p>
+                </div>
 
-                <p>
-                    Database target:
-                    <span id="draft-target-name"></span>
-                </p>
-
-                <p>
-                    Hak akses efektif:
-                    <strong id="draft-access"></strong>
-                </p>
-
-                <p>
-                    <a class="workspace-button" href="/databases/{{.DatabaseID}}/history">
-                        Lihat Migration History
-                    </a>
-                </p>
-
+                <div class="draft-target-actions">
+                    <p class="viewer-access-pill">
+                        Hak akses:
+                        <strong id="draft-access"></strong>
+                    </p>
+                    <p class="database-workspace-links">
+                        <a class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/jobs">Pantau Jobs</a>
+                        <a class="workspace-button" href="/databases/{{.DatabaseID}}/history">
+                            Lihat Migration History
+                        </a>
+                    </p>
+                </div>
             </section>
 
-            <div class="migration-layout">
-                <div class="migration-column">
+            <div class="draft-main-grid">
             <section class="dashboard-panel"
                      aria-labelledby="draft-list-heading">
                 <div class="draft-heading-row">
@@ -67,7 +68,7 @@
                 </p>
 
                 <div id="draft-list-table"
-                     class="users-table-wrapper" hidden>
+                     class="users-table-wrapper" role="region" aria-labelledby="draft-list-heading" tabindex="0" hidden>
                     <table class="users-table">
                         <thead>
                             <tr>
@@ -83,9 +84,9 @@
                     </table>
                 </div>
                 <nav id="draft-pagination" class="cursor-pagination" aria-label="Navigasi halaman draft" hidden>
-                    <button type="button" id="draft-prev" class="button-secondary" disabled>Halaman Sebelumnya</button>
-                    <span id="draft-page-number" aria-live="polite">Halaman 1</span>
-                    <button type="button" id="draft-next" class="button-secondary" disabled>Halaman Berikutnya</button>
+                    <button type="button" id="draft-prev" class="button-secondary" aria-label="Halaman Sebelumnya" title="Halaman Sebelumnya" disabled>&lt;</button>
+                    <span id="draft-page-number" aria-live="polite">1</span>
+                    <button type="button" id="draft-next" class="button-secondary" aria-label="Halaman Berikutnya" title="Halaman Berikutnya" disabled>&gt;</button>
                 </nav>
             </section>
 
@@ -115,7 +116,7 @@
 
                     <div class="form-group">
                         <label for="draft-sql">
-                            SQL Migration (wajib)
+                            SQL Up — Terapkan Perubahan (wajib)
                         </label>
 
                         <textarea id="draft-sql"
@@ -134,6 +135,32 @@
                            class="error-message" hidden></p>
                     </div>
 
+                    <fieldset class="draft-migration-options">
+                        <legend>Jenis Migration</legend>
+                        <label class="draft-choice" for="draft-irreversible">
+                            <input id="draft-irreversible" type="checkbox" name="irreversible">
+                            Irreversible (tidak dapat di-rollback)
+                        </label>
+                        <p class="form-help">Untuk reversible, SQL Down wajib diisi. Untuk irreversible, berikan alasannya.</p>
+                    </fieldset>
+                    <div class="form-group" id="draft-down-group">
+                        <button type="button" id="draft-batch-down" class="button-secondary" hidden>Siapkan SQL Down batch</button>
+                        <label for="draft-sql-down">SQL Down — Batalkan Perubahan (wajib untuk reversible)</label>
+                        <textarea id="draft-sql-down" name="sql_down" rows="9" spellcheck="false"
+                                  aria-describedby="draft-down-help draft-sql-down-error"></textarea>
+                        <p id="draft-down-help" class="form-help">SQL Down harus mengembalikan perubahan SQL Up. Maksimum 48 KiB.</p>
+                        <p id="draft-sql-down-error" class="error-message" hidden></p>
+                    </div>
+                    <div class="form-group" id="draft-reason-group" hidden>
+                        <label for="draft-reason">Alasan Irreversible (wajib)</label>
+                        <textarea id="draft-reason" name="irreversible_reason" rows="3" maxlength="500"
+                                  aria-describedby="draft-reason-error"></textarea>
+                        <p id="draft-reason-error" class="error-message" hidden></p>
+                    </div>
+                    <p id="draft-immutable-note" class="form-help" role="status" hidden>
+                        Definisi migration ini sudah pernah dieksekusi dan tidak dapat diedit. Buat migration baru untuk perbaikan.
+                    </p>
+
                     <button id="draft-save" type="submit">
                         Buat Draft
                     </button>
@@ -143,12 +170,8 @@
                        hidden></p>
                 </form>
             </section>
-
-                </div>
-                <div class="migration-column">
-            <div class="grant-toolbar">
-                <button type="button" id="draft-reload" class="button-secondary" disabled>Muat Ulang Draft</button>
             </div>
+
             <section class="dashboard-panel bonus-diff" aria-labelledby="schema-diff-heading">
                 <div class="bonus-heading">
                     <span class="bonus-label">SCHEMA TOOLS</span>
@@ -173,32 +196,37 @@
                 <pre id="diff-result" class="draft-sql-preview"></pre>
             </section>
 
+            <div class="draft-bottom-grid">
             <section id="draft-detail"
                      class="dashboard-panel"
                      aria-labelledby="draft-detail-heading"
                      hidden>
-                <h2 id="draft-detail-heading">
-                    Detail Draft Tersimpan
-                </h2>
+                <div class="draft-heading-row">
+                    <h2 id="draft-detail-heading">Detail Draft Tersimpan</h2>
+                    <button type="button" id="draft-reload"
+                            class="button-secondary draft-refresh-btn"
+                            aria-label="Muat Ulang Draft" title="Muat Ulang Draft" disabled>
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                            <polyline points="21 3 21 9 15 9" />
+                        </svg>
+                    </button>
+                </div>
 
-                <p>
-                    Pembuat:
-                    <span id="draft-detail-author"></span>
-                </p>
+                <dl class="draft-detail-meta">
+                    <div><dt>Pembuat</dt><dd id="draft-detail-author"></dd></div>
+                    <div><dt>Dibuat</dt><dd id="draft-detail-created"></dd></div>
+                    <div><dt>Diperbarui</dt><dd id="draft-detail-updated"></dd></div>
+                </dl>
 
-                <p>
-                    Dibuat:
-                    <span id="draft-detail-created"></span>
-                </p>
-
-                <p>
-                    Diperbarui:
-                    <span id="draft-detail-updated"></span>
-                </p>
-
-                <h3>SQL Tersimpan</h3>
+                <h3>SQL Up Tersimpan</h3>
                 <pre id="draft-detail-sql"
                      class="draft-sql-preview"></pre>
+                <div id="draft-detail-down-section">
+                    <h3>SQL Down Tersimpan</h3>
+                    <pre id="draft-detail-down" class="draft-sql-preview"></pre>
+                </div>
+                <p id="draft-detail-irreversible" class="form-help" hidden></p>
             </section>
 
             <section id="draft-execution" class="dashboard-panel draft-execution"
@@ -212,6 +240,7 @@
                 <p id="draft-execution-state" role="status" aria-live="polite"></p>
                 <div class="draft-execution-actions">
                     <button type="button" id="draft-explain" disabled>Analisis Query</button>
+                    <button type="button" id="draft-submit-review" disabled>Ajukan Review Approval</button>
                     <button type="button" id="draft-execute" disabled>Execute Migration</button>
                 </div>
                 <p id="draft-explain-message" role="status" aria-live="polite" hidden></p>
@@ -220,6 +249,7 @@
                 <section id="draft-execution-result" class="draft-execution-result"
                          aria-labelledby="draft-execution-result-heading" hidden>
                     <h3 id="draft-execution-result-heading">Hasil Eksekusi</h3>
+                    <a id="draft-job-link" class="workspace-button workspace-button--subtle" hidden>Pantau job</a>
                     <dl class="draft-execution-metadata">
                         <dt>Status</dt><dd><span id="draft-result-status"></span></dd>
                         <dt>Version</dt><dd id="draft-result-version"></dd>
@@ -228,7 +258,6 @@
                     </dl>
                 </section>
             </section>
-                </div>
             </div>
 
         </div>

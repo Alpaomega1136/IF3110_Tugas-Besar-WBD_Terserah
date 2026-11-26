@@ -5,7 +5,7 @@ param([ValidateSet('all', 'fe', 'be', 'setup', 'admin')][string]$Mode = 'all')
 $ErrorActionPreference = 'Stop'
 
 function Import-DevEnvironment([string]$Path) {
-    $allowed = @('DATABASE_URL', 'HTTP_ADDR', 'APP_ORIGIN', 'TARGET_CREDENTIAL_KEY', 'FE_HTTP_ADDR', 'FE_BACKEND_URL')
+    $allowed = @('DATABASE_URL', 'HTTP_ADDR', 'APP_ORIGIN', 'TARGET_CREDENTIAL_KEY', 'FE_HTTP_ADDR', 'FE_BACKEND_URL', 'WORKER_EMBEDDED', 'METRICS_ADDR', 'OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT')
     $values = @{}
     foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
         if ($line -match '^\s*(#|$)') { continue }
@@ -74,7 +74,7 @@ function Start-DevService([string]$Name, [string]$Binary, [string]$Directory, [s
 function Assert-DevRunning($Service) {
     if ($Service.Process.HasExited) {
         if (Test-Path -LiteralPath $Service.ErrorLog) { Get-Content -LiteralPath $Service.ErrorLog -Tail 10 | Out-Host }
-        throw "$($Service.Name) berhenti. Periksa log di tmp/dev/."
+        throw "$($Service.Name) berhenti. Periksa $($Service.ErrorLog)."
     }
 }
 
@@ -88,13 +88,13 @@ function Wait-DevReady($Service, [string]$URL) {
         } catch { }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw "$($Service.Name) belum siap setelah 30 detik. Periksa log di tmp/dev/."
+    throw "$($Service.Name) belum siap setelah 30 detik. Periksa $($Service.ErrorLog)."
 }
 
 function Invoke-DevMain {
     $root = $PSScriptRoot
     $configPath = Join-Path $root '.env'
-    $names = @('DATABASE_URL', 'HTTP_ADDR', 'APP_ORIGIN', 'TARGET_CREDENTIAL_KEY', 'FE_HTTP_ADDR', 'FE_BACKEND_URL', 'GOTOOLCHAIN', 'BOOTSTRAP_USERNAME', 'BOOTSTRAP_PASSWORD')
+    $names = @('DATABASE_URL', 'HTTP_ADDR', 'APP_ORIGIN', 'TARGET_CREDENTIAL_KEY', 'FE_HTTP_ADDR', 'FE_BACKEND_URL', 'GOTOOLCHAIN', 'BOOTSTRAP_USERNAME', 'BOOTSTRAP_PASSWORD', 'WORKER_EMBEDDED', 'METRICS_ADDR', 'OTEL_EXPORTER_OTLP_ENDPOINT', 'OTEL_EXPORTER_OTLP_TRACES_ENDPOINT')
     $previous = @{}
     foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
     $services = @()
@@ -111,6 +111,14 @@ function Invoke-DevMain {
         $env:FE_HTTP_ADDR = ':3000'
         $env:FE_BACKEND_URL = 'http://localhost:8080'
         if (Test-Path -LiteralPath $configPath) { Import-DevEnvironment $configPath }
+        # Opt-in only; do not change .env or ordinary development defaults.
+        $observability = $env:OBSERVABILITY_ENABLED -eq 'true' -and $Mode -in @('all', 'be')
+        if ($observability) {
+            if ($env:WORKER_EMBEDDED -eq 'false') { throw 'Mode observability lokal memerlukan embedded worker (WORKER_EMBEDDED=true).' }
+            $env:METRICS_ADDR = '0.0.0.0:9464'
+            $env:OTEL_EXPORTER_OTLP_ENDPOINT = 'http://127.0.0.1:4318'
+            $env:OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'http://127.0.0.1:4318/v1/traces'
+        }
         if ($Mode -ne 'fe') {
             if (-not $env:DATABASE_URL -or -not $env:TARGET_CREDENTIAL_KEY) { throw 'DATABASE_URL dan TARGET_CREDENTIAL_KEY wajib diisi pada .env.' }
             Invoke-DevGo $go (Join-Path $root 'BE') @('run', './cmd/migrate')
@@ -121,6 +129,11 @@ function Invoke-DevMain {
         $selected = if ($Mode -eq 'all') { @('be', 'fe') } else { @($Mode) }
         $logDirectory = Join-Path $root 'tmp/dev'
         New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+        $backendLogDirectory = $logDirectory
+        if ($observability) {
+            $backendLogDirectory = Join-Path $root 'tmp/observability/logs'
+            New-Item -ItemType Directory -Path $backendLogDirectory -Force | Out-Null
+        }
         foreach ($name in $selected) {
             $address = if ($name -eq 'be') { $env:HTTP_ADDR } else { $env:FE_HTTP_ADDR }
             Assert-DevPort (Get-DevURL $address)
@@ -130,7 +143,8 @@ function Invoke-DevMain {
             Invoke-DevGo $go $directory @('build', '-o', $binary, $entry)
         }
         foreach ($name in $selected) {
-            $service = Start-DevService $name (Join-Path $logDirectory "$name.exe") (Join-Path $root $name.ToUpperInvariant()) $logDirectory
+            $serviceLogs = if ($name -eq 'be') { $backendLogDirectory } else { $logDirectory }
+            $service = Start-DevService $name (Join-Path $logDirectory "$name.exe") (Join-Path $root $name.ToUpperInvariant()) $serviceLogs
             $services += $service
             $address = if ($name -eq 'be') { $env:HTTP_ADDR } else { $env:FE_HTTP_ADDR }
             $path = if ($name -eq 'be') { '/health/ready' } else { '/login' }
@@ -138,7 +152,8 @@ function Invoke-DevMain {
             Write-Host "$($name.ToUpperInvariant()) siap: $(Get-DevURL $address)"
         }
         if ($Mode -ne 'be') { Write-Host "Buka aplikasi di browser: $env:APP_ORIGIN/login (alamat harus sesuai APP_ORIGIN)." }
-        Write-Host 'Log: tmp/dev/*.log. Ctrl+C untuk menghentikan server yang dijalankan entrypoint ini.'
+        if ($observability) { Write-Host 'Observability aktif. Log BE: tmp/observability/logs/*.log; metrics: :9464; OTLP: localhost:4318.' }
+        Write-Host 'Log default: tmp/dev/*.log. Ctrl+C untuk menghentikan server yang dijalankan entrypoint ini.'
         if ($Mode -eq 'fe') { Write-Host "FE memakai backend: $env:FE_BACKEND_URL (jalankan BE terpisah untuk login/data)." }
         while ($true) {
             foreach ($service in $services) { Assert-DevRunning $service }

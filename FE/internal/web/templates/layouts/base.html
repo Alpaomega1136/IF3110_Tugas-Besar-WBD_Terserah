@@ -17,6 +17,7 @@
             <button id="global-confirm-accept" type="submit" value="confirm" class="confirm-dialog-accept">Lanjutkan</button>
         </form>
     </dialog>
+    <script type="module" src="/static/js/spa.js"></script>
 </body>
 </html>
 {{end}}
@@ -26,8 +27,14 @@
     <a class="app-brand" href="/dashboard">Terserah</a>
     <nav class="app-nav" aria-label="Navigasi utama">
         <a href="/dashboard"{{if eq .Path "/dashboard"}} aria-current="page"{{end}}>Dashboard</a>
+        <a href="/reviews"{{if eq .Path "/reviews"}} aria-current="page"{{end}}>Review &amp; Approval</a>
         <details class="admin-nav" id="admin-nav" hidden>
-            <summary>Administrasi</summary>
+            <summary>
+                <span>Administrasi</span>
+                <svg class="admin-nav-chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M15 6l-6 6 6 6" />
+                </svg>
+            </summary>
             <div class="admin-nav-menu">
                 <a href="/admin/users"{{if eq .Path "/admin/users"}} aria-current="page"{{end}}>Kelola Pengguna</a>
                 <a href="/admin/groups"{{if eq .Path "/admin/groups"}} aria-current="page"{{end}}>Kelola Group</a>

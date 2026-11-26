@@ -1,57 +1,35 @@
 import { confirmAction } from "./confirmation.js";
-import {
-    authenticatedRequest,
-    requireAuthenticatedUser,
-    isCSRFError
-} from "./auth.js";
+import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
+import { positiveInt64 } from "./pagination.js";
+import { byId, addCell, addOption, setBanner, navigateTo } from "./ui.js";
 
-const status = document.getElementById("grants-status");
-const errorBox = document.getElementById("grants-error");
-const panel = document.getElementById("grants-panel");
-const noGroups = document.getElementById("grants-no-groups");
-const noGrants = document.getElementById("grants-empty");
-const table = document.getElementById("grants-table");
-const body = document.getElementById("grants-body");
+const status = byId("grants-status");
+const errorBox = byId("grants-error");
+const panel = byId("grants-panel");
+const noGroups = byId("grants-no-groups");
+const noGrants = byId("grants-empty");
+const table = byId("grants-table");
+const body = byId("grants-body");
 
-const form = document.getElementById("grant-form");
-const groupSelect = document.getElementById("grant-group");
-const databaseSelect = document.getElementById("grant-database");
-const databasesEmpty = document.getElementById("grants-no-databases");
-const refreshButton = document.getElementById("grants-refresh");
-const accessSelect = document.getElementById("grant-access");
-const submitButton = document.getElementById("grant-submit");
-const message = document.getElementById("grant-message");
+const form = byId("grant-form");
+const groupSelect = byId("grant-group");
+const databaseSelect = byId("grant-database");
+const databasesEmpty = byId("grants-no-databases");
+const refreshButton = byId("grants-refresh");
+const accessSelect = byId("grant-access");
+const submitButton = byId("grant-submit");
+const message = byId("grant-message");
 
 let groups = [];
 let databases = [];
 let currentUserId = null;
 let saving = false;
 
-function showMessage(text, isError = false) {
-    message.textContent = text;
-    message.className = isError ? "error-message" : "success-message";
-    message.hidden = !text;
-}
-
-function appendCell(row, text) {
-    const td = document.createElement("td");
-    td.textContent = String(text);
-    row.appendChild(td);
-    return td;
-}
-
-function groupContainsSelf(group) {
-    return (group.user_ids ?? []).some((id) => String(id) === currentUserId);
-}
-
-function validDatabaseId(value) {
-    return typeof value === "string" && /^[1-9][0-9]*$/.test(value) &&
-        BigInt(value) <= 9223372036854775807n;
-}
+const showMessage = (text, isError = false) => setBanner(message, text, isError);
+const groupContainsSelf = (group) => (group.user_ids ?? []).some((id) => String(id) === currentUserId);
 
 function setSaving(value) {
     saving = value;
-
     const unavailable = groups.length === 0 || databases.length === 0;
     databaseSelect.disabled = value || unavailable;
     groupSelect.disabled = value || unavailable;
@@ -62,10 +40,7 @@ function setSaving(value) {
     for (const button of body.querySelectorAll("button")) {
         button.disabled = value || button.dataset?.missingConnection === "true";
     }
-
-    submitButton.textContent = value
-        ? "Menyimpan..."
-        : "Simpan Grant";
+    submitButton.textContent = value ? "Menyimpan..." : "Simpan Grant";
 }
 
 function connectionName(id) {
@@ -80,40 +55,38 @@ function renderGrants() {
     databaseSelect.replaceChildren();
     body.replaceChildren();
 
-    const groupPlaceholder = document.createElement("option");
-    groupPlaceholder.value = "";
-    groupPlaceholder.textContent = "Pilih group...";
-    groupSelect.appendChild(groupPlaceholder);
-
-    const databasePlaceholder = document.createElement("option");
-    databasePlaceholder.value = "";
-    databasePlaceholder.textContent = "Pilih database target...";
-    databaseSelect.appendChild(databasePlaceholder);
+    addOption(groupSelect, "", "Pilih group...");
+    addOption(databaseSelect, "", "Pilih database target...");
 
     for (const database of databases) {
-        const option = document.createElement("option");
-        option.value = database.id;
-        option.textContent = `${database.name} — ${database.database_name} (ID ${database.id})`;
-        databaseSelect.appendChild(option);
+        addOption(databaseSelect, database.id, `${database.name} — ${database.database_name} (ID ${database.id})`);
     }
 
     let grantCount = 0;
     for (const group of groups) {
-        const option = document.createElement("option");
-        option.value = group.id;
-        option.textContent = group.name;
-        groupSelect.appendChild(option);
+        addOption(groupSelect, group.id, group.name);
 
         for (const grant of group.grants ?? []) {
             grantCount++;
             const id = grant.database_id;
             const exists = databases.some((database) => database.id === id);
             const row = document.createElement("tr");
-            appendCell(row, group.name);
-            appendCell(row, connectionName(id));
-            appendCell(row, grant.access_level === "edit" ? "View + Edit" : "View Only");
+            addCell(row, group.name);
+            addCell(row, connectionName(id));
+
+            const accessCell = document.createElement("td");
+            const badge = document.createElement("span");
+            badge.className = "access-badge access-badge--view";
+            badge.textContent = "View Only";
+            if (grant.access_level === "edit") {
+                badge.className = "access-badge access-badge--edit";
+                badge.textContent = "View + Edit";
+            }
+            accessCell.appendChild(badge);
+            row.appendChild(accessCell);
 
             const actions = document.createElement("td");
+            actions.className = "grant-actions";
             const edit = document.createElement("button");
             edit.type = "button";
             edit.className = "grant-action";
@@ -162,8 +135,7 @@ async function reloadData() {
         throw new Error("Format daftar group atau koneksi dari backend tidak valid.");
     }
     if (!databaseData.databases.every((entry) =>
-        validDatabaseId(entry.id) && typeof entry.name === "string" &&
-        typeof entry.database_name === "string")) {
+        positiveInt64(entry.id) && typeof entry.name === "string" && typeof entry.database_name === "string")) {
         throw new Error("Daftar koneksi memiliki ID atau nama yang tidak valid.");
     }
     groups = groupData.groups;
@@ -180,74 +152,49 @@ async function reloadGroups() {
 
 function handleError(err) {
     if (err.status === 401) {
-        window.location.replace("/login");
+        navigateTo("/login", { replace: true });
         return;
     }
-
     if (err.status === 403 && isCSRFError(err)) {
-        showMessage(
-            "Token CSRF tidak valid. Silakan coba lagi.",
-            true
-        );
+        showMessage("Token CSRF tidak valid. Silakan coba lagi.", true);
     } else if (err.status === 403) {
         panel.hidden = true;
         showMessage("Akses ditolak atau izin admin telah dicabut. Muat ulang halaman.", true);
     } else if (err.status === 404) {
-        showMessage(
-            "Group, koneksi, atau grant tidak ditemukan. Muat ulang daftar sebelum mencoba lagi.",
-            true
-        );
+        showMessage("Group, koneksi, atau grant tidak ditemukan. Muat ulang daftar sebelum mencoba lagi.", true);
     } else {
-        showMessage(
-            err.message || "Operasi grant gagal.",
-            true
-        );
+        showMessage(err.message || "Operasi grant gagal.", true);
     }
 }
 
 form.addEventListener("submit", async (event) => {
     event.preventDefault();
-
     if (saving) return;
 
-    const group = groups.find(
-        (g) => String(g.id) === groupSelect.value
-    );
-
+    const group = groups.find((g) => String(g.id) === groupSelect.value);
     const databaseId = databaseSelect.value;
     const level = accessSelect.value;
 
-    if (!group || !validDatabaseId(databaseId) ||
+    if (!group || !positiveInt64(databaseId) ||
         !databases.some((database) => database.id === databaseId) ||
         !["view", "edit"].includes(level)) {
         showMessage("Pilih group, koneksi database yang terdaftar, dan tingkat akses.", true);
         return;
     }
 
-    const existing = (group.grants ?? []).find(
-        (g) => String(g.database_id) === databaseId
-    );
-
+    const existing = (group.grants ?? []).find((g) => String(g.database_id) === databaseId);
     if (existing?.access_level === level) {
-        showMessage(
-            "Grant tersebut sudah memiliki tingkat akses yang sama.",
-            true
-        );
+        showMessage("Grant tersebut sudah memiliki tingkat akses yang sama.", true);
         return;
     }
 
-    const downgrade =
-        existing?.access_level === "edit" &&
-        level === "view";
-
-    if (downgrade &&
-        !(await confirmAction({
-            title: "Turunkan akses group?",
-            message: "Penurunan izin akan mencabut session anggota group. Lanjutkan?",
-            confirmLabel: "Turunkan Izin",
-            tone: "danger"
-        }))
-    ) {
+    const downgrade = existing?.access_level === "edit" && level === "view";
+    if (downgrade && !(await confirmAction({
+        title: "Turunkan akses group?",
+        message: "Penurunan izin akan mencabut session anggota group. Lanjutkan?",
+        confirmLabel: "Turunkan Izin",
+        tone: "danger"
+    }))) {
         return;
     }
 
@@ -260,35 +207,24 @@ form.addEventListener("submit", async (event) => {
             `/api/v1/admin/groups/${encodeURIComponent(String(group.id))}/databases/${encodeURIComponent(databaseId)}`,
             {
                 method: "PUT",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    access_level: level
-                })
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ access_level: level })
             }
         );
-
         if (downgrade && groupContainsSelf(group)) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
-
         try {
             await reloadGroups();
             showMessage("Grant berhasil disimpan.");
         } catch (refreshError) {
             if (refreshError.status === 401) {
-                window.location.replace("/login");
+                navigateTo("/login", { replace: true });
                 return;
             }
-
-            showMessage(
-                "Grant tersimpan, tetapi daftar terbaru gagal dimuat.",
-                true
-            );
+            showMessage("Grant tersimpan, tetapi daftar terbaru gagal dimuat.", true);
         }
-
     } catch (err) {
         handleError(err);
     } finally {
@@ -298,14 +234,12 @@ form.addEventListener("submit", async (event) => {
 
 async function revokeGrant(group, grant) {
     if (saving) return;
-
     const confirmed = await confirmAction({
         title: "Cabut akses database?",
         message: `Cabut akses ${connectionName(grant.database_id)} dari group ${group.name}? Session anggota group akan dicabut.`,
         confirmLabel: "Cabut Grant",
         tone: "danger"
     });
-
     if (!confirmed || saving) return;
 
     showMessage("");
@@ -314,31 +248,22 @@ async function revokeGrant(group, grant) {
     try {
         await authenticatedRequest(
             `/api/v1/admin/groups/${encodeURIComponent(String(group.id))}/databases/${encodeURIComponent(String(grant.database_id))}`,
-            {
-                method: "DELETE"
-            }
+            { method: "DELETE" }
         );
-
         if (groupContainsSelf(group)) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
-
         try {
             await reloadGroups();
             showMessage("Grant berhasil dicabut.");
         } catch (refreshError) {
             if (refreshError.status === 401) {
-                window.location.replace("/login");
+                navigateTo("/login", { replace: true });
                 return;
             }
-
-            showMessage(
-                "Grant dicabut, tetapi daftar terbaru gagal dimuat.",
-                true
-            );
+            showMessage("Grant dicabut, tetapi daftar terbaru gagal dimuat.", true);
         }
-
     } catch (err) {
         handleError(err);
     } finally {
@@ -349,33 +274,23 @@ async function revokeGrant(group, grant) {
 async function initialize() {
     try {
         const user = await requireAuthenticatedUser();
-
         if (!user) return;
-
         if (!user.is_platform_admin) {
             status.hidden = true;
-
             errorBox.textContent = "Akses ditolak. Halaman ini hanya untuk Platform Admin.";
             errorBox.hidden = false;
             return;
         }
-
         currentUserId = String(user.id);
-
         status.textContent = "Memuat group dan grant...";
-
         await reloadData();
-
         status.hidden = true;
-
     } catch (err) {
         status.hidden = true;
-
         if (err.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
-
         errorBox.textContent = err.status === 403
             ? "Akses admin ditolak. Hanya Platform Admin yang boleh mengelola grant."
             : (err.message || "Gagal memuat group dan koneksi database.");
@@ -393,7 +308,7 @@ refreshButton.addEventListener("click", async () => {
         await reloadData();
         errorBox.hidden = true;
     } catch (error) {
-        if (error.status === 401) window.location.replace("/login");
+        if (error.status === 401) navigateTo("/login", { replace: true });
         else {
             if (error.status === 403) panel.hidden = true;
             errorBox.textContent = error.status === 403

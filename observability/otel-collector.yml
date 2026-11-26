@@ -1,0 +1,46 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+  filelog/backend:
+    include: [/app-logs/be.stdout.log]
+    start_at: beginning
+    poll_interval: 200ms
+    include_file_name: false
+    resource:
+      service.name: terserah-api
+    # Preserve JSON as the log body. Trace ID and job ID remain fields, not labels.
+    # Extract only the timestamp (do not copy all JSON fields into attributes).
+    operators:
+      - type: regex_parser
+        regex: '^\{"time":"(?P<log_time>[^"]+)"'
+        on_error: send_quiet
+        timestamp:
+          parse_from: attributes.log_time
+          layout_type: gotime
+          layout: '2006-01-02T15:04:05.999999999Z07:00'
+      - type: remove
+        if: 'attributes["log_time"] != nil'
+        field: attributes.log_time
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 512
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/tempo]
+    logs:
+      receivers: [filelog/backend]
+      processors: [batch]
+      exporters: [otlphttp/loki]

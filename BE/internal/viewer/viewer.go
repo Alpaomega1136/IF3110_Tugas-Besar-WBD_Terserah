@@ -13,6 +13,7 @@ import (
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/httpx"
+	"terserah/backend/internal/telemetry"
 )
 
 type Service struct{ targets *connections.Service }
@@ -60,25 +61,25 @@ func fail(w http.ResponseWriter, err error) {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		if pgErr.Code == "42501" {
-			httpx.Error(w, 403, "forbidden", "Target database denied access")
+			httpx.Error(w, http.StatusForbidden, "forbidden", "Target database denied access")
 			return
 		}
 		if pgErr.Code == "42P01" || pgErr.Code == "3F000" {
-			httpx.Error(w, 404, "not_found", "Database object not found")
+			httpx.Error(w, http.StatusNotFound, "not_found", "Database object not found")
 			return
 		}
 	}
 	switch {
 	case errors.Is(err, errResultTooLarge):
-		httpx.Error(w, 413, "result_too_large", "Reduce the row limit; result exceeds 4 MiB")
+		httpx.Error(w, http.StatusRequestEntityTooLarge, "result_too_large", "Reduce the row limit; result exceeds 4 MiB")
 	case errors.Is(err, connections.ErrForbidden):
-		httpx.Error(w, 403, "forbidden", "Access denied")
+		httpx.Error(w, http.StatusForbidden, "forbidden", "Access denied")
 	case errors.Is(err, connections.ErrNotFound):
-		httpx.Error(w, 404, "not_found", "Database object not found")
+		httpx.Error(w, http.StatusNotFound, "not_found", "Database object not found")
 	case errors.Is(err, connections.ErrMetadataTarget):
-		httpx.Error(w, 409, "metadata_target_forbidden", "Metadata database cannot be used as a target")
+		httpx.Error(w, http.StatusConflict, "metadata_target_forbidden", "Metadata database cannot be used as a target")
 	default:
-		httpx.Error(w, 503, "target_unavailable", "Cannot read target database")
+		httpx.Error(w, http.StatusServiceUnavailable, "target_unavailable", "Cannot read target database")
 	}
 }
 
@@ -91,23 +92,24 @@ func jsonQuery(ctx context.Context, tx pgx.Tx, query string, args ...any) (json.
 func (s *Service) read(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id < 1 {
-		httpx.Error(w, 400, "invalid_input", "Invalid database ID")
+		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid database ID")
 		return
 	}
 	schema, table := r.PathValue("schema"), r.PathValue("table")
 	if strings.HasPrefix(schema, "pg_") || schema == "information_schema" || schema == "_terserah" {
-		httpx.Error(w, 403, "forbidden", "System schema is not available in the data viewer")
+		httpx.Error(w, http.StatusForbidden, "forbidden", "System schema is not available in the data viewer")
 		return
 	}
 	if (schema != "" && !identifier(schema)) || (table != "" && !identifier(table)) {
-		httpx.Error(w, 400, "invalid_input", "Invalid database object name")
+		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Invalid database object name")
 		return
 	}
 	limit, offset, err := pagination(r)
 	if err != nil {
-		httpx.Error(w, 400, "invalid_input", "Limit must be 1-200 and offset must be nonnegative")
+		httpx.Error(w, http.StatusBadRequest, "invalid_input", "Limit must be 1-200 and offset must be nonnegative")
 		return
 	}
+
 	p, _ := auth.User(r.Context())
 	pool, err := s.targets.OpenTarget(r.Context(), p, id, false)
 	if err != nil {
@@ -115,51 +117,20 @@ func (s *Service) read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer pool.Close()
+
 	tx, err := pool.BeginTx(r.Context(), pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	defer tx.Rollback(context.Background())
+	defer telemetry.Rollback(r.Context(), tx)
+
 	if _, err = tx.Exec(r.Context(), "SET LOCAL statement_timeout='5s'; SET LOCAL search_path=pg_catalog,pg_temp"); err != nil {
 		fail(w, err)
 		return
 	}
-	var result any
-	if schema == "" {
-		items, e := jsonQuery(r.Context(), tx, `SELECT COALESCE(jsonb_agg(nspname ORDER BY nspname),'[]'::jsonb) FROM pg_catalog.pg_namespace WHERE nspname NOT LIKE 'pg\_%' ESCAPE '\' AND nspname NOT IN ('information_schema','_terserah') AND pg_catalog.has_schema_privilege(oid,'USAGE')`)
-		err = e
-		result = map[string]any{"schemas": items}
-	} else {
-		var exists bool
-		err = tx.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname=$1 AND has_schema_privilege(oid,'USAGE'))", schema).Scan(&exists)
-		if err == nil && !exists {
-			fail(w, connections.ErrNotFound)
-			return
-		}
-		if err == nil && table == "" {
-			items, e := jsonQuery(r.Context(), tx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('name',c.relname,'kind',CASE WHEN c.relkind='p' THEN 'partitioned_table' ELSE 'table' END) ORDER BY c.relname),'[]'::jsonb) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p')`, schema)
-			err = e
-			result = map[string]any{"tables": items}
-		} else if err == nil {
-			// Schema and table are separately quoted, never interpolated as SQL.
-			qualified := pgx.Identifier{schema, table}.Sanitize()
-			var oid uint32
-			err = tx.QueryRow(r.Context(), `SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind IN ('r','p')`, schema, table).Scan(&oid)
-			if errors.Is(err, pgx.ErrNoRows) {
-				fail(w, connections.ErrNotFound)
-				return
-			}
-			if err == nil {
-				_, err = tx.Exec(r.Context(), "LOCK TABLE "+qualified+" IN ACCESS SHARE MODE")
-			}
-			if err == nil && strings.HasSuffix(r.Pattern, "/rows") {
-				result, err = readRows(r.Context(), tx, qualified, oid, limit, offset)
-			} else if err == nil {
-				result, err = metadata(r.Context(), tx, oid)
-			}
-		}
-	}
+
+	result, err := s.dispatchRead(r.Context(), tx, schema, table, strings.HasSuffix(r.Pattern, "/rows"), limit, offset)
 	if err != nil {
 		fail(w, err)
 		return
@@ -168,25 +139,152 @@ func (s *Service) read(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	httpx.JSON(w, 200, result)
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (s *Service) dispatchRead(ctx context.Context, tx pgx.Tx, schema, table string, wantRows bool, limit int, offset int64) (any, error) {
+	if schema == "" {
+		items, err := jsonQuery(ctx, tx, `
+			SELECT COALESCE(jsonb_agg(nspname ORDER BY nspname), '[]'::jsonb)
+			FROM pg_catalog.pg_namespace
+			WHERE nspname NOT LIKE 'pg\_%' ESCAPE '\'
+			  AND nspname NOT IN ('information_schema', '_terserah')
+			  AND pg_catalog.has_schema_privilege(oid, 'USAGE')
+		`)
+		return map[string]any{"schemas": items}, err
+	}
+
+	var schemaExists bool
+	err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM pg_catalog.pg_namespace
+			WHERE nspname = $1 AND has_schema_privilege(oid, 'USAGE')
+		)
+	`, schema).Scan(&schemaExists)
+	if err != nil {
+		return nil, err
+	}
+	if !schemaExists {
+		return nil, connections.ErrNotFound
+	}
+
+	if table == "" {
+		items, err := jsonQuery(ctx, tx, `
+			SELECT COALESCE(
+				jsonb_agg(
+					jsonb_build_object(
+						'name', c.relname,
+						'kind', CASE WHEN c.relkind = 'p' THEN 'partitioned_table' ELSE 'table' END
+					)
+					ORDER BY c.relname
+				),
+				'[]'::jsonb
+			)
+			FROM pg_catalog.pg_class c
+			JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')
+		`, schema)
+		return map[string]any{"tables": items}, err
+	}
+
+	// Schema and table are separately quoted via pgx.Identifier, never interpolated raw.
+	qualified := pgx.Identifier{schema, table}.Sanitize()
+	var oid uint32
+	err = tx.QueryRow(ctx, `
+		SELECT c.oid
+		FROM pg_catalog.pg_class c
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p')
+	`, schema, table).Scan(&oid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, connections.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(ctx, "LOCK TABLE "+qualified+" IN ACCESS SHARE MODE"); err != nil {
+		return nil, err
+	}
+	if wantRows {
+		return readRows(ctx, tx, qualified, oid, limit, offset)
+	}
+	return metadata(ctx, tx, oid)
 }
 
 func metadata(ctx context.Context, tx pgx.Tx, oid uint32) (any, error) {
-	columns, err := jsonQuery(ctx, tx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('name',a.attname,'position',a.attnum,'data_type',pg_catalog.format_type(a.atttypid,a.atttypmod),'nullable',NOT a.attnotnull,'default',pg_catalog.pg_get_expr(d.adbin,d.adrelid),'identity',a.attidentity,'generated',a.attgenerated) ORDER BY a.attnum),'[]'::jsonb) FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE a.attrelid=$1 AND a.attnum>0 AND NOT a.attisdropped`, oid)
+	columns, err := jsonQuery(ctx, tx, `
+		SELECT COALESCE(
+			jsonb_agg(
+				jsonb_build_object(
+					'name', a.attname,
+					'position', a.attnum,
+					'data_type', pg_catalog.format_type(a.atttypid, a.atttypmod),
+					'nullable', NOT a.attnotnull,
+					'default', pg_catalog.pg_get_expr(d.adbin, d.adrelid),
+					'identity', a.attidentity,
+					'generated', a.attgenerated
+				)
+				ORDER BY a.attnum
+			),
+			'[]'::jsonb
+		)
+		FROM pg_catalog.pg_attribute a
+		LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+		WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped
+	`, oid)
 	if err != nil {
 		return nil, err
 	}
-	constraints, err := jsonQuery(ctx, tx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('name',conname,'type',contype,'definition',pg_catalog.pg_get_constraintdef(oid,true)) ORDER BY conname),'[]'::jsonb) FROM pg_catalog.pg_constraint WHERE conrelid=$1`, oid)
+
+	constraints, err := jsonQuery(ctx, tx, `
+		SELECT COALESCE(
+			jsonb_agg(
+				jsonb_build_object(
+					'name', conname,
+					'type', contype,
+					'definition', pg_catalog.pg_get_constraintdef(oid, true)
+				)
+				ORDER BY conname
+			),
+			'[]'::jsonb
+		)
+		FROM pg_catalog.pg_constraint
+		WHERE conrelid = $1
+	`, oid)
 	if err != nil {
 		return nil, err
 	}
-	indexes, err := jsonQuery(ctx, tx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('name',c.relname,'unique',i.indisunique,'primary',i.indisprimary,'definition',pg_catalog.pg_get_indexdef(i.indexrelid)) ORDER BY c.relname),'[]'::jsonb) FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indexrelid WHERE i.indrelid=$1`, oid)
+
+	indexes, err := jsonQuery(ctx, tx, `
+		SELECT COALESCE(
+			jsonb_agg(
+				jsonb_build_object(
+					'name', c.relname,
+					'unique', i.indisunique,
+					'primary', i.indisprimary,
+					'definition', pg_catalog.pg_get_indexdef(i.indexrelid)
+				)
+				ORDER BY c.relname
+			),
+			'[]'::jsonb
+		)
+		FROM pg_catalog.pg_index i
+		JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
+		WHERE i.indrelid = $1
+	`, oid)
 	return map[string]any{"columns": columns, "constraints": constraints, "indexes": indexes}, err
 }
 
 func readRows(ctx context.Context, tx pgx.Tx, qualified string, oid uint32, limit int, offset int64) (any, error) {
 	var order []string
-	keyRows, err := tx.Query(ctx, `SELECT a.attname FROM pg_catalog.pg_index i CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,pos) JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum WHERE i.indrelid=$1 AND i.indisprimary AND k.pos<=i.indnkeyatts ORDER BY k.pos`, oid)
+	keyRows, err := tx.Query(ctx, `
+		SELECT a.attname
+		FROM pg_catalog.pg_index i
+		CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum, pos)
+		JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+		WHERE i.indrelid = $1 AND i.indisprimary AND k.pos <= i.indnkeyatts
+		ORDER BY k.pos
+	`, oid)
 	if err != nil {
 		return nil, err
 	}
@@ -203,21 +301,25 @@ func readRows(ctx context.Context, tx pgx.Tx, qualified string, oid uint32, limi
 	if err != nil {
 		return nil, err
 	}
+
 	orderBy := "tableoid,ctid"
 	ordering := "physical"
 	if len(order) > 0 {
 		orderBy = strings.Join(order, ",")
 		ordering = "primary_key"
 	}
+
 	rows, err := tx.Query(ctx, "SELECT * FROM "+qualified+" ORDER BY "+orderBy+" LIMIT $1 OFFSET $2", pgx.QueryExecModeSimpleProtocol, limit+1, offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+
 	columns := make([]map[string]any, 0)
 	for _, field := range rows.FieldDescriptions() {
 		columns = append(columns, map[string]any{"name": field.Name, "type_oid": field.DataTypeOID})
 	}
+
 	data := make([][]any, 0)
 	size := 0
 	more := false
@@ -241,5 +343,12 @@ func readRows(ctx context.Context, tx pgx.Tx, qualified string, oid uint32, limi
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	return map[string]any{"columns": columns, "rows": data, "limit": limit, "offset": offset, "has_more": more, "ordering": ordering}, nil
+	return map[string]any{
+		"columns":  columns,
+		"rows":     data,
+		"limit":    limit,
+		"offset":   offset,
+		"has_more": more,
+		"ordering": ordering,
+	}, nil
 }

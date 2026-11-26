@@ -1,107 +1,98 @@
 import { confirmAction } from "./confirmation.js";
-import {
-    authenticatedRequest,
-    requireAuthenticatedUser,
-    isCSRFError
-} from "./auth.js";
-import { executionFeedback, parseExecutionResult, executeErrorMessage } from "./execution.js";
+import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
+import { executionFeedback, parseExecutionResult, parseJobResponse, executeErrorMessage } from "./execution.js";
 import { positiveInt64, parseCursorPage } from "./pagination.js";
 import { initializeSchemaDiff } from "./schema-diff.js";
+import { byId, addCell, formatDate, setBanner, setFieldError, navigateTo } from "./ui.js";
+import { normalizeDraftDefinition, draftEditorValues, validateDraftEditor, identicalDraftDefinition } from "./migration-form.js";
 
-const page = document.getElementById("draft-page");
+const page = byId("draft-page");
 const databaseId = page.dataset.databaseId;
-
-const pageStatus = document.getElementById("draft-page-status");
-const pageError = document.getElementById("draft-page-error");
-const workspace = document.getElementById("draft-workspace");
-const databaseName = document.getElementById("draft-database-name");
-const targetName = document.getElementById("draft-target-name");
-const access = document.getElementById("draft-access");
-
-const listStatus = document.getElementById("draft-list-status");
-const listError = document.getElementById("draft-list-error");
-const listEmpty = document.getElementById("draft-list-empty");
-const listTable = document.getElementById("draft-list-table");
-const listBody = document.getElementById("draft-list-body");
-const newButton = document.getElementById("draft-new");
-const pagination = document.getElementById("draft-pagination");
-const prevButton = document.getElementById("draft-prev");
-const nextButton = document.getElementById("draft-next");
-const pageNumber = document.getElementById("draft-page-number");
-
-const form = document.getElementById("draft-form");
-const heading = document.getElementById("draft-editor-heading");
-const currentId = document.getElementById("draft-current-id");
-const titleInput = document.getElementById("draft-title");
-const sqlInput = document.getElementById("draft-sql");
-const titleError = document.getElementById("draft-title-error");
-const sqlError = document.getElementById("draft-sql-error");
-const saveButton = document.getElementById("draft-save");
-const saveMessage = document.getElementById("draft-save-message");
-
-const detail = document.getElementById("draft-detail");
-const detailAuthor = document.getElementById("draft-detail-author");
-const detailCreated = document.getElementById("draft-detail-created");
-const detailUpdated = document.getElementById("draft-detail-updated");
-const detailSQL = document.getElementById("draft-detail-sql");
-const executionPanel = document.getElementById("draft-execution");
-const executeButton = document.getElementById("draft-execute");
-const explainButton = document.getElementById("draft-explain");
-const explainMessage = document.getElementById("draft-explain-message");
-const explainResult = document.getElementById("draft-explain-result");
-const reloadButton = document.getElementById("draft-reload");
-const executionRevision = document.getElementById("draft-execution-revision");
-const executionState = document.getElementById("draft-execution-state");
-const executionMessage = document.getElementById("draft-execution-message");
-const executionResult = document.getElementById("draft-execution-result");
-const resultStatus = document.getElementById("draft-result-status");
-const resultVersion = document.getElementById("draft-result-version");
-const resultID = document.getElementById("draft-result-id");
-const resultError = document.getElementById("draft-result-error");
-
 const apiPath = `/api/v1/databases/${encodeURIComponent(databaseId)}/drafts`;
 
-const encoder = new TextEncoder();
-const maxSQLBytes = 48 * 1024;
-const maxBodyBytes = 64 * 1024;
+const pageStatus = byId("draft-page-status");
+const pageError = byId("draft-page-error");
+const workspace = byId("draft-workspace");
+const databaseName = byId("draft-database-name");
+const targetName = byId("draft-target-name");
+const access = byId("draft-access");
+
+const listStatus = byId("draft-list-status");
+const listError = byId("draft-list-error");
+const listEmpty = byId("draft-list-empty");
+const listTable = byId("draft-list-table");
+const listBody = byId("draft-list-body");
+const newButton = byId("draft-new");
+const pagination = byId("draft-pagination");
+const prevButton = byId("draft-prev");
+const nextButton = byId("draft-next");
+const pageNumber = byId("draft-page-number");
+
+const form = byId("draft-form");
+const heading = byId("draft-editor-heading");
+const currentId = byId("draft-current-id");
+const titleInput = byId("draft-title");
+const sqlInput = byId("draft-sql");
+const downInput = byId("draft-sql-down");
+const irreversibleInput = byId("draft-irreversible");
+const reasonInput = byId("draft-reason");
+const downGroup = byId("draft-down-group");
+const reasonGroup = byId("draft-reason-group");
+const immutableNote = byId("draft-immutable-note");
+const titleError = byId("draft-title-error");
+const sqlError = byId("draft-sql-error");
+const downError = byId("draft-sql-down-error");
+const reasonError = byId("draft-reason-error");
+const saveButton = byId("draft-save");
+const saveMessage = byId("draft-save-message");
+
+const detail = byId("draft-detail");
+const detailAuthor = byId("draft-detail-author");
+const detailCreated = byId("draft-detail-created");
+const detailUpdated = byId("draft-detail-updated");
+const detailSQL = byId("draft-detail-sql");
+const detailDown = byId("draft-detail-down");
+const detailDownSection = byId("draft-detail-down-section");
+const detailIrreversible = byId("draft-detail-irreversible");
+
+const executionPanel = byId("draft-execution");
+const executeButton = byId("draft-execute");
+const submitReviewButton = byId("draft-submit-review");
+const explainButton = byId("draft-explain");
+const explainMessage = byId("draft-explain-message");
+const explainResult = byId("draft-explain-result");
+const reloadButton = byId("draft-reload");
+const executionRevision = byId("draft-execution-revision");
+const executionState = byId("draft-execution-state");
+const executionMessage = byId("draft-execution-message");
+const executionResult = byId("draft-execution-result");
+const resultStatus = byId("draft-result-status");
+const resultVersion = byId("draft-result-version");
+const resultID = byId("draft-result-id");
+const resultError = byId("draft-result-error");
+
+const pageLimit = 50;
 
 let selectedDraft = null;
 let busy = false;
 let allowNavigation = false;
 let executing = false;
-let lockedExecution = null; // A sent request may have an unknown outcome. Never retry it automatically.
+let lockedExecution = null; // Hasil request bisa belum pasti; jangan lakukan retry otomatis.
 let cursors = [null];
 let currentPage = 0;
 let hasMore = false;
 let nextCursor = null;
-const pageLimit = 50;
 
 function updatePagination() {
     pagination.hidden = workspace.hidden;
-    pageNumber.textContent = `Halaman ${currentPage + 1}`;
+    pageNumber.textContent = String(currentPage + 1);
     prevButton.disabled = busy || currentPage === 0;
     nextButton.disabled = busy || !hasMore;
 }
 
-function showMessage(element, message, isError = false) {
-    element.textContent = message;
-    element.className = isError ? "error-message" : "success-message";
-    element.hidden = !message;
-}
-
-function setFieldError(input, target, message) {
-    showMessage(target, message, true);
-
-    if (message) {
-        input.setAttribute("aria-invalid", "true");
-    } else {
-        input.removeAttribute("aria-invalid");
-    }
-}
-
 function redirectToLogin() {
     allowNavigation = true;
-    window.location.replace("/login");
+    navigateTo("/login", { replace: true });
 }
 
 function handleError(err, target = saveMessage) {
@@ -109,100 +100,54 @@ function handleError(err, target = saveMessage) {
         redirectToLogin();
         return;
     }
-
     if (err.status === 403 && !isCSRFError(err)) {
         workspace.hidden = true;
-        pageError.textContent = "Hak akses Edit ditolak atau telah dicabut. " + "Kembali ke Dashboard.";
+        pageError.textContent = "Hak akses Edit ditolak atau telah dicabut. Kembali ke Dashboard.";
         pageError.hidden = false;
         return;
     }
-
-    const message =
-        err.status === 403 && isCSRFError(err)
-            ? "Token CSRF tidak valid. Silakan coba lagi."
-            : err.status === 409
-                ? "Revisi draft berubah atau eksekusi masih terkunci. Muat ulang draft sebelum menyimpan."
-                : err.status === 404
-                    ? "Draft tidak ditemukan pada database ini."
-                    : (err.message || "Operasi draft gagal.");
-
-    showMessage(target, message, true);
+    const message = err.status === 403 && isCSRFError(err)
+        ? "Token CSRF tidak valid. Silakan coba lagi."
+        : err.status === 409
+            ? "Revisi draft berubah atau eksekusi masih terkunci. Muat ulang draft sebelum menyimpan."
+            : err.status === 404
+                ? "Draft tidak ditemukan pada database ini."
+                : (err.message || "Operasi draft gagal.");
+    setBanner(target, message, true);
 }
 
-function formatDate(value) {
-    if (!value) return "-";
+const executionKey = (draft) => (draft ? `${draft.id}:${draft.revision}` : null);
 
-    const date = new Date(value);
-
-    return Number.isNaN(date.getTime())
-        ? "-"
-        : new Intl.DateTimeFormat("id-ID", {
-            dateStyle: "medium",
-            timeStyle: "short"
-        }).format(date);
-}
-
-function executionKey(draft) {
-    return draft ? `${draft.id}:${draft.revision}` : null;
-}
-
-function updateExecutionControls() {
-    const saved = selectedDraft !== null;
-    const modified = saved && isDirty();
-    const locked = saved && lockedExecution === executionKey(selectedDraft);
-
-    executionPanel.hidden = !saved;
-    executeButton.disabled = busy || !saved || modified || locked;
-    explainButton.disabled = busy || !saved || modified;
-    reloadButton.disabled = busy || !saved;
-    executeButton.textContent = executing ? "Menjalankan Migration..." : "Execute Migration";
-
-    if (!saved) return;
-    executionRevision.textContent = selectedDraft.revision;
-    executionState.textContent = locked
-        ? "Eksekusi untuk revisi ini sudah diminta. Periksa History atau buka ulang draft sebelum tindakan lain."
-        : modified
-            ? "Ada perubahan belum disimpan. Simpan perubahan sebelum Execute."
-            : "SQL tersimpan sudah siap ditinjau. Pastikan target dan revisi benar sebelum Execute.";
-}
-
-function resetExecutionFeedback() {
-    lockedExecution = null;
-    executionResult.hidden = true;
-    explainResult.hidden = true;
-    explainResult.textContent = "";
-    showMessage(explainMessage, "");
-    showMessage(executionMessage, "");
-    updateExecutionControls();
-}
-
-function setBusy(value) {
-    busy = value;
-
-    newButton.disabled = value;
-    updatePagination();
-    saveButton.disabled = value;
-    titleInput.disabled = value;
-    sqlInput.disabled = value;
-
-    for (const button of listBody.querySelectorAll("button")) {
-        button.disabled = value;
-    }
-
-    saveButton.textContent = value
-        ? "Memproses..."
-        : selectedDraft
-            ? "Simpan Perubahan"
-            : "Buat Draft";
-    updateExecutionControls();
+function editorValues() {
+    return {
+        title: titleInput.value, sql: sqlInput.value, sqlDown: downInput.value,
+        irreversible: irreversibleInput.checked, reason: reasonInput.value
+    };
 }
 
 function isDirty() {
+    if (selectedDraft?.immutable) return false;
+    const values = editorValues();
     if (selectedDraft) {
-        return titleInput.value !== selectedDraft.title || sqlInput.value !== selectedDraft.sql;
+        const original = draftEditorValues(selectedDraft);
+        return Object.keys(values).some((key) => values[key] !== original[key]);
     }
+    return Boolean(titleInput.value || sqlInput.value || downInput.value || reasonInput.value || irreversibleInput.checked);
+}
 
-    return Boolean(titleInput.value || sqlInput.value);
+function updateEditorMode() {
+    const irreversible = irreversibleInput.checked, locked = Boolean(selectedDraft?.immutable);
+    downGroup.hidden = irreversible;
+    reasonGroup.hidden = !irreversible;
+    immutableNote.hidden = !locked;
+    for (const field of [titleInput, sqlInput, downInput, irreversibleInput, reasonInput]) field.disabled = busy || locked;
+    saveButton.disabled = busy || locked;
+}
+
+function clearEditorErrors() {
+    for (const [input, error] of [[titleInput, titleError], [sqlInput, sqlError], [downInput, downError], [reasonInput, reasonError]]) {
+        setFieldError(input, error, "");
+    }
 }
 
 async function confirmDiscard() {
@@ -214,19 +159,84 @@ async function confirmDiscard() {
     });
 }
 
-function validInt64String(value) {
-    return typeof value === "string" && /^[1-9][0-9]*$/.test(value) &&
-        BigInt(value) <= 9223372036854775807n;
+function updateExecutionControls() {
+    const saved = selectedDraft !== null;
+    const modified = saved && isDirty();
+    const immutable = Boolean(selectedDraft?.immutable);
+    const locked = saved && lockedExecution === executionKey(selectedDraft);
+	const batchDown = byId("draft-batch-down");
+	if (batchDown) {
+		batchDown.hidden = !sqlInput.value.trimStart().startsWith("-- terserah-batch-v1 ");
+		batchDown.disabled = busy || immutable;
+	}
+
+    executionPanel.hidden = !saved;
+    executeButton.disabled = busy || !saved || modified || locked || immutable;
+    if (submitReviewButton) submitReviewButton.disabled = busy || !saved || modified || immutable;
+    explainButton.disabled = busy || !saved || modified;
+    reloadButton.disabled = busy || !saved;
+    executeButton.textContent = executing ? "Menjalankan Migration..." : "Execute Migration";
+
+    if (!saved) return;
+    executionRevision.textContent = selectedDraft.revision;
+    executionState.textContent = immutable
+        ? "Migration sudah pernah dieksekusi. Definisinya immutable; gunakan History untuk rollback atau forward."
+        : locked
+        ? "Eksekusi untuk revisi ini sudah diminta. Periksa History atau buka ulang draft sebelum tindakan lain."
+        : modified
+            ? "Ada perubahan belum disimpan. Simpan perubahan sebelum Execute."
+            : "SQL tersimpan sudah siap ditinjau. Pastikan target dan revisi benar sebelum Execute.";
+}
+
+byId("draft-batch-down")?.addEventListener("click", async () => {
+    if (busy || selectedDraft?.immutable) return;
+    if (downInput.value.trim() && !(await confirmAction({ title: "Ganti SQL Down?", confirmLabel: "Siapkan SQL Down",
+        message: "SQL Down pada editor akan diganti dengan pemulihan nilai sebelum batch. Periksa hasilnya sebelum menyimpan draft." }))) return;
+    if (busy || page.isConnected === false) return;
+    setBusy(true);
+    try {
+        const result = await authenticatedRequest(`${apiPath}/batch-down-preview`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql: sqlInput.value })
+        });
+        if (page.isConnected === false) return;
+        if (typeof result?.sql_down !== "string" || !result.sql_down.startsWith("-- terserah-compensation-v1 ")) throw new Error("Format SQL Down batch tidak valid.");
+        downInput.value = result.sql_down;
+        irreversibleInput.checked = false; reasonInput.value = "";
+        setBanner(saveMessage, "SQL Down batch sudah disiapkan. Periksa dan simpan draft untuk membekukan definisinya saat dieksekusi.");
+    } catch (error) { handleError(error); }
+    finally { setBusy(false); }
+});
+
+function resetExecutionFeedback() {
+    lockedExecution = null;
+    executionResult.hidden = true;
+    explainResult.hidden = true;
+    explainResult.textContent = "";
+    setBanner(explainMessage, "");
+    setBanner(executionMessage, "");
+    updateExecutionControls();
+}
+
+function setBusy(value) {
+    busy = value;
+    newButton.disabled = value;
+    updatePagination();
+    updateEditorMode();
+
+    for (const button of listBody.querySelectorAll("button")) {
+        button.disabled = value;
+    }
+    saveButton.textContent = value ? "Memproses..." : selectedDraft?.immutable ? "Definisi Terkunci" : selectedDraft ? "Simpan Perubahan" : "Buat Draft";
+    updateExecutionControls();
 }
 
 function requireDraftShape(draft) {
     if (!draft || draft.database_id !== databaseId ||
-        !validInt64String(draft.id) || !validInt64String(draft.revision) ||
+        !positiveInt64(draft.id) || !positiveInt64(draft.revision) ||
         typeof draft.title !== "string" || typeof draft.sql !== "string") {
         throw new Error("Format detail draft dari backend tidak valid.");
     }
-
-    return draft;
+    return normalizeDraftDefinition(draft);
 }
 
 function showDraft(draft) {
@@ -237,75 +247,63 @@ function showDraft(draft) {
 
     titleInput.value = draft.title;
     sqlInput.value = draft.sql;
-
+    downInput.value = draft.sql_down ?? "";
+    irreversibleInput.checked = draft.irreversible;
+    reasonInput.value = draft.irreversible_reason ?? "";
+    detailDown.textContent = draft.sql_down ?? "";
+    detailDownSection.hidden = draft.irreversible;
+    detailIrreversible.hidden = !draft.irreversible;
+    detailIrreversible.textContent = draft.irreversible ? `Irreversible: ${draft.irreversible_reason || "Alasan tidak tersedia"}` : "";
     detailAuthor.textContent = draft.created_by_username || "-";
-
     detailCreated.textContent = formatDate(draft.created_at);
     detailUpdated.textContent = formatDate(draft.updated_at);
     detailSQL.textContent = draft.sql;
     detail.hidden = false;
 
-    setFieldError(titleInput, titleError, "");
-    setFieldError(sqlInput, sqlError, "");
-    showMessage(saveMessage, "");
+    clearEditorErrors();
+    setBanner(saveMessage, "");
     resetExecutionFeedback();
+    updateEditorMode();
 }
 
 async function startNewDraft() {
     if (busy || !(await confirmDiscard()) || busy) return;
-
     selectedDraft = null;
-
     heading.textContent = "Buat Draft Baru";
     currentId.hidden = true;
-
     form.reset();
+    downInput.value = "";
+    reasonInput.value = "";
+    irreversibleInput.checked = false;
     detail.hidden = true;
     resetExecutionFeedback();
-
-    setFieldError(titleInput, titleError, "");
-    setFieldError(sqlInput, sqlError, "");
-    showMessage(saveMessage, "");
-
+    clearEditorErrors();
+    setBanner(saveMessage, "");
     setBusy(false);
     titleInput.focus();
 }
 
-function appendCell(row, value) {
-    const cell = document.createElement("td");
-    cell.textContent = String(value ?? "-");
-    row.appendChild(cell);
-    return cell;
-}
-
 function renderDrafts(drafts) {
     listBody.replaceChildren();
-
     for (const draft of drafts) {
         const row = document.createElement("tr");
-
-        appendCell(row, draft.id);
-        appendCell(row, draft.title);
-        appendCell(row, draft.created_by_username || "-");
-        appendCell(row, formatDate(draft.updated_at));
+        addCell(row, draft.id);
+        addCell(row, draft.title);
+        addCell(row, draft.created_by_username || "-");
+        addCell(row, formatDate(draft.updated_at));
 
         const actions = document.createElement("td");
         const openButton = document.createElement("button");
-
         openButton.type = "button";
         openButton.className = "draft-open-button";
         openButton.textContent = "Buka";
         openButton.disabled = busy;
-
-        openButton.addEventListener("click", () => {
-            openDraft(String(draft.id));
-        });
+        openButton.addEventListener("click", () => openDraft(String(draft.id)));
 
         actions.appendChild(openButton);
         row.appendChild(actions);
         listBody.appendChild(row);
     }
-
     listEmpty.hidden = drafts.length !== 0;
     listTable.hidden = drafts.length === 0;
 }
@@ -326,8 +324,11 @@ async function loadDrafts(index = currentPage, reset = false) {
         const cursor = cursors[index];
         const query = new URLSearchParams({ limit: String(pageLimit) });
         if (cursor !== null) query.set("after", cursor);
+
         const pageResult = parseCursorPage(
-            await authenticatedRequest(`${apiPath}?${query}`), "drafts", "next_after"
+            await authenticatedRequest(`${apiPath}?${query}`),
+            "drafts",
+            "next_after"
         );
         for (const draft of pageResult.entries) {
             if (!draft || draft.database_id !== databaseId || !positiveInt64(draft.id)) {
@@ -349,7 +350,7 @@ async function loadDrafts(index = currentPage, reset = false) {
         if (error.status === 401 || error.status === 403) {
             handleError(error, listError);
         } else {
-            showMessage(listError, error.message || "Gagal memuat daftar draft.", true);
+            setBanner(listError, error.message || "Gagal memuat daftar draft.", true);
         }
     } finally {
         listStatus.hidden = true;
@@ -371,21 +372,12 @@ nextButton.addEventListener("click", async () => {
 
 async function openDraft(draftId) {
     if (busy || !(await confirmDiscard()) || busy) return;
-
     setBusy(true);
-    showMessage(saveMessage, "");
-
+    setBanner(saveMessage, "");
     try {
-        const result = await authenticatedRequest(
-            `${apiPath}/${encodeURIComponent(draftId)}`
-        );
-
+        const result = await authenticatedRequest(`${apiPath}/${encodeURIComponent(draftId)}`);
         showDraft(result);
-
-        form.scrollIntoView({
-            behavior: "smooth",
-            block: "start"
-        });
+        form.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (err) {
         handleError(err);
     } finally {
@@ -402,7 +394,55 @@ function displayExecutionResult(result) {
     executionResult.hidden = false;
 
     const feedback = executionFeedback(result.status);
-    showMessage(executionMessage, feedback.message, feedback.isError);
+    const progress = result.committed_batches != null && result.committed_rows != null
+        ? ` Batch sudah di-commit: ${result.committed_batches}; row sudah di-commit: ${result.committed_rows}.` : "";
+    const attempts = result.attempt_count != null && result.max_attempts != null
+        ? ` Attempt: ${result.attempt_count}/${result.max_attempts}.` : "";
+    const next = ["retry_wait", "recovering"].includes(result.status) && result.available_at
+        ? ` Pemeriksaan/percobaan berikutnya paling cepat: ${formatDate(result.available_at)}.` : "";
+    const handoff = result.resumed_by_job_id ? ` Job resume: ${result.resumed_by_job_id}.` : "";
+    setBanner(executionMessage, feedback.message + progress + attempts + next + handoff, feedback.isError);
+}
+
+async function followJob(response) {
+    const pending = ["queued", "running", "unknown", "recovering", "retry_wait"];
+    let job = parseJobResponse(response, databaseId);
+    const monitor = byId("draft-job-link");
+    const showMonitor = () => {
+        if (!monitor) return;
+        const id = job.resumed_by_job_id || job.id;
+        monitor.href = `/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(id)}`;
+        monitor.textContent = `Pantau Job #${id}`;
+        monitor.hidden = false;
+    };
+    showMonitor();
+    displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
+    for (let poll = 0; poll < 30; poll++) {
+        if (executionResult.isConnected === false) return;
+        response = await authenticatedRequest(`/api/v1/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(job.id)}`);
+        if (executionResult.isConnected === false) return;
+        const current = parseJobResponse(response, databaseId);
+        if (current.id !== job.id) throw new Error("Identitas job berubah. Periksa History.");
+        job = current;
+        showMonitor();
+        if (job.status === "resumed") {
+            displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
+            return;
+        }
+        const attempt = response.attempts?.at(-1);
+        if (attempt?.version && !pending.includes(job.status)) {
+            displayExecutionResult(parseExecutionResult({
+                execution_id: attempt.execution_id, version: attempt.version,
+                status: job.status, error_code: job.error_code,
+                committed_batches: job.committed_batches, committed_rows: job.committed_rows
+            }));
+            return;
+        }
+        displayExecutionResult({ ...job, version: "-", execution_id: `Job ${job.id}` });
+        if (!pending.includes(job.status)) return;
+        if (poll < 29) await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    setBanner(executionMessage, `Job ${job.id} masih ${job.status}. Pekerjaan berlanjut di worker; periksa History untuk hasil akhir.`);
 }
 
 async function executeDraft() {
@@ -411,18 +451,21 @@ async function executeDraft() {
     const draft = selectedDraft;
     const revisionKey = executionKey(draft);
     setBusy(true);
-    showMessage(executionMessage, "Memeriksa revisi terbaru dan hak akses...");
+    setBanner(executionMessage, "Memeriksa revisi terbaru dan hak akses...");
     executionResult.hidden = true;
+    const monitor = byId("draft-job-link");
+    if (monitor) { monitor.hidden = true; monitor.removeAttribute("href"); }
 
     try {
         // A fresh GET catches stale editor data before asking the user to confirm.
-        const latest = requireDraftShape(await authenticatedRequest(
-            `${apiPath}/${encodeURIComponent(draft.id)}`
-        ));
-        if (latest.revision !== draft.revision || latest.title !== draft.title || latest.sql !== draft.sql) {
+        const latest = requireDraftShape(await authenticatedRequest(`${apiPath}/${encodeURIComponent(draft.id)}`));
+        if (latest.revision !== draft.revision || !identicalDraftDefinition(latest, draft)) {
             lockedExecution = revisionKey;
-            showMessage(executionMessage,
-                "Draft di server sudah berubah. Buka ulang draft untuk melihat SQL dan revisi terbaru; tidak ada migration dijalankan.", true);
+            setBanner(
+                executionMessage,
+                "Draft di server sudah berubah. Buka ulang draft untuk melihat SQL dan revisi terbaru; tidak ada migration dijalankan.",
+                true
+            );
             return;
         }
 
@@ -433,25 +476,31 @@ async function executeDraft() {
                 "Periksa SQL tersimpan di bagian Detail Draft. Eksekusi mengubah database target. " +
                 "SQL gagal akan di-rollback oleh backend. Lanjutkan?",
             confirmLabel: "Execute Migration",
-            tone: "danger"
+            tone: "warning"
         });
         if (!confirmed) {
-            showMessage(executionMessage, "Eksekusi dibatalkan. Tidak ada SQL dijalankan.");
+            setBanner(executionMessage, "Eksekusi dibatalkan. Tidak ada SQL dijalankan.");
             return;
         }
 
         lockedExecution = revisionKey;
         executing = true;
         updateExecutionControls();
-        showMessage(executionMessage, "Permintaan eksekusi dikirim. Menunggu hasil backend...");
-        const result = parseExecutionResult(await authenticatedRequest(
-            `${apiPath}/${encodeURIComponent(draft.id)}/execute`, {
+        setBanner(executionMessage, "Mengirim migration ke antrean...");
+
+        const response = await authenticatedRequest(
+            `${apiPath}/${encodeURIComponent(draft.id)}/execute`,
+            {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ revision: draft.revision })
             }
-        ));
-        displayExecutionResult(result);
+        );
+        if (response?.job) {
+            await followJob(response);
+        } else {
+            displayExecutionResult(parseExecutionResult(response));
+        }
     } catch (err) {
         if (err.status === 401) {
             redirectToLogin();
@@ -463,7 +512,7 @@ async function executeDraft() {
             pageError.hidden = false;
             return;
         }
-        showMessage(executionMessage, executeErrorMessage(err), true);
+        setBanner(executionMessage, executeErrorMessage(err), true);
     } finally {
         executing = false;
         setBusy(false);
@@ -471,12 +520,47 @@ async function executeDraft() {
 }
 
 executeButton.addEventListener("click", executeDraft);
+submitReviewButton?.addEventListener("click", async () => {
+    if (busy || !selectedDraft || isDirty()) return;
+    const draft = selectedDraft;
+    const confirmed = await confirmAction({
+        title: "Ajukan Review Migration?",
+        message: `Ajukan Draft "${draft.title}" (ID ${draft.id}, revisi ${draft.revision}) untuk ditinjau dan disetujui oleh seluruh Leader Group pada database ini?`,
+        confirmLabel: "Ajukan Review"
+    });
+    if (!confirmed || busy) return;
+
+    setBusy(true);
+    setBanner(executionMessage, "Mengirim pengajuan review ke leader group...");
+    try {
+        const result = await authenticatedRequest(`/api/v1/databases/${encodeURIComponent(databaseId)}/reviews`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ draft_id: draft.id, revision: draft.revision, action_type: "up" })
+        });
+        const count = Array.isArray(result?.review?.approvals) ? result.review.approvals.length : 0;
+        setBanner(
+            executionMessage,
+            `Pengajuan review #${result?.review?.id ?? "-"} berhasil dibuat (Status: Pending Review, membutuhkan persetujuan ${count} leader group).`
+        );
+    } catch (err) {
+        if (err.status === 409 && err.code === "group_leader_required") {
+            setBanner(executionMessage, "Pengajuan ditolak: setiap group yang memiliki akses view atau edit ke database ini wajib memiliki Leader Group aktif.", true);
+        } else if (err.status === 409) {
+            setBanner(executionMessage, "Revisi draft ini sudah memiliki pengajuan review aktif atau revisi draft telah berubah.", true);
+        } else {
+            handleError(err, executionMessage);
+        }
+    } finally {
+        setBusy(false);
+    }
+});
 explainButton.addEventListener("click", async () => {
     if (busy || !selectedDraft || isDirty()) return;
     const draft = selectedDraft;
     setBusy(true);
     explainResult.hidden = true;
-    showMessage(explainMessage, "Menganalisis query...");
+    setBanner(explainMessage, "Menganalisis query...");
     try {
         const result = await authenticatedRequest(`${apiPath}/${encodeURIComponent(draft.id)}/explain`, {
             method: "POST",
@@ -490,108 +574,80 @@ explainButton.addEventListener("click", async () => {
             `Statement ${index + 1}:\n${item.sql.trim()}\n\n${item.error || JSON.stringify(item.plan, null, 2)}`
         ).join("\n\n");
         explainResult.hidden = false;
-        showMessage(explainMessage, "Analisis selesai. Hasil adalah perkiraan PostgreSQL.");
+        setBanner(explainMessage, "Analisis selesai. Hasil adalah perkiraan PostgreSQL.");
     } catch (err) {
         handleError(err, explainMessage);
     } finally {
         setBusy(false);
     }
 });
+
 reloadButton.addEventListener("click", () => {
     if (selectedDraft) openDraft(selectedDraft.id);
 });
+irreversibleInput.addEventListener("change", () => { updateEditorMode(); updateExecutionControls(); });
+for (const input of [downInput, reasonInput]) input.addEventListener("input", updateExecutionControls);
 titleInput.addEventListener("input", updateExecutionControls);
 sqlInput.addEventListener("input", () => {
     explainResult.hidden = true;
-    showMessage(explainMessage, "");
+    setBanner(explainMessage, "");
     updateExecutionControls();
 });
-
 newButton.addEventListener("click", startNewDraft);
 
 form.addEventListener("submit", async (event) => {
     event.preventDefault();
-
     if (busy) return;
 
-    setFieldError(titleInput, titleError, "");
-    setFieldError(sqlInput, sqlError, "");
-    showMessage(saveMessage, "");
-
-    const title = titleInput.value.trim();
-    const sql = sqlInput.value.trim();
-
-    const titleBytes = encoder.encode(title).length;
-    const sqlBytes = encoder.encode(sql).length;
-
-    if (titleBytes < 1 || titleBytes > 200) {
-        setFieldError(titleInput, titleError, "Isi judul dengan maksimal 200 karakter biasa; karakter tertentu dapat dihitung lebih dari satu.");
-    }
-
-    if (sqlBytes < 1 || sqlBytes > maxSQLBytes) {
-        setFieldError(sqlInput, sqlError, "SQL harus diisi dan maksimal 48 KiB.");
-    }
-
-    if (!titleError.hidden || !sqlError.hidden) {
-        (titleError.hidden ? sqlInput : titleInput).focus();
+    if (selectedDraft?.immutable) return;
+    clearEditorErrors();
+    setBanner(saveMessage, "");
+    const { errors, payload } = validateDraftEditor(editorValues(), selectedDraft?.revision ?? null);
+    const validation = [["title", titleInput, titleError], ["sql", sqlInput, sqlError],
+        ["sqlDown", downInput, downError], ["reason", reasonInput, reasonError]];
+    for (const [key, input, error] of validation) setFieldError(input, error, errors[key] || "");
+    if (errors.body) setFieldError(sqlInput, sqlError, errors.body);
+    if (Object.keys(errors).length) {
+        const first = validation.find(([key]) => errors[key]);
+        (first ? first[1] : sqlInput).focus();
         return;
     }
-
-    if (selectedDraft && title === selectedDraft.title && sql === selectedDraft.sql) {
-        showMessage(saveMessage, "Tidak ada perubahan yang perlu disimpan.");
+    if (selectedDraft && identicalDraftDefinition(payload, selectedDraft)) {
+        setBanner(saveMessage, "Tidak ada perubahan yang perlu disimpan.");
         return;
     }
-    const payload = selectedDraft
-        ? { title, sql, revision: selectedDraft.revision }
-        : { title, sql };
-
     const serialized = JSON.stringify(payload);
 
-    if (encoder.encode(serialized).length > maxBodyBytes) {
-        setFieldError(sqlInput, sqlError, "Ukuran JSON melebihi 64 KiB. " + "Kurangi ukuran SQL sebelum menyimpan.");
-        return;
-    }
-
     const updating = selectedDraft !== null;
-
     const url = updating ? `${apiPath}/${encodeURIComponent(String(selectedDraft.id))}` : apiPath;
-
     setBusy(true);
 
     try {
         const result = await authenticatedRequest(url, {
             method: updating ? "PATCH" : "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
+            headers: { "Content-Type": "application/json" },
             body: serialized
         });
-
         showDraft(result);
-
         try {
             await loadDrafts(0, true);
-
-            showMessage(
-                saveMessage,
-                updating
-                    ? "Perubahan draft berhasil disimpan."
-                    : "Draft baru berhasil dibuat."
-            );
+            setBanner(saveMessage, updating ? "Perubahan draft berhasil disimpan." : "Draft baru berhasil dibuat.");
         } catch (refreshError) {
             if (refreshError.status === 401 || refreshError.status === 403) {
                 handleError(refreshError);
             } else {
-                showMessage(
-                    saveMessage,
-                    "Draft tersimpan, tetapi daftar gagal diperbarui.",
-                    true
-                );
+                setBanner(saveMessage, "Draft tersimpan, tetapi daftar gagal diperbarui.", true);
             }
         }
-
     } catch (err) {
-        handleError(err);
+        if (err.status === 409 && err.code === "migration_immutable") {
+            setBanner(saveMessage, "Migration telah dieksekusi dan tidak dapat diedit. Buat draft baru untuk perbaikan.", true);
+            if (selectedDraft) {
+                selectedDraft.immutable = true;
+                updateEditorMode();
+                updateExecutionControls();
+            }
+        } else handleError(err);
     } finally {
         setBusy(false);
     }
@@ -610,17 +666,13 @@ async function initialize() {
         if (!user) return;
 
         const result = await authenticatedRequest("/api/v1/databases");
-
         if (!Array.isArray(result?.databases)) {
             throw new Error("Format daftar database tidak valid.");
         }
-
         const database = result.databases.find((item) => String(item.id) === databaseId);
-
         if (!database) {
             throw new Error("Database tidak ditemukan atau tidak dapat diakses.");
         }
-
         if (database.access !== "edit") {
             throw new Error("Akses View Only tidak diizinkan membuka migration draft.");
         }
@@ -628,40 +680,38 @@ async function initialize() {
         databaseName.textContent = database.name;
         targetName.textContent = database.database_name;
         access.textContent = "View + Edit";
-
         workspace.hidden = false;
 
-        initializeSchemaDiff(databaseId, (sql) => {
-            if (busy || !confirmDiscard()) return false;
+        initializeSchemaDiff(databaseId, async (sql) => {
+            if (busy || !(await confirmDiscard())) return false;
             selectedDraft = null;
             heading.textContent = "Buat Draft Baru";
             currentId.hidden = true;
             detail.hidden = true;
             form.reset();
+            downInput.value = "";
+            reasonInput.value = "";
+            irreversibleInput.checked = false;
             titleInput.value = "Schema diff";
             sqlInput.value = sql;
             resetExecutionFeedback();
-            setFieldError(titleInput, titleError, "");
-            setFieldError(sqlInput, sqlError, "");
-            showMessage(saveMessage, "");
+            clearEditorErrors();
+            updateEditorMode();
+            setBanner(saveMessage, "");
             form.scrollIntoView({ behavior: "smooth", block: "start" });
             return true;
         });
 
         await loadDrafts(0, true);
-
     } catch (err) {
         if (err.status === 401) {
             redirectToLogin();
             return;
         }
-
         if (err.status === 403) {
             workspace.hidden = true;
         }
-
         pageError.textContent = err.message || "Gagal memuat halaman draft.";
-
         pageError.hidden = false;
     } finally {
         pageStatus.hidden = true;

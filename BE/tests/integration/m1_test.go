@@ -19,13 +19,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	adminapi "terserah/backend/internal/admin"
+	"terserah/backend/internal/approval"
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/database"
 	"terserah/backend/internal/httpapi"
+	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/runner"
 	"terserah/backend/internal/secretbox"
 	"terserah/backend/internal/viewer"
+	"terserah/backend/internal/worker"
 	"terserah/backend/migrations"
 )
 
@@ -41,15 +44,17 @@ func (c *testClock) Now() time.Time          { c.mu.Lock(); defer c.mu.Unlock();
 func (c *testClock) Advance(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.now = c.now.Add(d) }
 
 type m1App struct {
-	db      *pgxpool.Pool
-	http    http.Handler
-	targets *connections.Service
-	clock   *testClock
-	key     []byte
-	users   map[string]int64
+	db         *pgxpool.Pool
+	http       http.Handler
+	targets    *connections.Service
+	clock      *testClock
+	key        []byte
+	users      map[string]int64
+	leaders    map[string]*browser
+	workerOnce sync.Once
 }
 
-func newM1App(t *testing.T) *m1App {
+func newM1App(t *testing.T, tracers ...pgx.QueryTracer) *m1App {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
@@ -79,6 +84,9 @@ func newM1App(t *testing.T) *m1App {
 		t.Fatal("invalid test URL")
 	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+	if len(tracers) > 0 {
+		cfg.ConnConfig.Tracer = tracers[0]
+	}
 	db, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal("cannot open schema pool")
@@ -101,6 +109,8 @@ func newM1App(t *testing.T) *m1App {
 		viewer.New(app.targets).Register(mux, sessions)
 		runner.New(db, app.targets, app.key).Register(mux, sessions)
 		adminapi.NewService(adminapi.NewPostgresStore(db), app.clock.Now).Register(mux, sessions)
+		approval.NewService(approval.NewPostgresStore(db), app.clock.Now).Register(mux, sessions)
+		jobs.New(db).Register(mux, sessions)
 	})
 	hash, err := auth.HashPassword(testPassword)
 	if err != nil {
@@ -124,12 +134,67 @@ type browser struct {
 
 func (a *m1App) browser() *browser { return &browser{app: a, cookies: map[string]*http.Cookie{}} }
 
+// Legacy assertions inspect the final outcome explicitly, through the real asynchronous worker.
+func (b *browser) executeAndWait(t *testing.T, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	b.app.workerOnce.Do(func() {
+		background, err := worker.New(jobs.New(b.app.db), runner.New(b.app.db, b.app.targets, b.app.key), worker.Options{JobTimeout: 7 * time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); background.Run(ctx) }()
+		t.Cleanup(func() { cancel(); <-done })
+	})
+	w := b.request("POST", path, body)
+	if w.Code != 200 && w.Code != 202 {
+		return w
+	}
+	var queued struct {
+		Job jobs.Job `json:"job"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &queued); err != nil || queued.Job.ID < 1 {
+		t.Fatal("missing asynchronous job")
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		var state string
+		if err := b.app.db.QueryRow(context.Background(), `SELECT status FROM migration_jobs WHERE id=$1`, queued.Job.ID).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state == "success" || state == "failed" || state == "unknown" {
+			var result runner.Result
+			err := b.app.db.QueryRow(context.Background(), `SELECT h.execution_id,h.version,h.status,h.error_code FROM migration_job_attempts a JOIN migration_history h ON h.execution_id=a.execution_id WHERE a.job_id=$1 ORDER BY a.attempt_no DESC LIMIT 1`, queued.Job.ID).Scan(&result.ExecutionID, &result.Version, &result.Status, &result.ErrorCode)
+			if err != nil {
+				t.Fatal("job has no history outcome", err)
+			}
+			out := httptest.NewRecorder()
+			if state == "unknown" {
+				out.WriteHeader(202)
+			} else {
+				out.WriteHeader(200)
+			}
+			_ = json.NewEncoder(out).Encode(result)
+			return out
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("asynchronous migration did not finish")
+	return nil
+}
+
 func (b *browser) request(method, path string, body any) *httptest.ResponseRecorder {
+	return b.requestContext(context.Background(), method, path, body)
+}
+
+func (b *browser) requestContext(ctx context.Context, method, path string, body any) *httptest.ResponseRecorder {
 	var payload []byte
 	if body != nil {
 		payload, _ = json.Marshal(body)
 	}
 	r := httptest.NewRequest(method, path, bytes.NewReader(payload))
+	r = r.WithContext(ctx)
 	r.Header.Set("Origin", testOrigin)
 	r.Header.Set("X-CSRF-Token", b.csrf)
 	for _, c := range b.cookies {
@@ -219,8 +284,46 @@ func grant(t *testing.T, a *m1App, user string, target int64, access string) {
 	if _, err := a.db.Exec(ctx, "INSERT INTO user_groups(user_id,group_id) VALUES($1,$2)", a.users[user], group); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := a.db.Exec(ctx, "UPDATE groups SET leader_user_id=$1 WHERE id=$2", a.users[user], group); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := a.db.Exec(ctx, "INSERT INTO group_database_permissions(group_id,database_id,access_level) VALUES($1,$2,$3)", group, target, access); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func approveDraft(t *testing.T, a *m1App, editor *browser, dbID, draftID, revision int64) {
+	t.Helper()
+	path := fmt.Sprintf("/api/v1/databases/%d/reviews", dbID)
+	w := editor.request("POST", path, map[string]string{"draft_id": fmt.Sprint(draftID), "revision": fmt.Sprint(revision)})
+	status(t, w, 201)
+	var result struct {
+		Review struct {
+			ID        string `json:"id"`
+			Approvals []struct {
+				LeaderUsername string `json:"leader_username"`
+			} `json:"approvals"`
+		} `json:"review"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool)
+	if a.leaders == nil {
+		a.leaders = make(map[string]*browser)
+	}
+	for _, item := range result.Review.Approvals {
+		if seen[item.LeaderUsername] {
+			continue
+		}
+		seen[item.LeaderUsername] = true
+		leader := a.leaders[item.LeaderUsername]
+		if leader == nil {
+			leader = a.browser()
+			leader.login(t, item.LeaderUsername)
+			a.leaders[item.LeaderUsername] = leader
+		}
+		status(t, leader.request("POST", path+"/"+result.Review.ID+"/approve", map[string]string{"note": "approved for test"}), 200)
 	}
 }
 

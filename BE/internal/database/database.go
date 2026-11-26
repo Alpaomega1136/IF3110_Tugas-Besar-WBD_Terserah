@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"terserah/backend/internal/telemetry"
 )
 
 func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
@@ -14,6 +15,7 @@ func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	}
 	cfg.ConnConfig.ConnectTimeout = 5 * time.Second
 	cfg.MaxConns = 10
+	cfg.ConnConfig.Tracer = telemetry.SQLTracer{Role: "metadata"}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err

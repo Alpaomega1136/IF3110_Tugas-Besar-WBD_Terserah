@@ -1,0 +1,30 @@
+name: Frontend
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: FE
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: FE/go.mod
+          cache: false
+      - name: Formatting
+        run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build ./...
+      # Node.js is provided by the Ubuntu 24.04 runner; no npm packages are needed.
+      - name: JavaScript module tests
+        run: |
+          node --version
+          node --test test/*.test.mjs

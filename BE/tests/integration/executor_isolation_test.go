@@ -31,22 +31,22 @@ func TestExecutorIsolation(t *testing.T) {
 	editor.login(t, "editor")
 	status(t, editor.request("GET", fmt.Sprintf("/api/v1/databases/%d/schemas", other.ID), nil), 403)
 	base := fmt.Sprintf("/api/v1/databases/%d/drafts", target.ID)
-	execute := func(sql string, want int) runner.Result {
+	execute := func(sql, sqlDown string, want int) runner.Result {
 		t.Helper()
-		w := editor.request("POST", base, map[string]string{"title": "isolation", "sql": sql})
+		w := editor.request("POST", base, map[string]string{"title": "isolation", "sql": sql, "sql_down": sqlDown})
 		status(t, w, 201)
 		var d runner.Draft
 		if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
 			t.Fatal(err)
 		}
-		w = editor.request("POST", fmt.Sprintf("%s/%d/execute", base, d.ID), map[string]string{"revision": "1"})
-		status(t, w, want)
+		approveDraft(t, a, editor, target.ID, d.ID, 1)
+		w = editor.executeAndWait(t, fmt.Sprintf("%s/%d/execute", base, d.ID), map[string]string{"revision": "1"})
+		status(t, w, 200)
 		var result runner.Result
-		if want == 200 {
-			if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
-				t.Fatal(err)
-			}
-		} else if !strings.Contains(w.Body.String(), "target_history_unprotected") {
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if want == 409 && (result.Status != "failed" || !strings.Contains(w.Body.String(), "target_history_unprotected")) {
 			t.Fatal("unsafe executor was not diagnosed")
 		}
 		return result
@@ -72,7 +72,7 @@ func TestExecutorIsolation(t *testing.T) {
 	defer func() {
 		_, _ = connA.Exec(context.Background(), "DROP SCHEMA IF EXISTS "+pgx.Identifier{schema}.Sanitize()+" CASCADE")
 	}()
-	result := execute(fmt.Sprintf(`CREATE SCHEMA %s; CREATE TABLE %s.probe AS SELECT query FROM pg_catalog.pg_stat_activity WHERE pid=%d AND query LIKE '%%isolation-private-marker%%'`, schema, schema, pid), 200)
+	result := execute(fmt.Sprintf(`CREATE SCHEMA %s; CREATE TABLE %s.probe AS SELECT query FROM pg_catalog.pg_stat_activity WHERE pid=%d AND query LIKE '%%isolation-private-marker%%'`, schema, schema, pid), "DROP SCHEMA "+schema+" CASCADE", 200)
 	if result.Status != "success" {
 		t.Fatal("dedicated executor could not run normal SQL")
 	}
@@ -80,7 +80,7 @@ func TestExecutorIsolation(t *testing.T) {
 	if err = connA.QueryRow(ctx, "SELECT count(*) FROM "+schema+".probe").Scan(&count); err != nil || count != 0 {
 		t.Fatal("query text from the other target was exposed")
 	}
-	result = execute(fmt.Sprintf("SELECT pg_catalog.pg_cancel_backend(%d)", pid), 200)
+	result = execute(fmt.Sprintf("SELECT pg_catalog.pg_cancel_backend(%d)", pid), "SELECT 1", 200)
 	if result.Status != "failed" || result.ErrorCode == nil || *result.ErrorCode != "42501" {
 		t.Fatal("executor can signal another target's session")
 	}
@@ -104,6 +104,6 @@ func TestExecutorIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _, _ = owner.Exec(context.Background(), "REVOKE USAGE ON SCHEMA public FROM "+role) }()
-	execute("SELECT 1", 409)
+	execute("SELECT 1", "SELECT 1", 409)
 	status(t, editor.request("POST", fmt.Sprintf("/api/v1/databases/%d/migrations/reconcile", target.ID), nil), 409)
 }

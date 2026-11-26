@@ -1,0 +1,63 @@
+# Optional local development stack; application and PostgreSQL run on the host.
+services:
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    ports:
+      - '127.0.0.1:9090:9090'
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+  loki:
+    image: grafana/loki:3.4.2
+    # Local development only: ensure the named volume is writable.
+    user: '0:0'
+    command: ['-config.file=/etc/loki/local-config.yaml']
+    volumes:
+      - ./observability/loki.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/var/loki
+  tempo:
+    image: grafana/tempo:2.7.2
+    # Local development only: ensure the named volume is writable.
+    user: '0:0'
+    command: ['-config.file=/etc/tempo.yml']
+    volumes:
+      - ./observability/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/var/tempo
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.122.0
+    command: ['--config=/etc/otelcol-contrib/config.yaml']
+    ports:
+      - '127.0.0.1:4318:4318'
+    volumes:
+      - ./observability/otel-collector.yml:/etc/otelcol-contrib/config.yaml:ro
+      - ./tmp/observability/logs:/app-logs:ro
+    depends_on:
+      - loki
+      - tempo
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: '${OBS_GRAFANA_PASSWORD:-admin}'
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    ports:
+      - '127.0.0.1:3001:3000'
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+volumes:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+  grafana-data:

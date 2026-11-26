@@ -73,7 +73,7 @@ async function setupGrants({ admin = true, connections = [connection], groups = 
 async function setupDashboard({ admin = false, databases = [{ ...connection, access: "view" }], custom } = {}) {
     clearAuthState();
     const ui = installDOM([
-        "dashboard-status", "dashboard-content", "welcome-username", "account-role", "admin-nav", "logout-button", "navigation-status",
+        "dashboard-status", "dashboard-content", "welcome-username", "admin-nav", "logout-button", "navigation-status",
         "databases-status", "databases-error", "databases-empty", "databases-table", "databases-body"
     ]);
     const calls = [];
@@ -221,19 +221,20 @@ test("refresh retrieves newly registered database without reloading whole page",
     assert.equal(ui.$("grants-no-databases").hidden, true);
 });
 
-test("view-only dashboard offers Viewer and History but not Draft", async () => {
+test("view-only dashboard offers Viewer, History and Jobs but not Draft", async () => {
     const ui = await setupDashboard();
     const links = ui.$("databases-body").children[0].children[4].children;
     assert.deepEqual(links.map((link) => link.href), [
-        `/databases/${big}/viewer`, `/databases/${big}/history`
+        `/databases/${big}/viewer`, `/databases/${big}/history`, `/databases/${big}/jobs`
     ]);
     assert.equal(ui.$("admin-nav").hidden, true);
 });
 
 test("edit dashboard offers all workspace destinations", async () => {
     const ui = await setupDashboard({ databases: [connection] });
-    assert.equal(ui.$("databases-body").children[0].children[4].children.length, 3);
-    assert.equal(ui.$("databases-body").children[0].children[4].children[2].href, `/databases/${big}/drafts`);
+    assert.equal(ui.$("databases-body").children[0].children[4].children.length, 4);
+    assert.equal(ui.$("databases-body").children[0].children[4].children[2].href, `/databases/${big}/jobs`);
+    assert.equal(ui.$("databases-body").children[0].children[4].children[3].href, `/databases/${big}/drafts`);
 });
 
 test("admin without group grant sees empty state rather than target bypass", async () => {
@@ -245,10 +246,13 @@ test("admin without group grant sees empty state rather than target bypass", asy
 
 test("navigation logout uses the authenticated session", async () => {
     const ui = await setupDashboard({ admin: true });
+    const navigations = [];
+    window.__spaNavigate = (path, options) => navigations.push([path, options]);
     assert.equal(ui.$("logout-button").disabled, false);
     await ui.$("logout-button").fire("click");
     assert.equal(ui.calls.some((call) => call.url === "/api/v1/auth/logout" && call.method === "POST"), true);
-    assert.deepEqual(ui.redirects, ["/login"]);
+    assert.deepEqual(navigations, [["/login", { replace: true }]]);
+    assert.deepEqual(ui.redirects, []);
 });
 
 test("revoked session redirects and rejected database list hides previous entries", async () => {

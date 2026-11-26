@@ -12,6 +12,8 @@ import (
 type PageData struct {
 	Title      string
 	DatabaseID string
+	ReviewID   string
+	JobID      string
 	Path       string
 }
 

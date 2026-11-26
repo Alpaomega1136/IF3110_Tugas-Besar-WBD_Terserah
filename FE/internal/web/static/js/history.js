@@ -1,49 +1,69 @@
 import { confirmAction } from "./confirmation.js";
-import {
-    authenticatedRequest,
-    requireAuthenticatedUser,
-    isCSRFError
-} from "./auth.js";
+import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
 import { positiveInt64, parseCursorPage, parseReconcileResult } from "./pagination.js";
+import { byId, addCell, formatDate, setBanner, navigateTo } from "./ui.js";
+import { parseExecutionResult, parseJobResponse, executionFeedback, executeErrorMessage } from "./execution.js";
+import { ACTION_LABELS, migrationAction, operationRequest } from "./migration-actions.js";
 
-const page = document.getElementById("history-page");
+const page = byId("history-page");
 const databaseId = page.dataset.databaseId;
 const apiPath = `/api/v1/databases/${encodeURIComponent(databaseId)}/migrations`;
 
-const pageStatus = document.getElementById("history-page-status");
-const pageError = document.getElementById("history-page-error");
-const workspace = document.getElementById("history-workspace");
-const databaseName = document.getElementById("history-database-name");
-const targetName = document.getElementById("history-target-name");
-const access = document.getElementById("history-access");
-const draftsLink = document.getElementById("history-drafts-link");
+const pageStatus = byId("history-page-status");
+const pageError = byId("history-page-error");
+const workspace = byId("history-workspace");
+const databaseName = byId("history-database-name");
+const targetName = byId("history-target-name");
+const access = byId("history-access");
+const draftsLink = byId("history-drafts-link");
 
-const refreshButton = document.getElementById("history-refresh");
-const listStatus = document.getElementById("history-list-status");
-const listError = document.getElementById("history-list-error");
-const listEmpty = document.getElementById("history-list-empty");
-const listTable = document.getElementById("history-list-table");
-const listBody = document.getElementById("history-list-body");
-const pagination = document.getElementById("history-pagination");
-const prevButton = document.getElementById("history-prev");
-const nextButton = document.getElementById("history-next");
-const pageNumber = document.getElementById("history-page-number");
-const pendingNotice = document.getElementById("history-pending-notice");
-const reconcilePanel = document.getElementById("history-reconcile-panel");
-const reconcileButton = document.getElementById("history-reconcile");
-const reconcileStatus = document.getElementById("history-reconcile-status");
-const reconcileError = document.getElementById("history-reconcile-error");
-const reconcileResult = document.getElementById("history-reconcile-result");
-const reconcileSummary = document.getElementById("history-reconcile-summary");
-const reconcileTable = document.getElementById("history-reconcile-table");
-const reconcileBody = document.getElementById("history-reconcile-body");
+const refreshButton = byId("history-refresh");
+const listStatus = byId("history-list-status");
+const listError = byId("history-list-error");
+const listEmpty = byId("history-list-empty");
+const listTable = byId("history-list-table");
+const listBody = byId("history-list-body");
+const pagination = byId("history-pagination");
+const prevButton = byId("history-prev");
+const nextButton = byId("history-next");
+const pageNumber = byId("history-page-number");
+const pendingNotice = byId("history-pending-notice");
+const hideRollback = byId("history-hide-rollback");
+const actionMessage = byId("history-action-message");
 
-const detail = document.getElementById("history-detail");
-const detailStatus = document.getElementById("history-detail-status");
-const detailError = document.getElementById("history-detail-error");
-const detailContent = document.getElementById("history-detail-content");
-const detailSQLSection = document.getElementById("history-detail-sql-section");
-const detailSQL = document.getElementById("history-detail-sql");
+const reconcilePanel = byId("history-reconcile-panel");
+const reconcileButton = byId("history-reconcile");
+const reconcileStatus = byId("history-reconcile-status");
+const reconcileError = byId("history-reconcile-error");
+const reconcileResult = byId("history-reconcile-result");
+const reconcileSummary = byId("history-reconcile-summary");
+const reconcileTable = byId("history-reconcile-table");
+const reconcileBody = byId("history-reconcile-body");
+
+const detail = byId("history-detail");
+const detailStatus = byId("history-detail-status");
+const detailError = byId("history-detail-error");
+const detailContent = byId("history-detail-content");
+const detailSQLSection = byId("history-detail-sql-section");
+const detailSQL = byId("history-detail-sql");
+const actionPanel = byId("history-action-panel");
+const actionHint = byId("history-action-hint");
+const actionReview = byId("history-action-review");
+const actionRun = byId("history-action-run");
+const actionStatus = byId("history-action-status");
+const actionReviewLink = byId("history-action-review-link");
+const actionSQLSection = byId("history-action-sql-section");
+const actionSQLHeading = byId("history-action-sql-heading");
+const actionSQL = byId("history-action-sql");
+
+const pageLimit = 50;
+const STATUS_LABELS = {
+    running: "Berjalan",
+    success: "Berhasil",
+    failed: "Gagal",
+    unknown: "Tidak pasti",
+    partial: "Sebagian committed", partially_reverted: "Sebagian dibatalkan"
+};
 
 let busy = false;
 let canEdit = false;
@@ -51,59 +71,34 @@ let cursors = [null];
 let currentPage = 0;
 let nextCursor = null;
 let hasMore = false;
-const pageLimit = 50;
+let selectedHistory = null;
+let selectedAction = null;
 
 function showMessage(element, message) {
     element.textContent = message;
     element.hidden = !message;
 }
 
-function formatDate(value, unfinished = false) {
-    if (value == null) return unfinished ? "Belum selesai" : "-";
+const formatHistoryDate = (value, unfinished = false) =>
+    formatDate(value, { nullLabel: unfinished ? "Belum selesai" : "-", invalidLabel: "Tanggal tidak valid" });
 
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "Tanggal tidak valid";
-
-    return new Intl.DateTimeFormat("id-ID", {
-        dateStyle: "medium",
-        timeStyle: "short"
-    }).format(date);
-}
-
-function statusLabel(status) {
-    const labels = {
-        running: "Berjalan",
-        success: "Berhasil",
-        failed: "Gagal",
-        unknown: "Tidak pasti"
-    };
-    return labels[status] ?? String(status ?? "-");
-}
-
-function addCell(row, value) {
-    const cell = document.createElement("td");
-    cell.textContent = String(value);
-    row.appendChild(cell);
-    return cell;
-}
+const statusLabel = (status) => STATUS_LABELS[status] ?? String(status ?? "-");
 
 function makeStatus(status) {
     const span = document.createElement("span");
     span.className = "migration-status";
-    if (["running", "success", "failed", "unknown"].includes(status)) {
+    if (["running", "success", "failed", "unknown", "partial", "partially_reverted"].includes(status)) {
         span.className += ` migration-status--${status}`;
     }
     span.textContent = statusLabel(status);
     return span;
 }
 
-function versionString(version) {
-    return positiveInt64(version) ? version : null;
-}
+const versionString = (version) => (positiveInt64(version) ? version : null);
 
 function updatePagination() {
     pagination.hidden = workspace.hidden;
-    pageNumber.textContent = `Halaman ${currentPage + 1}`;
+    pageNumber.textContent = String(currentPage + 1);
     prevButton.disabled = busy || currentPage === 0;
     nextButton.disabled = busy || !hasMore;
 }
@@ -112,6 +107,9 @@ function setBusy(value) {
     busy = value;
     refreshButton.disabled = value;
     reconcileButton.disabled = value || !canEdit;
+    hideRollback.disabled = value;
+    actionReview.disabled = value || !selectedAction || selectedAction.type.startsWith("retry_");
+    actionRun.disabled = value || !selectedAction;
     updatePagination();
     for (const button of listBody.querySelectorAll("button")) {
         button.disabled = value || button.dataset.invalidVersion === "true";
@@ -123,6 +121,13 @@ function clearDetail() {
     detailContent.hidden = true;
     detailSQLSection.hidden = true;
     detailSQL.textContent = "";
+    actionPanel.hidden = true;
+    selectedHistory = null;
+    selectedAction = null;
+    actionReviewLink.hidden = true;
+    actionSQLSection.hidden = true;
+    actionSQL.textContent = "";
+    showMessage(actionStatus, "");
     showMessage(detailStatus, "");
     showMessage(detailError, "");
 }
@@ -135,6 +140,7 @@ function clearPrivateData() {
     pendingNotice.hidden = true;
     reconcilePanel.hidden = true;
     reconcileResult.hidden = true;
+    showMessage(actionMessage, "");
     clearDetail();
     canEdit = false;
 }
@@ -143,17 +149,13 @@ function handleRequestError(error, target) {
     if (error.status === 401) {
         clearPrivateData();
         workspace.hidden = true;
-        window.location.replace("/login");
+        navigateTo("/login", { replace: true });
         return;
     }
-
     if (error.status === 403 && !isCSRFError(error)) {
         clearPrivateData();
         workspace.hidden = true;
-        showMessage(
-            pageError,
-            "Hak akses ke database telah ditolak atau dicabut. Kembali ke Dashboard."
-        );
+        showMessage(pageError, "Hak akses ke database telah ditolak atau dicabut. Kembali ke Dashboard.");
         return;
     }
 
@@ -163,15 +165,19 @@ function handleRequestError(error, target) {
         target_history_unprotected: "History target atau isolasi executor belum aman. Minta administrator PostgreSQL menjalankan BE/sql/provision_target_history.sql dan menyiapkan executor khusus database ini.",
         target_identity_conflict: "Identitas target berubah atau bentrok. Periksa konfigurasi koneksi.",
         target_unavailable: "Database target tidak dapat dijangkau. Pulihkan koneksi, lalu coba kembali secara manual.",
+        batch_evidence_invalid: "Bukti checkpoint batch tidak dapat diverifikasi. Target tetap ditahan; jangan menjalankan ulang SQL atau mengubah bukti target.",
         migration_unavailable: "Layanan migration belum tersedia. Periksa backend/target dan coba kembali secara manual."
     };
-    showMessage(target, error.status === 404
+    const msg = error.status === 404
         ? "Riwayat atau versi migration tidak ditemukan."
-        : isCSRFError(error) ? "Token CSRF ditolak. Muat ulang halaman dan login ulang jika diperlukan."
-        : messages[error.code] || (error.status === 409 ? "Terjadi konflik migration. Muat ulang History dan periksa backend."
-        : error.status === 503 ? "Target migration tidak tersedia. Coba kembali secara manual setelah pulih."
-        : (error.message || "Operasi migration history gagal.")));
-
+        : isCSRFError(error)
+            ? "Token CSRF ditolak. Muat ulang halaman dan login ulang jika diperlukan."
+            : messages[error.code] || (error.status === 409
+                ? "Terjadi konflik migration. Muat ulang History dan periksa backend."
+                : error.status === 503
+                    ? "Target migration tidak tersedia. Coba kembali secara manual setelah pulih."
+                    : (error.message || "Operasi migration history gagal."));
+    showMessage(target, msg);
 }
 
 function renderHistory(entries) {
@@ -188,13 +194,14 @@ function renderHistory(entries) {
         const statusCell = document.createElement("td");
         statusCell.appendChild(makeStatus(entry.status));
         row.appendChild(statusCell);
+        addCell(row, ACTION_LABELS[entry.action_type] ?? entry.action_type ?? "-");
 
         addCell(row, `${entry.draft_id ?? "-"} / ${entry.draft_revision ?? "-"}`);
         addCell(row, entry.execution_id ?? "-");
         addCell(row, entry.error_code ?? "-");
         addCell(row, entry.username || "-");
-        addCell(row, formatDate(entry.started_at));
-        addCell(row, formatDate(entry.finished_at, true));
+        addCell(row, formatHistoryDate(entry.started_at));
+        addCell(row, formatHistoryDate(entry.finished_at, true));
 
         const actionCell = document.createElement("td");
         const button = document.createElement("button");
@@ -203,19 +210,21 @@ function renderHistory(entries) {
         button.textContent = "Detail";
         button.dataset.invalidVersion = String(version === null);
         button.disabled = busy || version === null;
-
         button.setAttribute(
             "aria-label",
-            version === null
-                ? "Versi migration tidak aman untuk dibuka"
-                : `Lihat detail migration versi ${version}`
+            version === null ? "Versi migration tidak aman untuk dibuka" : `Lihat detail migration versi ${version}`
         );
-
         if (version !== null) {
             button.addEventListener("click", () => openHistory(version));
         }
-
         actionCell.appendChild(button);
+        if (positiveInt64(entry.job_id)) {
+            const job = document.createElement("a");
+            job.className = "workspace-button workspace-button--subtle";
+            job.textContent = `Job #${entry.job_id}`;
+            job.href = `/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(entry.job_id)}`;
+            actionCell.appendChild(job);
+        }
         row.appendChild(actionCell);
         listBody.appendChild(row);
     }
@@ -223,53 +232,56 @@ function renderHistory(entries) {
     listEmpty.hidden = entries.length !== 0;
     listTable.hidden = entries.length === 0;
 
-    const pendingCount = entries.filter((item) => ["running", "unknown"].includes(item.status)).length;
-    showMessage(pendingNotice, pendingCount
-        ? `${pendingCount} eksekusi pada halaman ini belum final. ${canEdit ? "Gunakan Reconcile jika diperlukan." : "Mintalah pengguna Edit memeriksa statusnya."}`
-        : "");
+    const pendingCount = entries.filter((item) => ["running", "unknown", "partial", "partially_reverted"].includes(item.status)).length;
+    showMessage(
+        pendingNotice,
+        pendingCount
+            ? `${pendingCount} catatan pada halaman ini berstatus running, unknown, partial, atau partially reverted. Periksa Jobs untuk status pekerjaan terkini. ${canEdit ? "Gunakan Reconcile jika hasil belum pasti." : "Reconcile memerlukan akses Edit."}`
+            : ""
+    );
 
     if (unsafeVersion) {
-        showMessage(
-            listError,
-            "Ada versi migration yang bukan string int64 valid. Muat ulang atau periksa data backend."
-        );
+        showMessage(listError, "Ada versi migration yang bukan string int64 valid. Muat ulang atau periksa data backend.");
     }
 }
 
 function showHistory(entry, version) {
-    if (
-        !entry ||
-        entry.database_id !== databaseId ||
-        versionString(entry.version) !== version ||
-        typeof entry.sql !== "string"
-    ) {
+    if (!entry || entry.database_id !== databaseId || versionString(entry.version) !== version || typeof entry.sql !== "string") {
         throw new Error("Format detail migration dari backend tidak valid.");
     }
-
     const fields = {
         "history-detail-version": version,
         "history-detail-execution-id": entry.execution_id ?? "-",
+        "history-detail-action-type": ACTION_LABELS[entry.action_type] ?? entry.action_type ?? "-",
+        "history-detail-target-id": entry.target_execution_id ?? "-",
+        "history-detail-retry-id": entry.retry_of_execution_id ?? "-",
         "history-detail-draft-revision": entry.draft_revision ?? "-",
         "history-detail-draft-id": entry.draft_id ?? "-",
         "history-detail-result": statusLabel(entry.status),
         "history-detail-executor": entry.username || "-",
-        "history-detail-started": formatDate(entry.started_at),
-        "history-detail-finished": formatDate(entry.finished_at, true),
+        "history-detail-started": formatHistoryDate(entry.started_at),
+        "history-detail-finished": formatHistoryDate(entry.finished_at, true),
         "history-detail-error-code": entry.error_code ?? "-"
     };
-
     for (const [id, value] of Object.entries(fields)) {
-        document.getElementById(id).textContent = String(value);
+        byId(id).textContent = String(value);
     }
-
+    const job = byId("history-detail-job"), noJob = byId("history-detail-no-job");
+    if (job) {
+        const valid = positiveInt64(entry.job_id);
+        job.hidden = !valid;
+        if (noJob) noJob.hidden = valid;
+        if (valid) { job.href = `/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(entry.job_id)}`; job.textContent = `Pantau Job #${entry.job_id}`; }
+        else job.removeAttribute("href");
+    }
     detailSQL.textContent = entry.sql;
+    selectedHistory = entry;
     detailContent.hidden = false;
     detailSQLSection.hidden = false;
 }
 
 async function openHistory(version) {
     if (busy) return;
-
     setBusy(true);
     detail.hidden = false;
     detailContent.hidden = true;
@@ -279,10 +291,10 @@ async function openHistory(version) {
     showMessage(detailStatus, `Memuat detail versi ${version}...`);
 
     try {
-        const result = await authenticatedRequest(
-            `${apiPath}/${encodeURIComponent(version)}`
-        );
+        const result = await authenticatedRequest(`${apiPath}/${encodeURIComponent(version)}`);
+        if (page.isConnected === false) return;
         showHistory(result, version);
+        if (canEdit) await refreshAction();
     } catch (error) {
         handleRequestError(error, detailError);
     } finally {
@@ -307,8 +319,12 @@ async function loadHistory(index = currentPage, reset = false) {
         const cursor = cursors[index];
         const query = new URLSearchParams({ limit: String(pageLimit) });
         if (cursor !== null) query.set("before", cursor);
+        if (hideRollback.checked) query.set("hide_rollback", "true");
+
         const result = parseCursorPage(
-            await authenticatedRequest(`${apiPath}?${query}`), "migrations", "next_before"
+            await authenticatedRequest(`${apiPath}?${query}`),
+            "migrations",
+            "next_before"
         );
         for (const entry of result.entries) {
             if (!entry || entry.database_id !== databaseId || !positiveInt64(entry.version)) {
@@ -335,7 +351,7 @@ async function loadHistory(index = currentPage, reset = false) {
 
 function renderReconciled(items) {
     reconcileBody.replaceChildren();
-    const counts = { success: 0, failed: 0, running: 0, unknown: 0 };
+    const counts = { success: 0, failed: 0, running: 0, unknown: 0, partial: 0, partially_reverted: 0 };
     for (const item of items) {
         counts[item.status]++;
         const row = document.createElement("tr");
@@ -350,8 +366,8 @@ function renderReconciled(items) {
     reconcileResult.hidden = false;
     reconcileTable.hidden = items.length === 0;
     reconcileSummary.textContent = items.length === 0
-        ? "Tidak ada eksekusi running/unknown yang perlu direconcile. Tidak ada SQL yang dijalankan."
-        : `${items.length} eksekusi diperiksa: ${counts.success} success, ${counts.failed} failed, ${counts.unknown} unknown, ${counts.running} running. Tidak ada SQL yang dijalankan ulang.`;
+        ? "Tidak ada eksekusi running/unknown/partial yang perlu direconcile. Tidak ada SQL yang dijalankan."
+        : `${items.length} eksekusi diperiksa: ${counts.success} success, ${counts.failed} failed, ${counts.unknown} unknown, ${counts.running} running, ${counts.partial} partial, ${counts.partially_reverted} partially reverted. Tidak ada SQL yang dijalankan ulang.`;
 }
 
 async function reconcileHistory() {
@@ -361,6 +377,7 @@ async function reconcileHistory() {
         message: "Periksa dan perbarui status migration yang belum pasti? SQL tidak dijalankan ulang.",
         confirmLabel: "Reconcile"
     })) || busy || !canEdit) return;
+
     setBusy(true);
     showMessage(reconcileError, "");
     showMessage(reconcileStatus, "Memeriksa izin Edit dan receipt migration...");
@@ -375,9 +392,7 @@ async function reconcileHistory() {
             error.status = 403;
             throw error;
         }
-        const items = parseReconcileResult(await authenticatedRequest(`${apiPath}/reconcile`, {
-            method: "POST"
-        }));
+        const items = parseReconcileResult(await authenticatedRequest(`${apiPath}/reconcile`, { method: "POST" }));
         renderReconciled(items);
         completed = true;
     } catch (error) {
@@ -389,6 +404,114 @@ async function reconcileHistory() {
     if (completed) await loadHistory(0, true);
 }
 
+// Kelayakan aksi selalu dibaca dari backend. UI hanya memberikan petunjuk;
+// backend tetap memeriksa izin, approval, dan posisi di bawah lock.
+async function refreshAction() {
+    selectedAction = null;
+    actionPanel.hidden = true;
+    if (!canEdit || !selectedHistory) return;
+    try {
+        const base = `/api/v1/databases/${encodeURIComponent(databaseId)}`;
+        const state = await authenticatedRequest(`${base}/migration-state`);
+        selectedAction = migrationAction(state, selectedHistory);
+        if (!selectedAction) return;
+        // Preview SQL berasal dari definisi immutable, bukan SQL pada attempt sebelumnya.
+        const draft = await authenticatedRequest(`${base}/drafts/${encodeURIComponent(selectedHistory.draft_id)}`);
+        if (!draft?.immutable || draft.revision !== selectedHistory.draft_revision ||
+            typeof draft.sql !== "string" || ((selectedAction.type.includes("rollback") || selectedAction.type === "compensate") && typeof draft.sql_down !== "string")) {
+            throw new Error("Definisi immutable tidak tersedia atau revisinya berubah. Periksa backend sebelum menjalankan aksi.");
+        }
+        const isRollback = selectedAction.type.includes("rollback") || selectedAction.type === "compensate";
+        actionSQLHeading.textContent = isRollback ? "SQL Down Immutable (Rollback)" : "SQL Up Immutable (Forward/Retry)";
+        actionSQL.textContent = isRollback ? draft.sql_down : draft.sql;
+        actionSQLSection.hidden = false;
+        actionPanel.hidden = false;
+        actionReview.hidden = false;
+        actionReview.disabled = busy || actionReview.hidden;
+        actionRun.disabled = busy;
+        actionRun.textContent = selectedAction.label;
+        actionHint.textContent = selectedAction.type.startsWith("retry_")
+            ? "Attempt gagal dapat dicoba kembali secara eksplisit. Semua percobaan tetap tercatat."
+            : `${selectedAction.label} hanya tersedia pada posisi migration yang sah dan memerlukan approval seluruh leader.`;
+    } catch (error) {
+        // Detail tetap dapat dibaca walaupun preview atau layanan posisi gagal.
+        selectedAction = null;
+        actionPanel.hidden = true;
+        showMessage(detailError, `Tidak dapat memeriksa aksi migration: ${error.message}`);
+    }
+}
+
+async function submitActionReview() {
+    if (busy || !canEdit || !selectedHistory || !selectedAction) return;
+    const detailEntry = selectedHistory, action = selectedAction;
+    if (!(await confirmAction({
+        title: `Ajukan Review ${action.label}?`,
+        message: `Ajukan ${action.label} untuk execution ${action.target}? Semua leader group yang memiliki akses harus menyetujui.`,
+        confirmLabel: "Ajukan Review"
+    })) || busy) return;
+    setBusy(true);
+    try {
+        const base = `/api/v1/databases/${encodeURIComponent(databaseId)}`;
+        const freshState = await authenticatedRequest(`${base}/migration-state`);
+        const freshAction = migrationAction(freshState, detailEntry);
+        if (!freshAction || freshAction.type !== action.type || freshAction.target !== action.target) throw new Error("Posisi migration sudah berubah. Muat ulang History.");
+        const result = await authenticatedRequest(`${base}/reviews`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ draft_id: detailEntry.draft_id, revision: detailEntry.draft_revision,
+                action_type: action.type.replace("retry_", ""), ...(action.type === "retry_up" ? {} : { target_execution_id: action.target }) })
+        });
+        if (!positiveInt64(result?.review?.id)) throw new Error("Respons pengajuan review tidak valid.");
+        showMessage(actionStatus, `Review #${result.review.id} dibuat. Tunggu persetujuan semua leader sebelum eksekusi.`);
+        actionReviewLink.href = `/databases/${encodeURIComponent(databaseId)}/reviews/${encodeURIComponent(result.review.id)}`;
+        actionReviewLink.hidden = false;
+    } catch (error) {
+        handleRequestError(error, actionStatus);
+    } finally { setBusy(false); }
+}
+
+async function runMigrationAction() {
+    if (busy || !canEdit || !selectedHistory || !selectedAction) return;
+    const detailEntry = selectedHistory, action = selectedAction;
+    if (!(await confirmAction({
+        title: `${action.label} Migration?`,
+        message: `${action.label} pada database ${databaseName.textContent} (${targetName.textContent})?\n` +
+            `Execution target: ${action.target}\nAksi akan mengubah database. Pastikan SQL immutable dan approval sudah benar.`,
+        confirmLabel: action.label, tone: "warning"
+    })) || busy) return;
+    setBusy(true);
+    showMessage(actionStatus, "Memvalidasi posisi migration dan mengirim eksekusi...");
+    let sent = false;
+    try {
+        const base = `/api/v1/databases/${encodeURIComponent(databaseId)}`;
+        const state = await authenticatedRequest(`${base}/migration-state`);
+        const current = migrationAction(state, detailEntry);
+        if (!current || current.type !== action.type || current.target !== action.target) throw new Error("Posisi migration berubah. Muat ulang History sebelum eksekusi.");
+        const request = operationRequest(base, detailEntry, action);
+        sent = true;
+        const response = await authenticatedRequest(request.url, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.body)
+        });
+        if (response?.job) {
+            const job = parseJobResponse(response, databaseId);
+            navigateTo(`/databases/${encodeURIComponent(databaseId)}/jobs/${encodeURIComponent(job.id)}`);
+            return;
+        }
+        const result = parseExecutionResult(response);
+        const feedback = executionFeedback(result.status);
+        setBanner(actionMessage, `${action.label} #${result.version}: ${feedback.message} Execution ID ${result.execution_id}.`, feedback.isError);
+        setBusy(false);
+        await loadHistory(0, true);
+    } catch (error) {
+        setBanner(actionMessage, sent ? executeErrorMessage(error) :
+            `Aksi tidak dikirim: ${error.message || "validasi gagal"}.`, true);
+        showMessage(actionStatus, sent ? "Hasil eksekusi belum pasti. Periksa History sebelum mengulangi." :
+            "Tidak ada permintaan eksekusi yang dikirim.");
+    } finally { setBusy(false); }
+}
+
+actionReview.addEventListener("click", submitActionReview);
+actionRun.addEventListener("click", runMigrationAction);
+hideRollback.addEventListener("change", () => loadHistory(0, true));
 refreshButton.addEventListener("click", () => loadHistory(0, true));
 prevButton.addEventListener("click", () => loadHistory(currentPage - 1));
 nextButton.addEventListener("click", () => {
@@ -404,20 +527,16 @@ async function initialize() {
         if (!user) return;
 
         const result = await authenticatedRequest("/api/v1/databases");
-
         if (!Array.isArray(result?.databases)) {
             throw new Error("Format daftar database dari backend tidak valid.");
         }
-
         const database = result.databases.find((item) => String(item.id) === databaseId);
-
         if (!database || !["view", "edit"].includes(database.access)) {
             throw new Error("Database tidak ditemukan atau tidak dapat diakses.");
         }
 
         databaseName.textContent = database.name;
         targetName.textContent = database.database_name;
-
         access.textContent = database.access === "edit" ? "View + Edit" : "View Only";
 
         canEdit = database.access === "edit";
@@ -426,6 +545,8 @@ async function initialize() {
         workspace.hidden = false;
 
         await loadHistory(0, true);
+        const initialVersion = new URLSearchParams(window.location.search).get("version");
+        if (!workspace.hidden && positiveInt64(initialVersion) && page.isConnected !== false) await openHistory(initialVersion);
     } catch (error) {
         handleRequestError(error, pageError);
     } finally {

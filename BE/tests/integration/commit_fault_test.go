@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strconv"
@@ -26,12 +27,17 @@ import (
 
 // The fixture relays plaintext PostgreSQL frames and cuts exactly one COMMIT
 // either before forwarding it or after the server confirms durable success.
-func commitProxy(t *testing.T, address string, fault, after bool) int {
+func commitProxy(t *testing.T, address string, fault, after bool, commitNumber ...int) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	cutAt := int32(1)
+	if len(commitNumber) > 0 {
+		cutAt = int32(commitNumber[0])
+	}
+	var observed atomic.Int32
 	var once atomic.Bool
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -91,7 +97,7 @@ func commitProxy(t *testing.T, address string, fault, after bool) int {
 					if err != nil {
 						return
 					}
-					if fault && !after && kind == 'Q' && strings.EqualFold(string(payload), "COMMIT\x00") && once.CompareAndSwap(false, true) {
+					if fault && !after && kind == 'Q' && strings.EqualFold(string(payload), "COMMIT\x00") && observed.Add(1) == cutAt && once.CompareAndSwap(false, true) {
 						return
 					}
 					if err = writeFrame(backend, kind, payload); err != nil {
@@ -109,7 +115,7 @@ func commitProxy(t *testing.T, address string, fault, after bool) int {
 					if err != nil {
 						return
 					}
-					if fault && after && kind == 'C' && string(payload) == "COMMIT\x00" && once.CompareAndSwap(false, true) {
+					if fault && after && kind == 'C' && string(payload) == "COMMIT\x00" && observed.Add(1) == cutAt && once.CompareAndSwap(false, true) {
 						return
 					}
 					if err = writeFrame(client, kind, payload); err != nil {
@@ -172,14 +178,15 @@ func TestCommitResponseRecovery(t *testing.T) {
 					t.Error(err)
 				}
 			}()
-			w := editor.request("POST", base+"/drafts", map[string]string{"title": "commit fault", "sql": "CREATE SCHEMA " + schema + "; CREATE TABLE " + schema + ".proof(id int); INSERT INTO " + schema + ".proof VALUES(1)"})
+			w := editor.request("POST", base+"/drafts", map[string]string{"title": "commit fault", "sql": "CREATE SCHEMA " + schema + "; CREATE TABLE " + schema + ".proof(id int); INSERT INTO " + schema + ".proof VALUES(1)", "sql_down": "DROP SCHEMA " + schema + " CASCADE"})
 			status(t, w, 201)
 			var d runner.Draft
 			if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
 				t.Fatal(err)
 			}
 			path := fmt.Sprintf("%s/drafts/%d/execute", base, d.ID)
-			w = editor.request("POST", path, map[string]string{"revision": "1"})
+			approveDraft(t, a, editor, target.ID, d.ID, 1)
+			w = editor.executeAndWait(t, path, map[string]string{"revision": "1"})
 			status(t, w, 202)
 			var attempt runner.Result
 			if err := json.Unmarshal(w.Body.Bytes(), &attempt); err != nil || attempt.Status != "unknown" {
@@ -204,7 +211,7 @@ func TestCommitResponseRecovery(t *testing.T) {
 			if err = db.QueryRow(context.Background(), "SELECT to_regclass($1) IS NOT NULL", schema+".proof").Scan(&exists); err != nil || exists != after {
 				t.Fatalf("target changes exist=%v after=%v err=%v", exists, after, err)
 			}
-			w = editor.request("POST", path, map[string]string{"revision": "1"})
+			w = editor.executeAndWait(t, path, map[string]string{"revision": "1"})
 			status(t, w, 200)
 			var replay runner.Result
 			if err := json.Unmarshal(w.Body.Bytes(), &replay); err != nil || replay.Status != want || replay.ExecutionID != attempt.ExecutionID {
@@ -270,12 +277,13 @@ func TestRecoveryAfterWaitingForCommit(t *testing.T) {
 			editor.login(t, "editor")
 			checker.login(t, "editor")
 			base := fmt.Sprintf("/api/v1/databases/%d", target.ID)
-			w := editor.request("POST", base+"/drafts", map[string]string{"title": "recovery snapshot", "sql": "SELECT pg_catalog.pg_advisory_xact_lock(3110099)"})
+			w := editor.request("POST", base+"/drafts", map[string]string{"title": "recovery snapshot", "sql": "SELECT pg_catalog.pg_advisory_xact_lock(3110099)", "sql_down": "SELECT 1"})
 			status(t, w, 201)
 			var draft runner.Draft
 			if err := json.Unmarshal(w.Body.Bytes(), &draft); err != nil {
 				t.Fatal(err)
 			}
+			approveDraft(t, a, editor, target.ID, draft.ID, 1)
 			barrier, err := owner.Begin(ctx)
 			if err != nil {
 				t.Fatal(err)
@@ -318,7 +326,7 @@ func TestRecoveryAfterWaitingForCommit(t *testing.T) {
 			executeDone = make(chan *httptest.ResponseRecorder, 1)
 			go func() {
 				defer close(executeDone)
-				executeDone <- editor.request("POST", fmt.Sprintf("%s/drafts/%d/execute", base, draft.ID), map[string]string{"revision": "1"})
+				executeDone <- editor.executeAndWait(t, fmt.Sprintf("%s/drafts/%d/execute", base, draft.ID), map[string]string{"revision": "1"})
 			}()
 			waitForLock(3110099)
 			recoveryDone = make(chan *httptest.ResponseRecorder, 1)
@@ -330,7 +338,11 @@ func TestRecoveryAfterWaitingForCommit(t *testing.T) {
 			if err = barrier.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}
-			status(t, <-executeDone, 202)
+			executed := <-executeDone
+			// The waiting reconcile can finalize the job before executeAndWait polls it.
+			if executed.Code != http.StatusAccepted {
+				status(t, executed, http.StatusOK)
+			}
 			w = <-recoveryDone
 			status(t, w, 200)
 			var out struct {
@@ -338,6 +350,10 @@ func TestRecoveryAfterWaitingForCommit(t *testing.T) {
 			}
 			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || len(out.Items) != 1 || out.Items[0].Status != "success" || out.Items[0].ErrorCode != nil {
 				t.Fatalf("committed migration not recovered after lock wait: %s", w.Body.String())
+			}
+			var observed runner.Result
+			if err := json.Unmarshal(executed.Body.Bytes(), &observed); err != nil || observed.ExecutionID != out.Items[0].ExecutionID || observed.Version != out.Items[0].Version {
+				t.Fatalf("execution and reconcile returned different attempts: %s / %s", executed.Body.String(), w.Body.String())
 			}
 			var count int
 			if err := owner.QueryRow(ctx, "SELECT count(*) FROM _terserah.migration_receipts WHERE execution_id=$1", out.Items[0].ExecutionID).Scan(&count); err != nil || count != 1 {

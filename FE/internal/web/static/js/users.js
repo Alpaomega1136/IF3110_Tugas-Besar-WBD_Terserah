@@ -1,57 +1,122 @@
 import { confirmAction } from "./confirmation.js";
-import {
-    authenticatedRequest,
-    requireAuthenticatedUser,
-    isCSRFError
-} from "./auth.js";
+import { authenticatedRequest, requireAuthenticatedUser, isCSRFError } from "./auth.js";
+import { byId, formatDate, setBanner, setFieldError, utf8Bytes, navigateTo } from "./ui.js";
 
-const status = document.getElementById("users-status");
-const errorMessage = document.getElementById("users-error");
-const empty = document.getElementById("users-empty");
-const section = document.getElementById("users-section");
-const body = document.getElementById("users-body");
-const createSection = document.getElementById("create-user-section");
-const createForm = document.getElementById("create-user-form");
-const usernameInput = document.getElementById("create-username");
-const passwordInput = document.getElementById("create-password");
-const adminInput = document.getElementById("create-is-admin");
-const createButton = document.getElementById("create-user-submit");
-const createMessage = document.getElementById("create-user-message");
-const usernameError = document.getElementById("create-username-error");
-const passwordError = document.getElementById("create-password-error");
-const passwordHelp = document.getElementById("create-password-help");
+const status = byId("users-status");
+const errorMessage = byId("users-error");
+const empty = byId("users-empty");
+const section = byId("users-section");
+const body = byId("users-body");
 
-const editSection = document.getElementById("edit-user-section");
-const editForm = document.getElementById("edit-user-form");
-const editUserName = document.getElementById("edit-user-name");
-const editPassword = document.getElementById("edit-password");
-const editPasswordError = document.getElementById("edit-password-error");
-const editPasswordHelp = document.getElementById("edit-password-help");
-const editAdmin = document.getElementById("edit-is-admin");
-const editActive = document.getElementById("edit-is-active");
-const editSubmit = document.getElementById("edit-user-submit");
-const editCancel = document.getElementById("edit-user-cancel");
-const editMessage = document.getElementById("edit-user-message");
+const createSection = byId("create-user-section");
+const createForm = byId("create-user-form");
+const usernameInput = byId("create-username");
+const passwordInput = byId("create-password");
+const adminInput = byId("create-is-admin");
+const createButton = byId("create-user-submit");
+const createMessage = byId("create-user-message");
+const usernameError = byId("create-username-error");
+const passwordError = byId("create-password-error");
+const passwordHelp = byId("create-password-help");
+
+const editSection = byId("edit-user-section");
+const editForm = byId("edit-user-form");
+const editUserName = byId("edit-user-name");
+const editPassword = byId("edit-password");
+const editPasswordError = byId("edit-password-error");
+const editPasswordHelp = byId("edit-password-help");
+const editAdmin = byId("edit-is-admin");
+const editActive = byId("edit-is-active");
+const editSubmit = byId("edit-user-submit");
+const editCancel = byId("edit-user-cancel");
+const editMessage = byId("edit-user-message");
+
+const PASSWORD_RANGE_MSG = "Panjang password tidak sesuai. Gunakan 12–1024 huruf, angka, atau simbol biasa; karakter tertentu dapat dihitung lebih dari satu.";
 
 let currentUserId = null;
 let selectedUser = null;
 let editSaving = false;
 
-function formatDate(value) {
-    if (!value) return "-";
-
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "-";
-
-    return new Intl.DateTimeFormat("id-ID", {
-        dateStyle: "medium",
-        timeStyle: "short",
-    }).format(date);
-}
-
 function showError(message) {
     errorMessage.textContent = message;
     errorMessage.hidden = false;
+}
+
+function validPasswordBytes(password) {
+    const len = utf8Bytes(password);
+    return len >= 12 && len <= 1024;
+}
+
+function makeBadge(text, modifier) {
+    const span = document.createElement("span");
+    span.className = `user-badge user-badge--${modifier}`;
+    span.textContent = text;
+    return span;
+}
+
+function makeMetaItem(label, value) {
+    const span = document.createElement("span");
+    span.className = "users-meta-item";
+    span.textContent = `${label}: `;
+    const strong = document.createElement("strong");
+    strong.textContent = String(value);
+    span.appendChild(strong);
+    return span;
+}
+
+function renderUserRow(item) {
+    const row = document.createElement("li");
+    row.className = "users-list-item";
+
+    const details = document.createElement("div");
+    details.className = "users-list-details";
+
+    const header = document.createElement("div");
+    header.className = "users-item-header";
+
+    const name = document.createElement("strong");
+    name.className = "users-item-name";
+    name.textContent = item.username;
+
+    const badges = document.createElement("div");
+    badges.className = "users-item-badges";
+    if (item.is_platform_admin) {
+        badges.appendChild(makeBadge("Platform Admin", "admin"));
+    } else {
+        badges.appendChild(makeBadge("User", "user"));
+    }
+    if (item.is_active) {
+        badges.appendChild(makeBadge("Aktif", "active"));
+    } else {
+        badges.appendChild(makeBadge("Nonaktif", "inactive"));
+    }
+
+    header.appendChild(name);
+    header.appendChild(badges);
+
+    const meta = document.createElement("div");
+    meta.className = "users-item-meta";
+    let groupCount = "-";
+    if (Array.isArray(item.group_ids)) {
+        groupCount = item.group_ids.length;
+    }
+    meta.appendChild(makeMetaItem("ID", item.id));
+    meta.appendChild(makeMetaItem("Group", groupCount));
+    meta.appendChild(makeMetaItem("Dibuat", formatDate(item.created_at)));
+
+    details.appendChild(header);
+    details.appendChild(meta);
+
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "users-edit-button";
+    editButton.textContent = "Edit";
+    editButton.setAttribute("aria-label", `Edit pengguna ${item.username}`);
+    editButton.addEventListener("click", () => openEditUser(item));
+
+    row.appendChild(details);
+    row.appendChild(editButton);
+    return row;
 }
 
 async function refreshUsers() {
@@ -63,125 +128,59 @@ async function refreshUsers() {
 
     try {
         const result = await authenticatedRequest("/api/v1/admin/users");
-
         if (!Array.isArray(result?.users)) {
             throw new Error("Format daftar pengguna dari backend tidak valid.");
         }
 
         body.replaceChildren();
-
         for (const item of result.users) {
-            const row = document.createElement("li");
-            row.className = "users-list-item";
-            const details = document.createElement("div");
-            details.className = "users-list-details";
-            const name = document.createElement("strong");
-            name.textContent = item.username;
-            const role = document.createElement("p");
-            role.textContent = `${item.is_platform_admin ? "Platform Admin" : "User"} · ${item.is_active ? "Aktif" : "Nonaktif"}`;
-            const meta = document.createElement("p");
-            meta.textContent = `ID ${item.id} · Group: ${Array.isArray(item.group_ids) ? item.group_ids.length : "-"} · Dibuat: ${formatDate(item.created_at)}`;
-            details.appendChild(name);
-            details.appendChild(role);
-            details.appendChild(meta);
-            const editButton = document.createElement("button");
-
-            editButton.type = "button";
-            editButton.className = "users-edit-button";
-            editButton.textContent = "Edit";
-            editButton.setAttribute("aria-label", `Edit pengguna ${item.username}`);
-
-            editButton.addEventListener("click", () => {
-                openEditUser(item);
-            });
-
-            row.appendChild(details);
-            row.appendChild(editButton);
-
-            body.appendChild(row);
+            body.appendChild(renderUserRow(item));
         }
 
         status.hidden = true;
         empty.hidden = result.users.length !== 0;
         section.hidden = result.users.length === 0;
-
         return true;
     } catch (error) {
         status.hidden = true;
-
         if (error.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return false;
         }
-
         showError(error.status === 403
             ? "Akses ditolak. Halaman ini hanya untuk Platform Admin."
             : (error.message || "Gagal memuat daftar pengguna."));
-
         return false;
     }
-}
-
-function setFieldError(input, target, message) {
-    target.textContent = message;
-    target.hidden = !message;
-    if (input === passwordInput) passwordHelp.hidden = !!message;
-    if (input === editPassword) editPasswordHelp.hidden = !!message;
-
-    if (message) {
-        input.setAttribute("aria-invalid", "true");
-    } else {
-        input.removeAttribute("aria-invalid");
-    }
-}
-
-function setCreateMessage(message, isError = false) {
-    createMessage.textContent = message;
-    createMessage.className = isError ? "error-message" : "success-message";
-    createMessage.hidden = !message;
 }
 
 function validateCreateInput() {
     const username = usernameInput.value.trim();
     const password = passwordInput.value;
-    const utf8 = new TextEncoder();
 
     setFieldError(usernameInput, usernameError, "");
-    setFieldError(passwordInput, passwordError, "");
+    setFieldError(passwordInput, passwordError, "", passwordHelp);
 
-    if (!username || /[ \t\r\n]/.test(username) || utf8.encode(username).length > 100) {
+    if (!username || /[ \t\r\n]/.test(username) || utf8Bytes(username) > 100) {
         setFieldError(
             usernameInput,
             usernameError,
             "Isi username tanpa spasi, maksimal 100 huruf atau angka biasa. Karakter tertentu dapat dihitung lebih dari satu."
         );
     }
-
-    const passwordBytes = utf8.encode(password).length;
-
-    if (passwordBytes < 12 || passwordBytes > 1024) {
-        setFieldError(
-            passwordInput,
-            passwordError,
-            "Panjang password tidak sesuai. Gunakan 12–1024 huruf, angka, atau simbol biasa; karakter tertentu dapat dihitung lebih dari satu."
-        );
+    if (!validPasswordBytes(password)) {
+        setFieldError(passwordInput, passwordError, PASSWORD_RANGE_MSG, passwordHelp);
     }
-
     if (!usernameError.hidden || !passwordError.hidden) {
         (usernameError.hidden ? passwordInput : usernameInput).focus();
         return null;
     }
-
-    return {
-        username,
-        password,
-        is_platform_admin: adminInput.checked,
-    };
+    return { username, password, is_platform_admin: adminInput.checked };
 }
 
 createForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    setCreateMessage("");
+    setBanner(createMessage, "");
 
     const payload = validateCreateInput();
     if (!payload) return;
@@ -192,19 +191,16 @@ createForm.addEventListener("submit", async (event) => {
     try {
         await authenticatedRequest("/api/v1/admin/users", {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
         });
-
         createForm.reset();
         setFieldError(usernameInput, usernameError, "");
-        setFieldError(passwordInput, passwordError, "");
+        setFieldError(passwordInput, passwordError, "", passwordHelp);
 
         const refreshed = await refreshUsers();
-
-        setCreateMessage(
+        setBanner(
+            createMessage,
             refreshed
                 ? "Pengguna berhasil dibuat. Daftar pengguna sudah diperbarui."
                 : "Pengguna berhasil dibuat, tetapi daftar belum dapat diperbarui.",
@@ -212,20 +208,19 @@ createForm.addEventListener("submit", async (event) => {
         );
     } catch (error) {
         if (error.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
-
         if (error.status === 409) {
             setFieldError(usernameInput, usernameError, "Username sudah digunakan.");
             usernameInput.focus();
-            setCreateMessage("Gunakan username lain.", true);
+            setBanner(createMessage, "Gunakan username lain.", true);
         } else if (error.status === 403 && isCSRFError(error)) {
-            setCreateMessage("Token CSRF tidak valid. Silakan klik Buat Pengguna lagi.", true);
+            setBanner(createMessage, "Token CSRF tidak valid. Silakan klik Buat Pengguna lagi.", true);
         } else if (error.status === 403) {
-            setCreateMessage("Akses ditolak. Hanya Platform Admin yang boleh membuat user.", true);
+            setBanner(createMessage, "Akses ditolak. Hanya Platform Admin yang boleh membuat user.", true);
         } else {
-            setCreateMessage(error.message || "Gagal membuat pengguna.", true);
+            setBanner(createMessage, error.message || "Gagal membuat pengguna.", true);
         }
     } finally {
         createButton.disabled = false;
@@ -233,111 +228,76 @@ createForm.addEventListener("submit", async (event) => {
     }
 });
 
-function setEditMessage(message, isError = false) {
-    editMessage.textContent = message;
-    editMessage.className = isError
-        ? "error-message"
-        : "success-message";
-    editMessage.hidden = !message;
-}
-
 function openEditUser(user) {
     if (editSaving) return;
-
     selectedUser = user;
-
     editForm.reset();
     editUserName.textContent = user.username;
-
     editAdmin.checked = user.is_platform_admin;
     editActive.checked = user.is_active;
 
-    setFieldError(editPassword, editPasswordError, "");
-    setEditMessage("");
-
+    setFieldError(editPassword, editPasswordError, "", editPasswordHelp);
+    setBanner(editMessage, "");
     editSection.hidden = false;
-    editSection.scrollIntoView({
-        behavior: "smooth",
-        block: "start"
-    });
-
+    editSection.scrollIntoView({ behavior: "smooth", block: "start" });
     editAdmin.focus({ preventScroll: true });
 }
 
 function closeEditUser() {
     if (editSaving) return;
-
     selectedUser = null;
     editForm.reset();
     editSection.hidden = true;
-
-    setEditMessage("");
-    setFieldError(editPassword, editPasswordError, "");
+    setBanner(editMessage, "");
+    setFieldError(editPassword, editPasswordError, "", editPasswordHelp);
 }
 
 editCancel.addEventListener("click", closeEditUser);
 
 editForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-
     if (!selectedUser || editSaving) return;
 
-    setEditMessage("");
-    setFieldError(editPassword, editPasswordError, "");
+    setBanner(editMessage, "");
+    setFieldError(editPassword, editPasswordError, "", editPasswordHelp);
 
     const payload = {};
-
     if (editAdmin.checked !== selectedUser.is_platform_admin) {
         payload.is_platform_admin = editAdmin.checked;
     }
-
     if (editActive.checked !== selectedUser.is_active) {
         payload.is_active = editActive.checked;
     }
 
     const newPassword = editPassword.value;
-
     if (newPassword !== "") {
-        const passwordLength =
-            new TextEncoder().encode(newPassword).length;
-
-        if (passwordLength < 12 || passwordLength > 1024) {
-            setFieldError(
-                editPassword,
-                editPasswordError,
-                "Panjang password tidak sesuai. Gunakan 12–1024 huruf, angka, atau simbol biasa; karakter tertentu dapat dihitung lebih dari satu."
-            );
+        if (!validPasswordBytes(newPassword)) {
+            setFieldError(editPassword, editPasswordError, PASSWORD_RANGE_MSG, editPasswordHelp);
             editPassword.focus();
             return;
         }
-
         payload.password = newPassword;
     }
 
     if (Object.keys(payload).length === 0) {
-        setEditMessage("Tidak ada perubahan yang dilakukan.", true);
+        setBanner(editMessage, "Tidak ada perubahan yang dilakukan.", true);
         return;
     }
 
     const userId = String(selectedUser.id);
-
-    const selfSessionRevoked =
-        userId === currentUserId &&
-        (
-            Object.hasOwn(payload, "password") ||
-            payload.is_active === false ||
-            payload.is_platform_admin === false
-        );
+    const selfSessionRevoked = userId === currentUserId && (
+        Object.hasOwn(payload, "password") ||
+        payload.is_active === false ||
+        payload.is_platform_admin === false
+    );
 
     if (selfSessionRevoked) {
         const confirmed = await confirmAction({
             title: "Ubah akun sendiri?",
-            message: "Perubahan ini akan mengakhiri session akunmu. " +
-                "Kamu perlu login kembali. Lanjutkan?",
+            message: "Perubahan ini akan mengakhiri session akunmu. Kamu perlu login kembali. Lanjutkan?",
             confirmLabel: "Simpan Perubahan",
             tone: "danger"
         });
-
         if (!confirmed) return;
     }
 
@@ -348,30 +308,23 @@ editForm.addEventListener("submit", async (event) => {
     editSubmit.textContent = "Menyimpan...";
 
     try {
-        const result = await authenticatedRequest(
-            `/api/v1/admin/users/${encodeURIComponent(userId)}`,
-            {
-                method: "PATCH",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify(payload)
-            }
-        );
-
+        const result = await authenticatedRequest(`/api/v1/admin/users/${encodeURIComponent(userId)}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
         if (selfSessionRevoked) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
-
         selectedUser = result.user;
         editPassword.value = "";
         editAdmin.checked = result.user.is_platform_admin;
         editActive.checked = result.user.is_active;
 
         const refreshed = await refreshUsers();
-
-        setEditMessage(
+        setBanner(
+            editMessage,
             refreshed
                 ? "Perubahan pengguna berhasil disimpan."
                 : "Perubahan tersimpan, tetapi daftar gagal diperbarui.",
@@ -379,33 +332,19 @@ editForm.addEventListener("submit", async (event) => {
         );
     } catch (error) {
         if (error.status === 401) {
-            window.location.replace("/login");
+            navigateTo("/login", { replace: true });
             return;
         }
-
-        if (
-            error.status === 403 &&
-            isCSRFError(error)
-        ) {
-            setEditMessage(
-                "Token CSRF tidak valid. Silakan coba simpan lagi.",
-                true
-            );
+        if (error.status === 403 && isCSRFError(error)) {
+            setBanner(editMessage, "Token CSRF tidak valid. Silakan coba simpan lagi.", true);
+        } else if (error.status === 409 && error.code === "group_leader_active") {
+            setBanner(editMessage, "Pengguna ini masih menjadi Leader Group aktif. Ganti leader group terlebih dahulu sebelum menonaktifkan akun.", true);
         } else if (error.status === 403) {
-            setEditMessage(
-                "Akses ditolak. Kamu tidak memiliki izin mengubah pengguna.",
-                true
-            );
+            setBanner(editMessage, "Akses ditolak. Kamu tidak memiliki izin mengubah pengguna.", true);
         } else if (error.status === 404) {
-            setEditMessage(
-                "Pengguna tidak ditemukan. Muat ulang daftar pengguna.",
-                true
-            );
+            setBanner(editMessage, "Pengguna tidak ditemukan. Muat ulang daftar pengguna.", true);
         } else {
-            setEditMessage(
-                error.message || "Gagal mengubah pengguna.",
-                true
-            );
+            setBanner(editMessage, error.message || "Gagal mengubah pengguna.", true);
         }
     } finally {
         editSaving = false;
@@ -419,13 +358,11 @@ async function initialize() {
     try {
         const user = await requireAuthenticatedUser();
         if (!user) return;
-
         if (!user.is_platform_admin) {
             status.hidden = true;
             showError("Akses ditolak. Halaman ini hanya untuk Platform Admin.");
             return;
         }
-
         currentUserId = String(user.id);
         createSection.hidden = false;
         await refreshUsers();

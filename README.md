@@ -1,6 +1,6 @@
 # Terserah — Database Management Platform
 
-Terserah merupakan aplikasi web untuk pengelolaan akses database pada Tugas Besar IF3110 Pengembangan Aplikasi Web — Milestone 1. Aplikasi menyediakan autentikasi, manajemen pengguna dan grup, pengaturan hak akses database, pengelolaan koneksi PostgreSQL, penjelajahan skema dan data, serta pembuatan, eksekusi, dan pelacakan riwayat migration.
+Terserah merupakan aplikasi web untuk pengelolaan akses database pada Tugas Besar IF3110 Pengembangan Aplikasi Web — Milestone 2. Aplikasi menyediakan autentikasi, manajemen pengguna dan grup, pengaturan hak akses database, pengelolaan koneksi PostgreSQL, penjelajahan skema dan data, serta pembuatan dan pelacakan riwayat migration. Pada Milestone 2, aplikasi dikembangkan menjadi Single-Page Application (SPA) dengan workflow review dan approval, eksekusi migration secara asynchronous, rollback dan forward, pemrosesan batch dengan checkpoint dan recovery, serta structured logging dan tracing.
 
 ## Identitas
 
@@ -22,7 +22,7 @@ Kelompok: 06 - Terserah
 - PostgreSQL yang berjalan dan dapat diakses dari komputer pengembang.
 - Node.js untuk menjalankan tes JavaScript frontend.
 
-Aplikasi dijalankan sebagai dua proses Go: backend pada port `8080` dan frontend pada port `3000`.
+Aplikasi secara bawaan dijalankan sebagai dua proses Go: backend pada port `8080` dan frontend pada port `3000`. Worker migration berjalan di dalam proses backend atau dapat dijalankan sebagai proses Go terpisah.
 
 ### Menjalankan dengan skrip Windows
 
@@ -51,7 +51,7 @@ Langkah berikut menyediakan alternatif untuk menyiapkan database, menjalankan mi
 
 ### 1. Siapkan database metadata
 
-Database metadata menyimpan pengguna, grup, grant, konfigurasi koneksi target, draft, dan riwayat migration. Database ini harus terpisah dari database target yang dikelola melalui Terserah.
+Database metadata menyimpan pengguna, grup, grant, session, konfigurasi koneksi target, draft, snapshot revisi, review dan approval, job beserta attempt, dan riwayat migration. Database ini harus terpisah dari database target yang dikelola melalui Terserah.
 
 Jika belum memiliki database metadata, masuk sebagai administrator PostgreSQL:
 
@@ -98,9 +98,12 @@ Atur nilai berikut pada `.env`:
 | `DATABASE_URL` | URL koneksi ke PostgreSQL metadata, misalnya `postgres://platform:<password>@localhost:5432/platform?sslmode=disable` |
 | `HTTP_ADDR` | Alamat backend; default `:8080` |
 | `APP_ORIGIN` | `http://localhost:3000` untuk FE lokal, bukan `http://localhost:8080` |
-| `TARGET_CREDENTIAL_KEY` | Kunci enkripsi Base64 dari 32 byte acak, wajib untuk backend API |
+| `TARGET_CREDENTIAL_KEY` | Kunci enkripsi Base64 dari 32 byte acak, wajib untuk backend API dan worker |
 | `FE_HTTP_ADDR` | Opsional, default `:3000` (dibaca proses FE) |
 | `FE_BACKEND_URL` | Opsional, default `http://localhost:8080` (dibaca proses FE) |
+| `WORKER_EMBEDDED` | Default `true`, API menjalankan dua slot worker. Atur `false` untuk menjalankan worker terpisah. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Opsional, kirim trace ke endpoint OTLP/HTTP, misalnya `http://localhost:4318`. Tanpa konfigurasi exporter, span ditulis ke log JSON. |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Opsional, URL khusus ekspor trace OTLP/HTTP, termasuk path `/v1/traces`. |
 
 `APP_ORIGIN` harus sama persis dengan alamat frontend yang dibuka di browser. Misalnya, `http://localhost:3000` berbeda dari `http://127.0.0.1:3000`. Go tidak otomatis membaca file `.env`; environment harus dimuat ke proses saat menjalankan secara manual.
 
@@ -121,7 +124,7 @@ Salin hasilnya ke `.env`. Gunakan kunci yang sama pada setiap restart; pengganti
 Buka Terminal 1 di root repository dan muat environment backend dari `.env`:
 
 ```powershell
-Get-Content .env | Where-Object { $_ -match '^(DATABASE_URL|HTTP_ADDR|APP_ORIGIN|TARGET_CREDENTIAL_KEY)=' } | ForEach-Object {
+Get-Content .env | Where-Object { $_ -match '^(DATABASE_URL|HTTP_ADDR|APP_ORIGIN|TARGET_CREDENTIAL_KEY|WORKER_EMBEDDED|OTEL_EXPORTER_OTLP_ENDPOINT|OTEL_EXPORTER_OTLP_TRACES_ENDPOINT)=' } | ForEach-Object {
     $name, $value = $_ -split '=', 2
     [Environment]::SetEnvironmentVariable($name, $value, 'Process')
 }
@@ -175,6 +178,12 @@ Buka http://localhost:3000/login di browser. Browser mengakses seluruh API melal
 |---|---|
 | Frontend / Login | http://localhost:3000/login |
 | Dashboard | http://localhost:3000/dashboard |
+| Reviews | http://localhost:3000/reviews |
+| Database Viewer | `http://localhost:3000/databases/{id}/viewer` |
+| Migration Draft | `http://localhost:3000/databases/{id}/drafts` |
+| Database Reviews | `http://localhost:3000/databases/{id}/reviews` |
+| Jobs | `http://localhost:3000/databases/{id}/jobs` |
+| Migration History | `http://localhost:3000/databases/{id}/history` |
 | Admin Users | http://localhost:3000/admin/users |
 | Admin Groups | http://localhost:3000/admin/groups |
 | Admin Database Connections | http://localhost:3000/admin/databases |
@@ -191,47 +200,91 @@ flowchart LR
     U[Pengguna / Browser] --> FE[Frontend Go :3000\nhtml/template + CSS + JS]
     FE -->|Same-origin /api + reverse proxy| BE[Backend Go :8080\nREST API]
     BE --> META[(PostgreSQL\nMetadata Platform)]
-    BE -->|Koneksi target + izin role PostgreSQL| TARGET[(PostgreSQL\nDatabase Target)]
+    BE -->|Viewer dan pemeriksaan koneksi| TARGET[(PostgreSQL\nDatabase Target)]
+    WORKER[Worker Go: embedded / terpisah] -->|Ambil job dari antrean| META
+    WORKER -->|Eksekusi migration| TARGET
 ```
 
-Frontend merender kerangka halaman menggunakan `html/template`; JavaScript ES Modules menggunakan `fetch()` untuk memanggil REST API dan memperbarui DOM tanpa memuat ulang seluruh halaman. Backend menangani autentikasi, otorisasi, penyimpanan metadata, koneksi target, pembacaan schema/data, serta eksekusi migration.
+Frontend merender HTML dengan `html/template`. Router SPA mengambil halaman lewat `fetch()` dan mengganti tampilan tanpa memuat ulang dokumen saat login, logout, dan navigasi internal. API menangani autentikasi, akses target, approval, dan antrean. Worker menjalankan migration dan menyimpan hasilnya. Antrean disimpan di PostgreSQL metadata, sedangkan SQL migration dan bukti commit dieksekusi atau disimpan pada PostgreSQL target.
 
 ### Authentication dan Authorization
 
 1. Pengguna login melalui `/login` dengan CSRF prelogin, lalu backend membuat session menggunakan cookie `HttpOnly`.
 2. `GET /api/v1/auth/me` digunakan untuk memeriksa session pengguna.
-3. Platform Admin mengelola pengguna, grup, keanggotaan grup, koneksi database, dan grant akses `view`/`edit`.
+3. Platform Admin mengelola pengguna, grup, keanggotaan, leader, koneksi database, dan grant `view`/`edit`.
 4. Pengguna biasa hanya melihat database yang diizinkan berdasarkan grant grupnya.
 5. `view` dapat membuka Viewer dan History; `edit` juga dapat mengakses Draft dan Execute Migration.
 6. Platform Admin tidak otomatis memiliki akses ke isi database target tanpa grant. Keputusan otorisasi tetap berada di backend.
+7. Jika pengguna memiliki beberapa grant pada database yang sama, akses efektif menggunakan tingkat tertinggi (`edit` > `view` > tanpa akses).
 
 ### Database Viewer dan Migration
 
 1. Admin mendaftarkan koneksi target PostgreSQL melalui `/admin/databases`, menguji koneksi, lalu memberi grant kepada grup melalui `/admin/grants`.
 2. Pengguna yang memperoleh grant membuka Viewer untuk melihat schema, tabel, kolom, constraint, index, dan data baris secara *read-only*.
 3. Pengguna berizin `edit` dapat membuat atau memperbarui SQL Draft dengan pemeriksaan revision.
-4. Sebelum Execute Migration, pengguna meninjau draft tersimpan dan mengonfirmasi eksekusi. Backend mengeksekusi SQL dalam transaksi.
-5. Hasil `success` menandakan COMMIT, `failed` menandakan ROLLBACK, sedangkan `running`/`unknown` belum definitif.
-6. History menyimpan status, version, pelaksana, dan detail SQL. Pengguna `edit` dapat menjalankan Reconcile secara eksplisit untuk status ambigu tanpa mengeksekusi ulang SQL.
+4. Pengguna mengajukan revisi untuk ditinjau. Semua leader grup yang punya akses `view` atau `edit` pada target harus menyetujui pengajuan.
+5. Pengguna `edit` mengirim revisi yang disetujui ke antrean. API merespons `202 Accepted` dengan ID job. Worker memeriksa ulang izin dan approval, lalu mengeksekusi migration. Halaman Jobs menampilkan progres.
+6. History menampilkan hasil dan detail eksekusi. Rollback, forward, dan resume batch mengikuti alur review dan antrean yang sama. Untuk hasil yang belum pasti, Reconcile memeriksa receipt di target dan memperbarui status.
+
+### Migration Workflow dan Approval
+
+```mermaid
+flowchart LR
+    D[Draft] --> R[Pending Review]
+    R --> A[Approved]
+    R --> X[Rejected]
+    A --> Q[Queued]
+    Q --> W[Running]
+    W --> S[Success]
+    W --> F[Failed]
+    W --> P[Partial / Unknown / Partially Reverted]
+```
+
+Diagram menunjukkan alur utama review hingga eksekusi; status review dan job disimpan secara terpisah. Pengajuan mengikat revision, jenis aksi dan snapshot SQL. Setiap grup yang memiliki grant pada database target, termasuk grup `view`, harus memiliki leader yang memberikan approval. Penolakan mencegah pengajuan dieksekusi. Permission, approval dan posisi migration divalidasi kembali sebelum eksekusi, sehingga approval yang tidak lagi berlaku tidak dapat langsung digunakan.
+
+### Rollback, Forward, dan Migration History
+
+Draft memiliki SQL up dan SQL down, atau ditandai irreversible dengan alasan. Definisi SQL yang telah dieksekusi dibekukan sebagai snapshot revisi. Rollback menggunakan SQL down asli dari migration aktif terakhir yang reversible, sedangkan forward menggunakan SQL up asli sesuai urutan linear. Rollback dan forward memerlukan approval dan dijalankan sebagai job baru, bukan mengubah catatan eksekusi lama.
+
+History menyimpan setiap attempt yang dicatat, termasuk eksekusi gagal, dengan execution ID, versi, revisi, SQL, pengguna, waktu dan status. Status attempt dapat difinalisasi atau direkonsiliasi berdasarkan bukti eksekusi tanpa mengganti SQL historis. Checkbox **Hide Rollback** menyembunyikan pasangan eksekusi yang dibatalkan dan rollback sukses yang membatalkannya berdasarkan execution ID; attempt gagal tetap ditampilkan. Filter tidak menghapus catatan dari database.
+
+### Menjalankan Worker Terpisah
+
+API sudah menjalankan dua slot worker secara bawaan. Untuk memisahkan proses, atur `WORKER_EMBEDDED=false` sebelum menyalakan API. Di terminal baru dari root repository, muat konfigurasi yang sama (termasuk konfigurasi trace jika digunakan):
+
+```powershell
+Get-Content .env | Where-Object { $_ -match '^(DATABASE_URL|TARGET_CREDENTIAL_KEY|OTEL_EXPORTER_OTLP_ENDPOINT|OTEL_EXPORTER_OTLP_TRACES_ENDPOINT)=' } | ForEach-Object {
+    $name, $value = $_ -split '=', 2
+    [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+}
+
+cd BE
+go run ./cmd/worker
+```
+
+Worker terpisah menggunakan antrean metadata dan kunci enkripsi kredensial target yang sama dengan backend. Jika memakai mode ini, pastikan worker berjalan agar job yang berstatus `queued` dapat diproses.
 
 ## Fitur Utama
 
 | Area | Fitur |
 |---|---|
-| Autentikasi | Login, logout, session cookie, CSRF |
-| Administrasi | Manajemen user, group, membership, serta grant `view`/`edit` |
+| Frontend SPA | Navigasi client-side, loading state, serta layout responsif untuk desktop dan mobile |
+| Autentikasi | Login, logout, session cookie, CSRF, idle timeout, absolute expiration dan rotasi session |
+| Administrasi | Manajemen user, group, membership, leader, dan grant `view`/`edit` |
 | Target PostgreSQL | Daftar, tambah, ubah, hapus, dan test koneksi |
 | Database Viewer | Schema, table, column, constraint, index, data baris, pagination |
 | Migration Draft | Membuat, membaca, mengubah draft SQL dan revision checking |
-| Execute Migration | Konfirmasi, eksekusi SQL transaksional, status hasil dan penanganan konflik |
-| History | Daftar/detail riwayat, cursor pagination, SQL detail, status eksekusi |
+| Review dan Jobs | Approval per grup, antrean, pemantauan status dan progres |
+| Execute Migration | SQL transaksional, batch dengan checkpoint, rollback, forward, dan resume |
+| History | Daftar/detail riwayat, cursor pagination, SQL detail, status dan attempt eksekusi, Hide Rollback |
+| Activity Logging dan Tracing | Structured JSON log, SQL tracing, korelasi trace API, queue dan worker |
 | Reconciliation | Pemeriksaan eksplisit status `running`/`unknown` bagi pengguna berizin `edit` |
 
 ## Keputusan Teknis
 
-### Go Templates dan JavaScript ES Modules
+### Single-Page Application (SPA) dengan Go Templates dan JavaScript ES Modules
 
-Frontend menggunakan Go `html/template` untuk penyajian HTML, vanilla JavaScript ES Modules untuk interaksi, serta CSS untuk tampilan. Asset disematkan ke binary FE melalui `//go:embed templates static`, sehingga perubahan template, CSS, atau JavaScript memerlukan build dan restart FE.
+Frontend menggunakan Go `html/template` untuk penyajian HTML, vanilla JavaScript ES Modules untuk interaksi, serta CSS untuk tampilan. Asset disematkan ke binary FE melalui `//go:embed templates static`, sehingga perubahan template, CSS, atau JavaScript memerlukan build dan restart FE. Router pada `spa.js` menangani navigasi internal menggunakan Fetch API dan History API. CSS menggunakan media query untuk menyesuaikan layout pada layar kecil; halaman viewer, draft, review, jobs dan history tetap berada dalam alur SPA yang sama.
 
 ### Same-Origin Reverse Proxy
 
@@ -241,9 +294,43 @@ Server FE meneruskan `/api/` dan `/health/` ke BE. Browser mengirim cookie sessi
 
 Backend memvalidasi permission untuk setiap operasi. Frontend menyesuaikan navigasi berdasarkan grant untuk UX, bukan sebagai pengganti pemeriksaan backend. Nilai database ditampilkan menggunakan DOM API yang aman, bukan menyisipkan konten tidak tepercaya ke `innerHTML`. Identifier besar dikirim sebagai string.
 
-### Migration dan Recovery
+Session menggunakan opaque identifier melalui cookie `HttpOnly` dan `SameSite=Lax`; atribut `Secure` diaktifkan untuk HTTPS dan HTTP localhost. Parameter session:
 
-Migration dijalankan pada database target yang berbeda dari metadata, dengan role executor PostgreSQL terbatas. Riwayat target perlu diprovision oleh administrator database; status `unknown` atau koneksi terputus tidak memicu retry otomatis. Reconcile adalah aksi tersendiri untuk memastikan status eksekusi.
+| Parameter | Nilai |
+|---|---|
+| Idle timeout | 30 menit |
+| Absolute expiration | 8 jam |
+| Rotation interval | 15 menit |
+| Grace period | 30 detik |
+
+Rotasi tidak memperpanjang absolute expiration. Backend menangani pencabutan session dan pemeriksaan perubahan privilege. Kredensial database target disimpan dalam bentuk terenkripsi.
+
+### Asynchronous Migration dan Concurrency
+
+Migration dijalankan pada database target yang berbeda dari metadata, dengan role executor PostgreSQL terbatas. Administrator database menyiapkan schema riwayat target. Semua eksekusi melalui antrean persisten; HTTP `202 Accepted` hanya berarti job diterima, bukan SQL berhasil commit. Worker secara bawaan memiliki dua slot eksekusi dengan timeout job 15 menit. Halaman Jobs menampilkan status dan progres, termasuk jumlah batch dan row yang sudah committed.
+
+Antrean menggunakan claim dan lease worker, dengan heartbeat setiap 10 detik dan lease 30 detik. PostgreSQL advisory lock pada koneksi target melindungi satu migration per database, termasuk di antara commit batch; database berbeda dapat diproses paralel. Koneksi pemegang lock ditutup setelah eksekusi, sehingga session lock dilepas. Jika worker berhenti, lease yang kedaluwarsa memungkinkan recovery dengan pemeriksaan bukti pada target sebelum pekerjaan diambil kembali.
+
+### Migration Batch dan Recovery
+
+Migration normal menjalankan SQL dalam transaction tanpa membaginya menjadi batch. Mode batch mendukung UPDATE terstruktur dengan pilihan schema, tabel, kolom primary key integer tunggal yang tidak diubah, nilai kolom yang diperbarui dan batch size (1–5.000 row). Aplikasi tidak memecah sembarang SQL menjadi batch secara otomatis. Mode ini dibatasi pada tabel biasa tanpa trigger yang memenuhi validasi backend.
+
+Cakupan row dibekukan sebelum batch diproses. Setiap batch memiliki transaction sendiri; perubahan dan checkpoint disimpan bersama sebelum commit. Apabila batch gagal, batch sebelumnya tetap committed dan status dapat menjadi `partial`. Resume melanjutkan pekerjaan dari checkpoint tanpa mengulang batch yang telah committed. Pembatalan batch menggunakan kompensasi berdasarkan SQL down yang disetujui dan bukti pemulihan row, dalam urutan batch terbalik. Jika pembatalan gagal sebagian, status `partially_reverted` memungkinkan proses pemulihan dilanjutkan melalui alur yang sesuai.
+
+Worker memakai receipt untuk memulihkan hasil commit dan checkpoint untuk melanjutkan batch dari posisi terakhir. Retry otomatis hanya untuk kegagalan sementara yang memenuhi pemeriksaan bukti, permission dan batas attempt (default tiga attempt), dengan jeda retry. Job dan checkpoint tetap tersedia setelah restart; hasil yang `unknown` atau migration yang masih `partial`/`partially_reverted` menahan migration berikutnya pada target yang sama. Pengguna berizin `edit` juga bisa menjalankan Reconcile dari halaman History untuk memeriksa bukti commit tanpa menjalankan ulang SQL.
+
+### Log dan Trace
+
+Backend dan worker menggunakan `log/slog` dengan JSON handler ke stdout dan OpenTelemetry untuk tracing. Trace context diteruskan melalui antrean agar aktivitas API, worker, lock dan query dapat dikorelasikan. SQL tracer mencatat `sql_started`, `sql_result`, serta hasil transaction secara terpisah, termasuk query read-only dan kegagalan. Tanpa konfigurasi OTLP, span ditulis ke log JSON.
+
+Contoh ilustratif log pengajuan review dan span HTTP dengan trace ID yang sama (ID dan durasi hanya contoh, bukan hasil pengukuran):
+
+```jsonl
+{"level":"INFO","event":"migration_review_submitted","actor_id":3,"database_id":1,"review_id":42,"status":"pending_review","trace_id":"0123456789abcdef0123456789abcdef","span_id":"0123456789abcdef"}
+{"level":"INFO","event":"trace_span","name":"POST /api/v1/databases/{id}/reviews","trace_id":"0123456789abcdef0123456789abcdef","span_id":"0123456789abcdef","duration_ms":12}
+```
+
+Untuk eksekusi, gunakan `trace_id` dari permintaan antrekan untuk menemukan span worker. Log SQL mencatat query yang disamarkan, hash query, jumlah parameter, durasi, jumlah row dan error code/SQLSTATE jika tersedia. Nilai parameter, kredensial, session identifier dan data sensitif tidak dimaksudkan untuk diekspos dalam log. Riwayat migration di database merupakan catatan eksekusi, bukan penyimpanan log aplikasi.
 
 ## Technology Stack
 
@@ -257,6 +344,8 @@ Migration dijalankan pada database target yang berbeda dari metadata, dengan rol
 | PostgreSQL driver | `github.com/jackc/pgx/v5` |
 | Komunikasi FE–BE | REST API JSON melalui reverse proxy |
 | Authentication | Session cookie HttpOnly dan CSRF token |
+| Job Queue dan Worker | PostgreSQL, Go goroutines, advisory lock |
+| Logging dan Tracing | Go `log/slog`, OpenTelemetry SDK, OTLP/HTTP trace exporter |
 | Testing | Go `testing`, `go vet`, Node.js built-in test runner |
 
 ## Struktur Repository
@@ -264,18 +353,29 @@ Migration dijalankan pada database target yang berbeda dari metadata, dengan rol
 ```text
 .
 ├── .env.example
+├── .github/workflows/         # CI backend dan frontend
+├── dev.cmd / dev.ps1          # Skrip development Windows
+├── scripts/                   # Setup dan tes skrip development
 ├── BE/
 │   ├── cmd/
 │   │   ├── api/               # HTTP API
 │   │   ├── migrate/           # Migration metadata
 │   │   ├── bootstrap/         # Admin pertama
-│   │   └── seed/              # CLI kompatibilitas bootstrap
+│   │   ├── seed/              # CLI kompatibilitas bootstrap
+│   │   └── worker/            # Worker migration terpisah
 │   ├── internal/
 │   │   ├── auth/              # Session, login, CSRF
 │   │   ├── admin/             # User, group, membership, grant
 │   │   ├── connections/       # Koneksi target dan enkripsi kredensial
 │   │   ├── viewer/            # Schema dan data viewer
 │   │   ├── runner/            # Draft, execute, history, reconcile
+│   │   ├── approval/          # Review dan approval per grup
+│   │   ├── jobs/              # Antrean, attempt, retry dan recovery
+│   │   ├── worker/            # Dispatch dan eksekusi asynchronous
+│   │   ├── batch/             # Konfigurasi dan SQL batch
+│   │   ├── policy/            # Pemeriksaan hak akses
+│   │   ├── database/          # Koneksi metadata
+│   │   ├── telemetry/         # Structured log dan OpenTelemetry
 │   │   └── ...
 │   ├── migrations/            # SQL metadata platform
 │   ├── sql/                   # Provision migration history target
@@ -291,7 +391,7 @@ Migration dijalankan pada database target yang berbeda dari metadata, dengan rol
 │   │       ├── templates/     # Layout dan halaman
 │   │       └── static/        # CSS dan JavaScript ES Modules
 │   └── test/                  # JavaScript tests
-└── tests/                     # Test pendukung repository
+└── README.md
 ```
 
 ## Daftar Endpoint Utama
@@ -309,6 +409,7 @@ Semua endpoint API diakses oleh browser melalui `http://localhost:3000/api/v1/..
 | GET / POST | `/api/v1/admin/users` | Daftar / tambah pengguna |
 | PATCH | `/api/v1/admin/users/{id}` | Ubah pengguna |
 | GET / POST | `/api/v1/admin/groups` | Daftar / buat grup |
+| PUT | `/api/v1/admin/groups/{id}/leader` | Tetapkan leader grup |
 | PUT / DELETE | `/api/v1/admin/groups/{id}/users/{userID}` | Atur anggota grup |
 | PUT / DELETE | `/api/v1/admin/groups/{id}/databases/{databaseID}` | Atur / cabut grant |
 | GET / POST | `/api/v1/admin/databases` | Daftar / tambah koneksi target |
@@ -326,11 +427,27 @@ Semua endpoint API diakses oleh browser melalui `http://localhost:3000/api/v1/..
 | GET | `/api/v1/databases/{id}/schemas/{schema}/tables/{table}/rows` | Data tabel dan pagination |
 | GET / POST | `/api/v1/databases/{id}/drafts` | Daftar / tambah draft |
 | GET / PATCH | `/api/v1/databases/{id}/drafts/{draftID}` | Detail / ubah draft |
-| POST | `/api/v1/databases/{id}/drafts/{draftID}/execute` | Execute migration |
+| GET | `/api/v1/reviews` | Daftar review lintas database dengan filter dan cursor |
+| GET / POST | `/api/v1/databases/{id}/reviews` | Daftar / ajukan review pada database target |
+| GET | `/api/v1/databases/{id}/reviews/{reviewID}` | Detail review dan keputusan approval |
+| POST | `/api/v1/databases/{id}/reviews/{reviewID}/approve` | Setujui pengajuan |
+| POST | `/api/v1/databases/{id}/reviews/{reviewID}/reject` | Tolak pengajuan dengan alasan |
+| GET / POST | `/api/v1/databases/{id}/jobs` | Daftar / antrekan job dari review |
+| GET | `/api/v1/databases/{id}/jobs/{jobID}` | Status, progres, dan percobaan job |
+| POST | `/api/v1/databases/{id}/drafts/{draftID}/execute` | Antrekan eksekusi revisi yang disetujui |
+| POST | `/api/v1/databases/{id}/drafts/{draftID}/retry` | Antrekan retry sesuai validasi |
+| POST | `/api/v1/databases/{id}/drafts/batch-down-preview` | Preview SQL down untuk batch |
 | POST | `/api/v1/databases/{id}/drafts/{draftID}/explain` | Analisis query draft tersimpan |
 | GET | `/api/v1/databases/{id}/migrations` | Daftar history |
 | GET | `/api/v1/databases/{id}/migrations/{version}` | Detail history |
+| GET | `/api/v1/databases/{id}/migration-state` | Posisi dan aksi migration yang tersedia |
+| GET | `/api/v1/databases/{id}/migration-executions/{executionID}` | Detail execution berdasarkan ID |
+| POST | `/api/v1/databases/{id}/migration-executions/{executionID}/rollback` | Antrekan rollback yang disetujui |
+| POST | `/api/v1/databases/{id}/migration-executions/{executionID}/forward` | Antrekan forward yang disetujui |
+| POST | `/api/v1/databases/{id}/migration-executions/{executionID}/compensate` | Antrekan kompensasi batch yang disetujui |
 | POST | `/api/v1/databases/{id}/migrations/reconcile` | Reconcile status ambigu |
+
+Daftar review menerima `limit`, `before`, `status`, dan `only_actionable`. Gunakan nilai `next_before` dari respons sebagai cursor berikutnya. Halaman pertama dengan `only_actionable=true` juga mengembalikan `total` review yang cocok. History menerima `limit`, `before`, dan `hide_rollback` untuk pagination dan penyaringan pasangan rollback.
 
 ## Pengujian
 
@@ -349,7 +466,48 @@ go vet ./...
 node --test
 ```
 
-## Bonus dan Batasan
+### Tes Integrasi Backend
+
+Siapkan PostgreSQL khusus pengujian sesuai [fixture CI](.github/workflows/backend.yml), lalu isi `TEST_DATABASE_URL`, `TEST_TARGET_DATABASE_URL`, `TEST_SECOND_TARGET_DATABASE_URL`, dan `TEST_TARGET_ADMIN_DATABASE_URL` pada terminal. Dari `BE/` jalankan:
+
+```powershell
+go test -p 1 -tags=integration ./... -count=1 -timeout=1200s
+```
+
+Cakupan integration test antara lain authentication dan authorization, administrasi, viewer, approval, eksekusi dan riwayat migration, antrean dan concurrency worker, rollback/forward, retry, batch/resume/kompensasi, recovery ketika hasil commit belum pasti, serta korelasi log dan trace. CI backend dan frontend tersedia pada `.github/workflows/`.
+
+Beberapa skenario Milestone 2 dapat diuji secara terpisah dengan fixture integration yang sama:
+
+| Tes | Skenario |
+|---|---|
+| `TestRollbackForwardAPI` | Rollback dan forward melalui API |
+| `TestWorkerRevalidatesQueuedRequests` | Validasi ulang sebelum eksekusi |
+| `TestWorkersRunDifferentTargetsAndSerializeSameTarget` | Paralel antar-target dan serial pada target yang sama |
+| `TestLargeBatchApprovedResumePreservesCommittedPrefixAndFrozenScope` | Resume batch dengan checkpoint dan cakupan tetap |
+| `TestObservabilityCoversReadOnlyQueueWorkerBatchAndFailures` | Korelasi log dan trace pada alur baca, antrean, worker dan batch |
+
+### Perbandingan UPDATE Tunggal dan Batch
+
+Dengan fixture yang sama, jalankan:
+
+```powershell
+go test -tags='integration batchdemo' ./tests/integration -run '^TestBatchPerformanceComparison$' -count=1 -v
+```
+
+Tes membuat dua tabel identik dengan 120.000 baris dan indeks ekspresi. UPDATE tunggal diukur dari pengiriman SQL sampai commit. Jalur batch diukur dari worker mengambil job hingga selesai, termasuk penyimpanan snapshot dan checkpoint. Keduanya diverifikasi mengubah 120.000 baris. Batch membagi pekerjaan menjadi 24 commit terpisah agar progres dapat dipantau dan dilanjutkan dari checkpoint.
+
+Hasil satu kali pengukuran sebelumnya di Windows 11, Intel Core Ultra 5 225H, PostgreSQL 18.6 lokal:
+
+| Jalur | Durasi |
+|---|---:|
+| UPDATE tunggal | 6,393 detik |
+| Batch via worker | 16,875 detik |
+
+Untuk mendemokan pemulihan setelah satu batch berhasil commit, jalankan `TestLargeBatchApprovedResumePreservesCommittedPrefixAndFrozenScope` dengan tag `integration`.
+
+Hasil tersebut menunjukkan bahwa UPDATE tunggal pada dataset pengujian membutuhkan lebih dari satu detik. Pada pengukuran ini, jalur batch lebih lama karena mencakup overhead worker, penyimpanan snapshot, checkpoint dan commit per batch. Tujuan batching adalah menyediakan progres serta pemulihan per batch, bukan menjamin waktu total lebih singkat. Hasil ini bukan hasil stress testing k6.
+
+## Bonus Milestone 1
 
 ### Schema Diff dan Migration Generation
 
@@ -362,3 +520,149 @@ Generator mendukung pembuatan tabel biasa dengan tipe kolom sederhana dan penamb
 Pengguna dengan grant `edit` dapat memilih **Analisis Query** pada draft yang sudah disimpan. Backend mengirim `EXPLAIN (FORMAT JSON)` ke PostgreSQL dan menampilkan rencana untuk setiap statement.
 
 Hasilnya merupakan perkiraan PostgreSQL, bukan waktu eksekusi aktual: fitur ini tidak menggunakan `EXPLAIN ANALYZE`. Setiap statement diperiksa secara terpisah dalam transaksi read-only, sehingga perubahan dari statement sebelumnya tidak tersedia untuk statement berikutnya. PostgreSQL juga dapat menolak statement yang tidak mendukung `EXPLAIN`.
+
+## Bonus Milestone 2
+
+### Observability
+
+Observability menyediakan pemantauan terpusat terhadap antrean migration, eksekusi worker, dan penggunaan koneksi PostgreSQL. Implementasi mengintegrasikan tiga jenis telemetry: metrik, log terstruktur, dan distributed trace.
+
+#### Arsitektur dan instrumentasi
+
+Stack development opsional menjalankan Prometheus, OpenTelemetry Collector, Loki, Tempo dan Grafana melalui Docker Compose. Backend, worker embedded, frontend dan PostgreSQL tetap berjalan secara native. Prometheus melakukan scrape endpoint metrics; Collector membaca structured log JSON dan menerima trace OTLP, lalu meneruskannya ke Loki dan Tempo. Dashboard serta datasource tersedia melalui provisioning pada `observability/grafana/`. Label metrics dibatasi pada status, outcome, attempt, scope, result, kind, role dan state; ID job/trace serta SQL tidak digunakan sebagai label.
+
+| Komponen | Implementasi |
+|---|---|
+| Metrik queue dan migration | Status job, retry, histogram waktu tunggu queue dan advisory lock, durasi executor per attempt, counter batch dan row terkonfirmasi |
+| Metrik connection pool | Koneksi active/idle, jumlah pool, durasi acquire, dan waktu tunggu ketika pool kosong |
+| Log dan trace | JSON `log/slog`, OpenTelemetry, Collector, Loki, dan Tempo |
+| Dashboard | 17 panel Grafana dengan provisioning datasource dan [JSON dashboard](observability/grafana/dashboards/terserah.json) |
+
+Konfigurasi infrastruktur tersedia pada [Docker Compose](docker-compose.observability.yml) dan [direktori observability](observability/). Prosedur reproduksi didokumentasikan pada [Observability lokal](docs/observability/README.md); katalog serta semantik metrik tersedia pada [Metrik Observability](docs/observability/metrics.md).
+
+#### Validasi integrasi telemetry
+
+Pada pengujian lokal, Prometheus menunjukkan target `terserah-api` berstatus UP. Grafana menampilkan 59 job sukses, tanpa job gagal atau retry pada saat screenshot diambil. Loki menerima log `execution_finished` dari smoke test, dan Tempo menampilkan trace request enqueue beserta span worker dan operasi database.
+
+| Bukti | Isi |
+|---|---|
+| [Prometheus Targets](observability/evidence/prometheus-targets.png) | Target metrics backend UP |
+| [Log migration Loki](observability/evidence/loki-migration-logs.png) | Structured log penyelesaian migration |
+| [Trace migration Tempo](observability/evidence/tempo-migration-trace.png) | Trace enqueue dan eksekusi worker |
+| [Dashboard Grafana](observability/evidence/grafana-dashboard.png) | Status job, histogram, dan statistik connection pool |
+
+#### Hasil pengujian workload dan validasi metrik
+
+Pengujian dilakukan pada instance development lokal dengan embedded worker dan stack observability aktif. Profil k6 `quick` menambah 15 job sukses (59 menjadi 74), sebagaimana terlihat pada [dashboard saat stress test](observability/evidence/grafana-stress-test.png). Grafik queue, durasi migration, serta connection pool memperlihatkan aktivitas selama workload. Pengukuran performa k6 utama tetap dilaporkan secara terpisah.
+
+Validasi batch dan retry menggunakan `tests/k6/observability.js` pada database development `wbd_dev_target_a` dengan run ID `mwxojez7_6e9361`. Hasilnya 106/106 checks lulus, 4/4 kasus terverifikasi, 49 request HTTP tanpa error, dan seluruh threshold serta sembilan delta metrik sesuai ekspektasi (`OBS_RESULT ... verified=4 metrics=PASS`).
+
+| Kasus | Job ID | Status akhir | Attempt | SQLSTATE |
+|---|---:|---|---:|---|
+| Setup fixture | 75 | success | 1 | — |
+| Batch UPDATE | 76 | success | 1 | — |
+| Permanent failure | 77 | failed | 1 | 22012 |
+| Retryable failure | 78 | failed | 3 | 40001 |
+
+Batch UPDATE memproses 1.000 row dalam 10 batch berukuran 100 row. Dua job gagal merupakan skenario terkontrol: pembagian dengan nol tidak memicu retry, sedangkan fungsi uji yang selalu melempar SQLSTATE 40001 memicu dua retry hingga batas tiga attempt.
+
+| Metrik | Sebelum | Sesudah | Delta |
+|---|---:|---:|---:|
+| Job sukses | 74 | 76 | +2 |
+| Job gagal | 0 | 2 | +2 |
+| Retry attempts | 0 | 2 | +2 |
+| Observasi queue initial | 21 | 25 | +4 |
+| Observasi queue retry | 0 | 2 | +2 |
+| Observasi durasi executor sukses | 21 | 23 | +2 |
+| Observasi durasi executor gagal | 0 | 4 | +4 |
+| Batch migration committed | 0 | 10 | +10 |
+| Row migration committed | 0 | 1.000 | +1.000 |
+
+| Bukti tambahan | Isi |
+|---|---|
+| [Dashboard stress test](observability/evidence/grafana-stress-test.png) | Aktivitas queue, executor, pool, dan 74 job sukses |
+| [Dashboard batch dan retry](observability/evidence/grafana-batch-retry.png) | 76 job sukses, 2 gagal terkontrol, 2 retry, serta grafik batch/row |
+| [Log batch](observability/evidence/loki-batch-logs.png) | `batch_committed`, job 76, batch ke-10, 1.000 row committed |
+| [Log retry](observability/evidence/loki-retry-logs.png) | `job_recovered`, job 78, attempt 2, status `retry_wait`, SQLSTATE 40001 |
+| [Log validasi k6](observability/evidence/validation.log) | Status job, attempt history, sembilan delta metrik dan threshold |
+
+#### Contoh korelasi log, trace, dan metrics
+
+Pada smoke test, [log Loki](observability/evidence/loki-migration-logs.png) mencatat `execution_finished` untuk job 59, dengan status `success`, execution ID `7d5ec9294cf1fa9075e1af4228678984`, dan trace ID `ea5539a812a30b09cc7a037e35fe238e`. Trace ID dari log dapat digunakan untuk mencari trace di Tempo. [Bukti Tempo](observability/evidence/tempo-migration-trace.png) memperlihatkan request `POST /api/v1/databases/{id}/jobs` dengan HTTP 202, 93 span, serta aktivitas worker, lock dan database. Tautan TraceID pada datasource Loki menghubungkan log dengan trace di Tempo. Screenshot Tempo memperlihatkan alur eksekusi pada interval yang sesuai, tetapi nilai trace ID tidak terlihat secara eksplisit pada gambar tersebut.
+
+[Dashboard awal](observability/evidence/grafana-dashboard.png) menunjukkan 59 job sukses dan observasi histogram pada interval pengujian. Pada pengujian berikutnya, log `batch_committed` job 76 dan `job_recovered` job 78 juga dapat dicocokkan dengan job ID, execution ID dan hasil `OBS_ATTEMPT` pada log validasi k6; perubahan counter dan histogram sesuai tabel di atas. Korelasi metrics dilakukan melalui waktu dan aktivitas agregat, bukan dengan menambahkan ID individual sebagai label.
+
+#### Batasan
+
+Hasil ini memvalidasi instrumentasi pada workload lokal terkontrol, bukan jaminan performa production. Histogram Prometheus memberikan estimasi percentile; panel rate dapat kembali nol atau tidak memiliki sampel ketika tidak ada aktivitas. Counter/histogram bersifat process-local, sedangkan gauge status job membaca metadata persisten. Uji 1.000 row ini merupakan validasi metrik batch, bukan pengganti pengujian dataset besar yang diwajibkan pada spesifikasi fitur utama.
+
+### Security: SAST dengan CodeQL
+
+Static Application Security Testing (SAST) dilakukan menggunakan CodeQL melalui GitHub Actions dengan konfigurasi pada `.github/workflows/codeql.yml`. Analisis mencakup source code Go pada backend dan frontend serta JavaScript pada frontend SPA.
+
+Hasil initial scan branch `feat/bonus-codeql`, commit `5f44c76`, menggunakan CodeQL 2.27.6:
+
+| Bahasa | Baris kode terukur | Temuan |
+|---|---:|---:|
+| Go | 9.811 | 0 |
+| JavaScript/TypeScript | 6.983 | 0 |
+
+Kedua analisis berhasil dan tidak menghasilkan temuan keamanan. Oleh karena itu, tidak terdapat temuan yang memerlukan perbaikan maupun scan ulang terkait perbaikan.
+
+Hasil scan bersih tidak berarti aplikasi pasti aman. Cakupan analisis, batasan, konfigurasi, dan bukti hasil scan dapat dilihat pada [Laporan CodeQL](docs/security/codeql-report.md).
+
+### Stress Testing dengan k6
+
+Stress testing dilakukan menggunakan Grafana k6 pada instance development lokal dengan dua database target PostgreSQL terpisah (`wbd_dev_target_a` dan `wbd_dev_target_b`). Script dan panduan menjalankan pengujian tersedia di [tests/k6](tests/k6/README.md).
+
+`stress.js` membuat migration draft dan review yang unik melalui API, serta memastikan seluruh review telah mendapat approval sebelum pengukuran dimulai. API VU mengakses daftar database, schema, migration history, dan job list secara berulang dengan jeda 0,5 detik per iterasi. Pada setiap level, skenario submission mengirim job ke kedua target secara bersamaan, dengan satu review unik per VU submission. Setiap job dipantau hingga mencapai status terminal dan diperiksa kembali melalui final audit. Respons HTTP 202 hanya berarti job diterima antrean, bukan migration berhasil.
+
+Setiap migration membuat schema unik, membuat satu tabel, memasukkan 1.000 row, dan menjalankan `pg_sleep(0.5)` untuk memberi durasi terkontrol. SQL Down tersedia tetapi tidak dijalankan dalam stress test ini. Pengujian menggunakan profil `full` dengan 10 API VU sebagai beban normal, kemudian dinaikkan menjadi 25 dan 50 VU sebelum diturunkan kembali menjadi 10 VU dan akhirnya nol. VU submission merupakan tambahan terhadap VU API.
+
+#### Lingkungan dan konfigurasi pengujian
+
+- Tanggal: 26 November 2026.
+- Run ID: `mwxinlbu_332f34`.
+- Sistem operasi: Windows (PowerShell).
+- k6: v2.4.0.
+- CPU: 13th Gen Intel(R) Core(TM) i9-13900H.
+- RAM: 15.71 GB.
+- PostgreSQL: 18.6.
+- Aplikasi dan worker: instance development lokal, worker embedded.
+- Threshold per level: HTTP p95 < 1.000 ms dan HTTP error rate < 5%.
+- Threshold migration: seluruh 32 job mencapai `success` pada workload dan final audit.
+
+#### Hasil pengujian API
+
+| Level | API VU | Durasi (s) | Requests | Throughput (req/s) | p50 (ms) | p95 (ms) | Error rate | Threshold |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| Normal | 10 | 45 | 2.904 | 64,53 | 9,70 | 83,52 | 0% | PASS |
+| Medium | 25 | 60 | 8.075 | 134,58 | 44,35 | 167,80 | 0% | PASS |
+| Stress | 50 | 75 | 12.377 | 165,03 | 155,79 | 431,10 | 0% | PASS |
+| Recovery | 10 | 45 | 3.390 | 75,33 | 11,71 | 180,03 | 0% | PASS |
+
+Total 26.746 HTTP request terukur tanpa HTTP error. Pengujian berakhir dengan exit code `0` sehingga seluruh threshold k6 terpenuhi.
+
+#### Hasil pengujian migration
+
+| Level | Job A/B | Accepted | Success | Success/s | Queue p50 (ms) | Queue p95 (ms) | Duration p50 (ms) | Duration p95 (ms) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Normal | 2/2 | 4 | 4 | 0,09 | 469 | 872,20 | 688 | 745,60 |
+| Medium | 5/3 | 8 | 8 | 0,13 | 2.471 | 4.951,10 | 998 | 1.303,60 |
+| Stress | 12/4 | 16 | 16 | 0,21 | 7.042 | 16.936,75 | 1.434 | 1.559,25 |
+| Recovery | 2/2 | 4 | 4 | 0,09 | 451 | 845,85 | 740 | 767,70 |
+
+Seluruh 32 migration (21 pada target A dan 11 pada target B) berhasil pada workload dan final audit. Tidak terdapat retry, kegagalan, atau job unresolved. Tidak ada job tersisa pada fase drain.
+
+Dari 32 job dengan timestamp yang dapat dibandingkan, terdapat 0 pasangan job yang overlap pada target yang sama dan 16 pasangan yang overlap pada target berbeda. Hasil tersebut mendukung serialisasi job per database serta pemrosesan paralel antar-database. Interval yang dibandingkan merupakan timestamp eksekusi job, bukan interval kepemilikan SQL lock secara langsung.
+
+#### Analisis setiap level beban
+
+- **Normal:** latency API rendah (p95 83,52 ms). Keempat migration berhasil; queue p95 sebesar 872,20 ms menjadi acuan beban normal.
+- **Medium:** throughput meningkat menjadi 134,58 req/s, tetapi p95 API meningkat menjadi 167,80 ms dan queue p95 menjadi 4.951,10 ms. Penambahan job mulai meningkatkan waktu antrean.
+- **Stress:** penambahan API VU dari 25 ke 50 hanya meningkatkan throughput sekitar 22,6%, sementara p95 API meningkat menjadi 431,10 ms. Hal ini mengindikasikan keterbatasan kapasitas pada workload ini, tetapi tidak menetapkan batas kapasitas maksimum. Queue p95 meningkat menjadi 16.936,75 ms, jauh lebih besar daripada duration p95 sebesar 1.559,25 ms. Penumpukan antrean konsisten dengan submission yang terkonsentrasi pada target A dan serialisasi per target. Meskipun demikian, semua 16 job selesai tanpa error atau retry.
+- **Recovery:** setelah beban diturunkan, queue p95 kembali menjadi 845,85 ms dan duration p95 menjadi 767,70 ms, mendekati kondisi normal. Median API juga mendekati baseline (11,71 ms dibanding 9,70 ms), tetapi p95 masih lebih tinggi (180,03 ms dibanding 83,52 ms). Dengan demikian, pemulihan migration terlihat jelas, sedangkan pemulihan latency API belum sepenuhnya kembali ke baseline pada seluruh fase recovery.
+
+Metrik HTTP mencakup request API terautentikasi, login/logout, enqueue, dan polling; setup serta final audit dikeluarkan dari metrik fase. Queue time dihitung dari pembuatan job hingga pertama kali dimulai, sedangkan migration duration dihitung dari waktu mulai pertama hingga selesai. Throughput adalah jumlah request atau job terminal yang teramati dibagi durasi fase, termasuk ramp. Throughput job yang dilaporkan merupakan rata-rata per fase, bukan kapasitas maksimum worker. Hasil merupakan satu kali pengujian lokal pada workload sintetis dengan `pg_sleep`, bukan jaminan performa production. Fase recovery juga mencakup ramp down sehingga p95 fase tersebut tidak hanya mencerminkan kondisi stabil setelah penurunan beban.
+
+Bukti pengujian tersedia pada [full report](tests/k6/results/full-report.md), [ringkasan k6](tests/k6/results/full-summary.log), dan [event log](tests/k6/results/full-events.log). Hasil quick test sebagai validasi awal tersedia pada [quick report](tests/k6/results/quick-report.md).

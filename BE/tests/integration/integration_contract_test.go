@@ -53,7 +53,7 @@ func TestDraftListingRevisionContract(t *testing.T) {
 	}
 	var created []runner.Draft
 	for i := 0; i < 2; i++ {
-		w = editor.request("POST", base, map[string]string{"title": fmt.Sprintf("draft-%d", i), "sql": "SELECT 1"})
+		w = editor.request("POST", base, map[string]string{"title": fmt.Sprintf("draft-%d", i), "sql": "SELECT 1", "sql_down": "SELECT 1"})
 		status(t, w, 201)
 		var d runner.Draft
 		if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
@@ -79,24 +79,28 @@ func TestDraftListingRevisionContract(t *testing.T) {
 		status(t, editor.request("GET", base+query, nil), 400)
 	}
 	path := fmt.Sprintf("%s/%d", base, first.ID)
-	w = editor.request("PATCH", path, map[string]string{"title": "changed", "sql": "SELECT 2", "revision": "1"})
+	w = editor.request("PATCH", path, map[string]string{"title": "changed", "sql": "SELECT 2", "sql_down": "SELECT 1", "revision": "1"})
 	status(t, w, 200)
 	var updated runner.Draft
 	if err := json.Unmarshal(w.Body.Bytes(), &updated); err != nil || updated.Revision != 2 || updated.CreatedBy != first.CreatedBy || !updated.CreatedAt.Equal(first.CreatedAt) {
 		t.Fatal("revision or creator changed incorrectly")
 	}
-	status(t, editor.request("PATCH", path, map[string]string{"title": "stale", "sql": "SELECT 3", "revision": "1"}), 409)
+	status(t, editor.request("PATCH", path, map[string]string{"title": "stale", "sql": "SELECT 3", "sql_down": "SELECT 1", "revision": "1"}), 409)
 	status(t, editor.request("POST", path+"/execute", map[string]string{"revision": "1"}), 409)
-	w = editor.request("POST", path+"/execute", map[string]string{"revision": "2"})
+	approveDraft(t, a, editor, target.ID, first.ID, 2)
+	w = editor.executeAndWait(t, path+"/execute", map[string]string{"revision": "2"})
 	status(t, w, 200)
 	var result runner.Result
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil || result.Status != "success" {
 		t.Fatal("listed draft cannot execute")
 	}
-	w = editor.request("PATCH", path, map[string]string{"title": "new revision", "sql": "SELECT 4", "revision": "2"})
+	// Setelah attempt pertama, revisi yang sudah dieksekusi tidak boleh diubah.
+	w = editor.request("PATCH", path, map[string]string{"title": "new revision", "sql": "SELECT 4", "sql_down": "SELECT 1", "revision": "2"})
+	status(t, w, 409)
+	w = editor.request("GET", path, nil)
 	status(t, w, 200)
-	if err := json.Unmarshal(w.Body.Bytes(), &updated); err != nil || updated.Revision != 3 {
-		t.Fatal("executed draft cannot advance to a new revision")
+	if err := json.Unmarshal(w.Body.Bytes(), &updated); err != nil || updated.Revision != 2 || updated.SQL != "SELECT 2" {
+		t.Fatal("definisi migration yang sudah dieksekusi berubah")
 	}
 	w = editor.request("GET", fmt.Sprintf("/api/v1/databases/%d/drafts", other.ID), nil)
 	status(t, w, 200)

@@ -1,0 +1,66 @@
+Prepared 32 unique approved reviews (A=21, B=11), run=mwxinlbu_332f34
+K6_PROFILE {"profile":"full","phases":[{"name":"normal","ramp":5,"hold":40,"vus":10,"a":2,"b":2,"offset":0,"duration":45},{"name":"medium","ramp":5,"hold":55,"vus":25,"a":5,"b":3,"offset":45,"duration":60},{"name":"stress","ramp":5,"hold":70,"vus":50,"a":12,"b":4,"offset":105,"duration":75},{"name":"recovery","ramp":5,"hold":40,"vus":10,"a":2,"b":2,"offset":180,"duration":45}],"totalJobs":32,"runId":"mwxinlbu_332f34"}
+K6_JOB {"cohort":"normal","phase":"normal","target":"b","review":"40","job":"19","status":"success","created_at":"2026-11-26T19:16:08.580463+07:00","started_at":"2026-11-26T19:16:08.719239+07:00","finished_at":"2026-11-26T19:16:09.467643+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"normal","phase":"normal","target":"a","review":"19","job":"20","status":"success","created_at":"2026-11-26T19:16:08.594987+07:00","started_at":"2026-11-26T19:16:08.738347+07:00","finished_at":"2026-11-26T19:16:09.470374+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"normal","phase":"normal","target":"b","review":"41","job":"21","status":"success","created_at":"2026-11-26T19:16:08.590887+07:00","started_at":"2026-11-26T19:16:09.476637+07:00","finished_at":"2026-11-26T19:16:10.120446+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"normal","phase":"normal","target":"a","review":"20","job":"22","status":"success","created_at":"2026-11-26T19:16:08.684784+07:00","started_at":"2026-11-26T19:16:09.478836+07:00","finished_at":"2026-11-26T19:16:10.112487+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"medium","phase":"medium","target":"b","review":"42","job":"24","status":"success","created_at":"2026-11-26T19:16:53.708815+07:00","started_at":"2026-11-26T19:16:54.129348+07:00","finished_at":"2026-11-26T19:16:55.476695+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"medium","phase":"medium","target":"a","review":"21","job":"23","status":"success","created_at":"2026-11-26T19:16:53.674485+07:00","started_at":"2026-11-26T19:16:54.488013+07:00","finished_at":"2026-11-26T19:16:55.711504+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"medium","phase":"medium","target":"a","review":"24","job":"25","status":"success","created_at":"2026-11-26T19:16:53.691561+07:00","started_at":"2026-11-26T19:16:55.777223+07:00","finished_at":"2026-11-26T19:16:56.783645+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"medium","phase":"medium","target":"b","review":"44","job":"26","status":"success","created_at":"2026-11-26T19:16:53.740483+07:00","started_at":"2026-11-26T19:16:55.590265+07:00","finished_at":"2026-11-26T19:16:56.580748+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"medium","phase":"medium","target":"b","review":"43","job":"28","status":"success","created_at":"2026-11-26T19:16:53.758332+07:00","started_at":"2026-11-26T19:16:56.614072+07:00","finished_at":"2026-11-26T19:16:57.545428+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"medium","phase":"medium","target":"a","review":"25","job":"27","status":"success","created_at":"2026-11-26T19:16:53.721138+07:00","started_at":"2026-11-26T19:16:56.848415+07:00","finished_at":"2026-11-26T19:16:57.947611+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"medium","phase":"medium","target":"a","review":"22","job":"29","status":"success","created_at":"2026-11-26T19:16:53.770687+07:00","started_at":"2026-11-26T19:16:58.062376+07:00","finished_at":"2026-11-26T19:16:59.038671+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"medium","phase":"medium","target":"a","review":"23","job":"30","status":"success","created_at":"2026-11-26T19:16:53.795651+07:00","started_at":"2026-11-26T19:16:59.101504+07:00","finished_at":"2026-11-26T19:16:59.936292+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"b","review":"45","job":"32","status":"success","created_at":"2026-11-26T19:17:54.33819+07:00","started_at":"2026-11-26T19:17:54.618775+07:00","finished_at":"2026-11-26T19:17:56.156595+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"29","job":"31","status":"success","created_at":"2026-11-26T19:17:54.331895+07:00","started_at":"2026-11-26T19:17:55.497706+07:00","finished_at":"2026-11-26T19:17:57.12022+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"b","review":"47","job":"34","status":"success","created_at":"2026-11-26T19:17:54.345351+07:00","started_at":"2026-11-26T19:17:56.413038+07:00","finished_at":"2026-11-26T19:17:57.879128+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"28","job":"33","status":"success","created_at":"2026-11-26T19:17:54.34894+07:00","started_at":"2026-11-26T19:17:57.229418+07:00","finished_at":"2026-11-26T19:17:58.723462+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"b","review":"48","job":"36","status":"success","created_at":"2026-11-26T19:17:54.400363+07:00","started_at":"2026-11-26T19:17:57.994326+07:00","finished_at":"2026-11-26T19:17:59.368561+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"30","job":"35","status":"success","created_at":"2026-11-26T19:17:54.349437+07:00","started_at":"2026-11-26T19:17:58.87846+07:00","finished_at":"2026-11-26T19:18:00.358859+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"b","review":"46","job":"38","status":"success","created_at":"2026-11-26T19:17:54.430449+07:00","started_at":"2026-11-26T19:17:59.528823+07:00","finished_at":"2026-11-26T19:18:00.901014+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"33","job":"37","status":"success","created_at":"2026-11-26T19:17:54.370232+07:00","started_at":"2026-11-26T19:18:00.557403+07:00","finished_at":"2026-11-26T19:18:02.047964+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"32","job":"39","status":"success","created_at":"2026-11-26T19:17:54.371444+07:00","started_at":"2026-11-26T19:18:02.268143+07:00","finished_at":"2026-11-26T19:18:03.758368+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"31","job":"40","status":"success","created_at":"2026-11-26T19:17:54.458147+07:00","started_at":"2026-11-26T19:18:03.979581+07:00","finished_at":"2026-11-26T19:18:05.253978+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"26","job":"41","status":"success","created_at":"2026-11-26T19:17:54.477425+07:00","started_at":"2026-11-26T19:18:05.32112+07:00","finished_at":"2026-11-26T19:18:06.842673+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"27","job":"42","status":"success","created_at":"2026-11-26T19:17:54.501393+07:00","started_at":"2026-11-26T19:18:07.026653+07:00","finished_at":"2026-11-26T19:18:08.089282+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"34","job":"43","status":"success","created_at":"2026-11-26T19:17:54.504418+07:00","started_at":"2026-11-26T19:18:08.25045+07:00","finished_at":"2026-11-26T19:18:09.625597+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"36","job":"44","status":"success","created_at":"2026-11-26T19:17:54.513624+07:00","started_at":"2026-11-26T19:18:09.710239+07:00","finished_at":"2026-11-26T19:18:11.001985+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"35","job":"45","status":"success","created_at":"2026-11-26T19:17:54.554138+07:00","started_at":"2026-11-26T19:18:11.137086+07:00","finished_at":"2026-11-26T19:18:12.468528+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"stress","phase":"stress","target":"a","review":"37","job":"46","status":"success","created_at":"2026-11-26T19:17:54.600115+07:00","started_at":"2026-11-26T19:18:12.598192+07:00","finished_at":"2026-11-26T19:18:14.000598+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"recovery","phase":"recovery","target":"b","review":"50","job":"47","status":"success","created_at":"2026-11-26T19:19:08.567133+07:00","started_at":"2026-11-26T19:19:08.624757+07:00","finished_at":"2026-11-26T19:19:09.392694+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"recovery","phase":"recovery","target":"a","review":"38","job":"48","status":"success","created_at":"2026-11-26T19:19:08.572237+07:00","started_at":"2026-11-26T19:19:08.625139+07:00","finished_at":"2026-11-26T19:19:09.391999+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"recovery","phase":"recovery","target":"b","review":"49","job":"49","status":"success","created_at":"2026-11-26T19:19:08.575262+07:00","started_at":"2026-11-26T19:19:09.421618+07:00","finished_at":"2026-11-26T19:19:10.123229+07:00","attempts":1,"error_code":null}
+K6_JOB {"cohort":"recovery","phase":"recovery","target":"a","review":"39","job":"50","status":"success","created_at":"2026-11-26T19:19:08.577449+07:00","started_at":"2026-11-26T19:19:09.422144+07:00","finished_at":"2026-11-26T19:19:10.136248+07:00","attempts":1,"error_code":null}
+K6_AUDIT review=19 target=a job=20 status=success
+K6_AUDIT review=20 target=a job=22 status=success
+K6_AUDIT review=21 target=a job=23 status=success
+K6_AUDIT review=22 target=a job=29 status=success
+K6_AUDIT review=23 target=a job=30 status=success
+K6_AUDIT review=24 target=a job=25 status=success
+K6_AUDIT review=25 target=a job=27 status=success
+K6_AUDIT review=26 target=a job=41 status=success
+K6_AUDIT review=27 target=a job=42 status=success
+K6_AUDIT review=28 target=a job=33 status=success
+K6_AUDIT review=29 target=a job=31 status=success
+K6_AUDIT review=30 target=a job=35 status=success
+K6_AUDIT review=31 target=a job=40 status=success
+K6_AUDIT review=32 target=a job=39 status=success
+K6_AUDIT review=33 target=a job=37 status=success
+K6_AUDIT review=34 target=a job=43 status=success
+K6_AUDIT review=35 target=a job=45 status=success
+K6_AUDIT review=36 target=a job=44 status=success
+K6_AUDIT review=37 target=a job=46 status=success
+K6_AUDIT review=38 target=a job=48 status=success
+K6_AUDIT review=39 target=a job=50 status=success
+K6_AUDIT review=40 target=b job=19 status=success
+K6_AUDIT review=41 target=b job=21 status=success
+K6_AUDIT review=42 target=b job=24 status=success
+K6_AUDIT review=43 target=b job=28 status=success
+K6_AUDIT review=44 target=b job=26 status=success
+K6_AUDIT review=45 target=b job=32 status=success
+K6_AUDIT review=46 target=b job=38 status=success
+K6_AUDIT review=47 target=b job=34 status=success
+K6_AUDIT review=48 target=b job=36 status=success
+K6_AUDIT review=49 target=b job=49 status=success
+K6_AUDIT review=50 target=b job=47 status=success

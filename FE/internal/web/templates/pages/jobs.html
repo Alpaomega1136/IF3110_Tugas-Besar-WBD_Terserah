@@ -1,0 +1,86 @@
+{{define "content"}}
+<div class="app-shell">
+    {{template "navigation" .}}
+    <main class="app-main" id="jobs-page" data-database-id="{{.DatabaseID}}" data-job-id="{{.JobID}}">
+        <h1>Migration Jobs</h1>
+        <p id="jobs-page-status" role="status">Memeriksa session dan hak akses...</p>
+        <p id="jobs-page-error" class="error-message" role="alert" hidden></p>
+        <button type="button" id="jobs-page-retry" class="button-secondary" hidden>Coba baca kembali</button>
+        <div id="jobs-workspace" hidden>
+            <section class="dashboard-panel jobs-toolbar" aria-labelledby="jobs-database-heading">
+                <div><h2 id="jobs-database-heading">Database: <span id="jobs-database-name"></span></h2>
+                    <p>Hak akses: <strong id="jobs-access"></strong></p>
+                </div>
+                <nav class="database-workspace-links" aria-label="Workspace database">
+                    <a class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/viewer">Viewer</a>
+                    <a id="jobs-drafts-link" class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/drafts" hidden>Draft</a>
+                    <a class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/history">History</a>
+                    <a class="workspace-button workspace-button--subtle" href="/databases/{{.DatabaseID}}/reviews">Review</a>
+                </nav>
+            </section>
+            <section class="dashboard-panel" aria-labelledby="jobs-detail-heading" id="jobs-detail" hidden>
+                <h2 id="jobs-detail-heading">Detail Job <span id="jobs-detail-id"></span></h2>
+                <p id="jobs-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
+                <dl class="history-metadata jobs-metadata">
+                    <dt>Status</dt><dd id="jobs-detail-state"></dd>
+                    <dt>Aksi / mode</dt><dd id="jobs-detail-mode"></dd>
+                    <dt>Draft / revisi</dt><dd id="jobs-detail-draft"></dd>
+                    <dt>Attempt / batas</dt><dd id="jobs-detail-attempts"></dd>
+                    <dt id="jobs-batch-label">Batch committed</dt><dd id="jobs-detail-batches"></dd>
+                    <dt id="jobs-row-label">Row committed</dt><dd id="jobs-detail-rows"></dd>
+                    <dt>Jadwal paling cepat</dt><dd id="jobs-detail-next"></dd>
+                    <dt>Mulai / selesai</dt><dd id="jobs-detail-times"></dd>
+                    <dt>Error code</dt><dd id="jobs-detail-error"></dd>
+                    <dt>Approval eksekusi</dt><dd><a id="jobs-detail-review">Buka review</a></dd>
+                    <dt>Job asal</dt><dd><a id="jobs-detail-parent" hidden></a><span id="jobs-detail-no-parent">-</span></dd>
+                    <dt>Job pemulihan</dt><dd><a id="jobs-detail-child" hidden></a><span id="jobs-detail-no-child">-</span></dd>
+                </dl>
+                <h3 id="jobs-attempts-heading">Riwayat Attempt</h3>
+                <p id="jobs-attempts-empty" hidden>Worker belum memulai attempt.</p>
+                <div class="users-table-wrapper" id="jobs-attempts-table" role="region" aria-labelledby="jobs-attempts-heading" tabindex="0" hidden>
+                    <table class="users-table">
+                        <thead><tr><th scope="col">Attempt</th><th scope="col">Execution ID</th><th scope="col">Status</th><th scope="col">Error code</th><th scope="col">Waktu mulai / selesai</th><th scope="col">History</th></tr></thead>
+                        <tbody id="jobs-attempts-body"></tbody>
+                    </table>
+                </div>
+                <div class="jobs-recovery" id="jobs-resume-panel" hidden>
+                    <h3>Lanjutkan batch</h3>
+                    <p>Batch yang sudah committed tetap tersimpan. Resume hanya memproses batch tersisa setelah semua leader menyetujui review baru.</p>
+                    <button type="button" id="jobs-request-resume">Ajukan review resume</button>
+                    <p id="jobs-resume-permission" class="form-help" hidden>Pengajuan resume memerlukan akses Edit.</p>
+                    <p id="jobs-resume-review" hidden><a id="jobs-resume-review-link"></a></p>
+
+                </div>
+                <div class="jobs-recovery" id="jobs-compensation-panel" hidden>
+                    <h3>Batalkan batch committed</h3>
+                    <p>Pulihkan nilai sebelum migration mulai dari batch terakhir. Perubahan data di luar migration akan diperiksa sebelum pembatalan. Setiap kelanjutan memerlukan approval seluruh leader.</p>
+                    <button type="button" id="jobs-request-compensation" class="button-secondary">Ajukan review pembatalan batch</button>
+                    <p id="jobs-compensation-permission" class="form-help" hidden>Pengajuan pembatalan memerlukan akses Edit.</p>
+                    <p id="jobs-compensation-review" hidden><a id="jobs-compensation-review-link"></a></p>
+                </div>
+                <p id="jobs-action-message" role="status" aria-live="polite" hidden></p>
+            </section>
+            <section class="dashboard-panel" aria-labelledby="jobs-list-heading">
+                <div class="draft-heading-row"><h2 id="jobs-list-heading">Daftar Job</h2><button type="button" id="jobs-refresh" class="button-secondary">Muat ulang</button></div>
+                <label class="jobs-auto-label"><input id="jobs-auto" type="checkbox" checked> Perbarui otomatis setiap 3 detik</label>
+                <p id="jobs-read-status" role="status" aria-live="polite" aria-atomic="true"></p>
+                <p id="jobs-last-checked" class="form-help"></p>
+                <p id="jobs-read-error" class="error-message" role="alert" hidden></p>
+                <p id="jobs-list-empty" hidden>Belum ada job migration.</p>
+                <div id="jobs-list-table" class="users-table-wrapper" role="region" aria-labelledby="jobs-list-heading" tabindex="0" hidden>
+                    <table class="users-table">
+                        <thead><tr><th scope="col">Job / review</th><th scope="col">Aksi</th><th scope="col">Status</th><th scope="col">Attempt</th><th scope="col">Batch committed</th><th scope="col">Row committed</th><th scope="col">Dibuat</th><th scope="col">Detail</th></tr></thead>
+                        <tbody id="jobs-list-body"></tbody>
+                    </table>
+                </div>
+                <nav id="jobs-pagination" class="cursor-pagination" aria-label="Navigasi halaman job" hidden>
+                    <button type="button" id="jobs-prev" class="button-secondary" disabled>Sebelumnya</button>
+                    <span id="jobs-page-number">1</span>
+                    <button type="button" id="jobs-next" class="button-secondary" disabled>Berikutnya</button>
+                </nav>
+            </section>
+        </div>
+    </main>
+</div>
+<script type="module" src="/static/js/jobs.js"></script>
+{{end}}

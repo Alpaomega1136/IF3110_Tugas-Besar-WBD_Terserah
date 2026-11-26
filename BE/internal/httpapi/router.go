@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"terserah/backend/internal/telemetry"
 	"time"
 )
 
@@ -31,7 +32,7 @@ func New(db Pinger, register ...func(*http.ServeMux)) http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "Endpoint not found"}})
 	})
-	return mux
+	return telemetry.HTTP(mux)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

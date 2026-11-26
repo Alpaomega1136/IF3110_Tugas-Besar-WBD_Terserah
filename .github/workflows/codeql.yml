@@ -1,0 +1,72 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - main
+      - ml2/main
+      - feat/bonus-codeql
+  pull_request:
+    branches:
+      - main
+      - ml2/main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: FE/go.mod
+          cache-dependency-path: BE/go.sum
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Build backend
+        if: matrix.language == 'go'
+        working-directory: BE
+        run: go build ./...
+
+      - name: Build frontend
+        if: matrix.language == 'go'
+        working-directory: FE
+        run: go build ./...
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+          output: ${{ runner.temp }}/codeql-results
+
+      - name: Upload SARIF evidence
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: codeql-${{ matrix.language }}-sarif
+          path: ${{ runner.temp }}/codeql-results/*.sarif
+          if-no-files-found: error
+          retention-days: 30

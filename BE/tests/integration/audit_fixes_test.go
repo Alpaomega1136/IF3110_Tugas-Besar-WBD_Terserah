@@ -127,15 +127,16 @@ func TestRecoveryIgnoresTargetSearchPath(t *testing.T) {
  CREATE FUNCTION %[1]s.set_path() RETURNS void LANGUAGE plpgsql AS $body$ BEGIN EXECUTE format('ALTER ROLE %%I SET search_path = %[1]s, pg_catalog',current_user); END; $body$;
  SELECT %[1]s.set_path(); SELECT pg_catalog.set_config('search_path','%[1]s,pg_catalog',true)`, schema)
 	base := fmt.Sprintf("/api/v1/databases/%d", target.ID)
-	createExecute := func(sql string) (runner.Draft, runner.Result) {
+	createExecute := func(sql, sqlDown string) (runner.Draft, runner.Result) {
 		t.Helper()
-		w := editor.request("POST", base+"/drafts", map[string]string{"title": "path regression", "sql": sql})
+		w := editor.request("POST", base+"/drafts", map[string]string{"title": "path regression", "sql": sql, "sql_down": sqlDown})
 		status(t, w, 201)
 		var d runner.Draft
 		if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
 			t.Fatal(err)
 		}
-		w = editor.request("POST", fmt.Sprintf("%s/drafts/%d/execute", base, d.ID), map[string]string{"revision": "1"})
+		approveDraft(t, a, editor, target.ID, d.ID, 1)
+		w = editor.executeAndWait(t, fmt.Sprintf("%s/drafts/%d/execute", base, d.ID), map[string]string{"revision": "1"})
 		status(t, w, 200)
 		var out runner.Result
 		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.Status != "success" {
@@ -143,9 +144,9 @@ func TestRecoveryIgnoresTargetSearchPath(t *testing.T) {
 		}
 		return d, out
 	}
-	d, first := createExecute(sql)
+	d, first := createExecute(sql, "DROP SCHEMA "+schema+" CASCADE")
 	// A global pg_catalog-first override would break unqualified application DDL.
-	_, second := createExecute("CREATE TABLE unqualified(id int); INSERT INTO unqualified VALUES(2)")
+	_, second := createExecute("CREATE TABLE unqualified(id int); INSERT INTO unqualified VALUES(2)", "DROP TABLE IF EXISTS unqualified")
 	if second.Version != first.Version+1 {
 		t.Fatal("version sequence changed")
 	}
@@ -168,7 +169,7 @@ func TestRecoveryIgnoresTargetSearchPath(t *testing.T) {
 	if err = json.Unmarshal(w.Body.Bytes(), &results); err != nil || len(results.Items) != 1 || results.Items[0].Status != "success" || results.Items[0].ExecutionID != first.ExecutionID {
 		t.Fatalf("real committed migration was not recovered: %s", w.Body.String())
 	}
-	w = editor.request("POST", fmt.Sprintf("%s/drafts/%d/execute", base, d.ID), map[string]string{"revision": "1"})
+	w = editor.executeAndWait(t, fmt.Sprintf("%s/drafts/%d/execute", base, d.ID), map[string]string{"revision": "1"})
 	status(t, w, 200)
 	var replay runner.Result
 	if err = json.Unmarshal(w.Body.Bytes(), &replay); err != nil || replay.ExecutionID != first.ExecutionID || replay.Status != "success" {

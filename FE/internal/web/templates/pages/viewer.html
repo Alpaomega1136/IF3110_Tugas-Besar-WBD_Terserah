@@ -6,16 +6,23 @@
         <p id="viewer-status" role="status" aria-live="polite">Memeriksa session dan hak akses...</p>
         <p id="viewer-error" class="error-message viewer-message" role="alert" hidden></p>
         <div id="viewer-workspace" hidden>
-            <section class="dashboard-panel" aria-labelledby="viewer-target-heading">
-                <h2 id="viewer-target-heading">Database: <span id="viewer-database-name"></span></h2>
-                <p>Database target: <span id="viewer-target-name"></span></p>
-                <p>Hak akses: <strong id="viewer-access"></strong></p>
+            <section class="dashboard-panel viewer-target-panel" aria-labelledby="viewer-target-heading">
+                <div class="viewer-target-info">
+                    <h2 id="viewer-target-heading">Database: <span id="viewer-database-name"></span></h2>
+                    <p>Database target: <span id="viewer-target-name"></span></p>
+                </div>
+                <p class="viewer-access-pill">Hak akses: <strong id="viewer-access"></strong></p>
             </section>
             <div class="viewer-explorer">
                 <section class="dashboard-panel" aria-labelledby="viewer-schemas-heading">
                     <div class="viewer-heading">
                         <h2 id="viewer-schemas-heading">Schemas</h2>
-                        <button id="viewer-refresh-schemas" type="button" class="button-secondary viewer-button">Muat ulang</button>
+                        <button id="viewer-refresh-schemas" type="button" class="button-secondary viewer-refresh-btn" aria-label="Muat ulang schemas" title="Muat ulang schemas">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                                <polyline points="21 3 21 9 15 9" />
+                            </svg>
+                        </button>
                     </div>
                     <p id="viewer-schemas-status" role="status" aria-live="polite" hidden>Memuat schema...</p>
                     <p id="viewer-schemas-error" class="error-message viewer-message" role="alert" hidden></p>
@@ -25,7 +32,12 @@
                 <section class="dashboard-panel" id="viewer-tables-panel" aria-labelledby="viewer-tables-heading" hidden>
                     <div class="viewer-heading">
                         <h2 id="viewer-tables-heading">Tables — <span id="viewer-selected-schema"></span></h2>
-                        <button id="viewer-refresh-tables" type="button" class="button-secondary viewer-button">Muat ulang</button>
+                        <button id="viewer-refresh-tables" type="button" class="button-secondary viewer-refresh-btn" aria-label="Muat ulang tables" title="Muat ulang tables">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                                <polyline points="21 3 21 9 15 9" />
+                            </svg>
+                        </button>
                     </div>
                     <p id="viewer-tables-status" role="status" aria-live="polite" hidden>Memuat tabel...</p>
                     <p id="viewer-tables-error" class="error-message viewer-message" role="alert" hidden></p>
@@ -36,7 +48,12 @@
             <section id="viewer-detail" class="dashboard-panel" aria-labelledby="viewer-detail-heading" hidden>
                 <div class="viewer-heading">
                     <h2 id="viewer-detail-heading">Tabel: <span id="viewer-selected-table"></span></h2>
-                    <button id="viewer-refresh-detail" type="button" class="button-secondary viewer-button">Muat ulang metadata</button>
+                    <button id="viewer-refresh-detail" type="button" class="button-secondary viewer-refresh-btn" aria-label="Muat ulang metadata" title="Muat ulang metadata">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                            <polyline points="21 3 21 9 15 9" />
+                        </svg>
+                    </button>
                 </div>
                 <p id="viewer-detail-status" role="status" aria-live="polite" hidden>Memuat metadata...</p>
                 <p id="viewer-detail-error" class="error-message viewer-message" role="alert" hidden></p>
@@ -44,7 +61,7 @@
                     <section class="viewer-subsection" aria-labelledby="viewer-columns-heading">
                         <h3 id="viewer-columns-heading">Columns</h3>
                         <p id="viewer-columns-empty" hidden>Tidak ada kolom.</p>
-                        <div class="users-table-wrapper viewer-scroll" tabindex="0" aria-label="Daftar kolom tabel">
+                        <div class="users-table-wrapper viewer-scroll" role="region" tabindex="0" aria-label="Daftar kolom tabel">
                             <table id="viewer-columns-table" class="users-table viewer-table" hidden>
                                 <thead><tr><th scope="col">Posisi</th><th scope="col">Nama</th><th scope="col">Tipe Data</th><th scope="col">Nullable</th><th scope="col">Default</th><th scope="col">Identity</th><th scope="col">Generated</th></tr></thead>
                                 <tbody id="viewer-columns-body"></tbody>
@@ -54,7 +71,7 @@
                     <section class="viewer-subsection" aria-labelledby="viewer-constraints-heading">
                         <h3 id="viewer-constraints-heading">Constraints</h3>
                         <p id="viewer-constraints-empty" hidden>Tidak ada constraint.</p>
-                        <div class="users-table-wrapper viewer-scroll" tabindex="0" aria-label="Daftar constraint tabel">
+                        <div class="users-table-wrapper viewer-scroll" role="region" tabindex="0" aria-label="Daftar constraint tabel">
                             <table id="viewer-constraints-table" class="users-table viewer-table" hidden>
                                 <thead><tr><th scope="col">Nama</th><th scope="col">Jenis</th><th scope="col">Definisi</th></tr></thead>
                                 <tbody id="viewer-constraints-body"></tbody>
@@ -64,7 +81,7 @@
                     <section class="viewer-subsection" aria-labelledby="viewer-indexes-heading">
                         <h3 id="viewer-indexes-heading">Indexes</h3>
                         <p id="viewer-indexes-empty" hidden>Tidak ada index.</p>
-                        <div class="users-table-wrapper viewer-scroll" tabindex="0" aria-label="Daftar index tabel">
+                        <div class="users-table-wrapper viewer-scroll" role="region" tabindex="0" aria-label="Daftar index tabel">
                             <table id="viewer-indexes-table" class="users-table viewer-table" hidden>
                                 <thead><tr><th scope="col">Nama</th><th scope="col">Unique</th><th scope="col">Primary</th><th scope="col">Definisi</th></tr></thead>
                                 <tbody id="viewer-indexes-body"></tbody>
@@ -85,13 +102,18 @@
                             <option value="100">100</option>
                             <option value="200">200</option>
                         </select>
-                        <button id="viewer-refresh-rows" type="button" class="button-secondary viewer-button">Muat ulang data</button>
+                        <button id="viewer-refresh-rows" type="button" class="button-secondary viewer-refresh-btn" aria-label="Muat ulang data" title="Muat ulang data">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                                <polyline points="21 3 21 9 15 9" />
+                            </svg>
+                        </button>
                     </div>
                 </div>
                 <p id="viewer-rows-status" role="status" aria-live="polite" hidden>Memuat data...</p>
                 <p id="viewer-rows-error" class="error-message viewer-message" role="alert" hidden></p>
                 <p id="viewer-rows-empty" hidden>Belum ada data pada halaman ini.</p>
-                <div class="users-table-wrapper viewer-scroll" tabindex="0" aria-label="Data baris tabel">
+                <div class="users-table-wrapper viewer-scroll" role="region" tabindex="0" aria-label="Data baris tabel">
                     <table id="viewer-rows-table" class="users-table viewer-table" hidden>
                         <thead><tr id="viewer-rows-head"></tr></thead>
                         <tbody id="viewer-rows-body"></tbody>
