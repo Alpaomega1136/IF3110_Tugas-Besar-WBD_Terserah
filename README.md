@@ -520,3 +520,20 @@ Generator mendukung pembuatan tabel biasa dengan tipe kolom sederhana dan penamb
 Pengguna dengan grant `edit` dapat memilih **Analisis Query** pada draft yang sudah disimpan. Backend mengirim `EXPLAIN (FORMAT JSON)` ke PostgreSQL dan menampilkan rencana untuk setiap statement.
 
 Hasilnya merupakan perkiraan PostgreSQL, bukan waktu eksekusi aktual: fitur ini tidak menggunakan `EXPLAIN ANALYZE`. Setiap statement diperiksa secara terpisah dalam transaksi read-only, sehingga perubahan dari statement sebelumnya tidak tersedia untuk statement berikutnya. PostgreSQL juga dapat menolak statement yang tidak mendukung `EXPLAIN`.
+
+## Bonus Milestone 2
+
+### Security: SAST dengan CodeQL
+
+Static Application Security Testing (SAST) dilakukan menggunakan CodeQL melalui GitHub Actions dengan konfigurasi pada `.github/workflows/codeql.yml`. Analisis mencakup source code Go pada backend dan frontend serta JavaScript pada frontend SPA.
+
+Hasil initial scan pada 26 November 2026, branch `feat/bonus-codeql`, commit `5f44c76`, menggunakan CodeQL 2.27.6:
+
+| Bahasa | Baris kode terukur | Temuan |
+|---|---:|---:|
+| Go | 9.811 | 0 |
+| JavaScript/TypeScript | 6.983 | 0 |
+
+Kedua analisis berhasil dan tidak menghasilkan temuan keamanan. Oleh karena itu, tidak terdapat temuan yang memerlukan perbaikan maupun scan ulang terkait perbaikan.
+
+Hasil scan bersih tidak berarti aplikasi pasti aman. Cakupan analisis, batasan, konfigurasi, dan bukti hasil scan dapat dilihat pada [Laporan CodeQL](docs/security/codeql-report.md).
