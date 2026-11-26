@@ -67,4 +67,4 @@ Jika tidak ada job lain dan server tidak direstart, status success, jumlah obser
 - Pool active/idle: `sum by (role,state) (terserah_db_pool_connections)`.
 - Batch/row per detik: `sum by (kind) (rate(terserah_migration_batches_total[5m]))` dan `sum by (kind) (rate(terserah_migration_rows_total[5m]))`.
 
-Prometheus, OpenTelemetry Collector, centralized log/trace backend dan provisioning Grafana dikonfigurasi secara terpisah dari instrumentasi ini.
+Prometheus, OpenTelemetry Collector, centralized log/trace backend dan provisioning Grafana dikonfigurasi secara terpisah dari instrumentasi ini. Lihat [panduan observability lokal](README.md).

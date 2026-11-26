@@ -523,6 +523,11 @@ Hasilnya merupakan perkiraan PostgreSQL, bukan waktu eksekusi aktual: fitur ini 
 
 ## Bonus Milestone 2
 
+### Observability
+
+Konfigurasi stack observability lokal dan langkah reproduksi tersedia pada [panduan observability](docs/observability/README.md). Definisi metrik dan batasannya tersedia pada [dokumentasi metrics](docs/observability/metrics.md).
+
+
 ### Security: SAST dengan CodeQL
 
 Static Application Security Testing (SAST) dilakukan menggunakan CodeQL melalui GitHub Actions dengan konfigurasi pada `.github/workflows/codeql.yml`. Analisis mencakup source code Go pada backend dan frontend serta JavaScript pada frontend SPA.
