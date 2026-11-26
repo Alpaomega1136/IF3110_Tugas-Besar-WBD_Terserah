@@ -18,12 +18,13 @@ export function client(phase) {
         const headers = { Origin: ORIGIN, Accept: 'application/json' };
         if (method !== 'GET' && method !== 'HEAD') headers['X-CSRF-Token'] = csrf;
         if (body !== undefined && body !== null) headers['Content-Type'] = 'application/json';
+        const tags = { ...extraTags, name, phase: typeof phase === 'function' ? phase() : phase };
         const res = http.request(method, BASE_URL + path,
             body == null ? null : JSON.stringify(body), {
                 jar, headers, redirects: 0, timeout: '15s',
-                tags: { ...extraTags, name, phase },
+                tags,
             });
-        const ok = check(res, { [`${name}: expected status`]: r => expected.includes(r.status) });
+        const ok = check(res, { [`${name}: expected status`]: r => expected.includes(r.status) }, tags);
         if (!ok) {
             let code = '';
             try { code = res.json('error.code') || ''; } catch (_) { /* no JSON */ }
