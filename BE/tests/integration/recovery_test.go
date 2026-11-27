@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"terserah/backend/internal/database"
 	"terserah/backend/internal/jobs"
 	"terserah/backend/internal/runner"
@@ -274,6 +275,16 @@ func TestRecoveryVerifiesWithRevokedActorButDoesNotRetrySQL(t *testing.T) {
 }
 
 func TestRecoveryMetadataTimeoutPreservesRetryCause(t *testing.T) {
+	t.Run("worker_deadline", func(t *testing.T) {
+		testRecoveryMetadataTimeout(t, time.Second, "")
+	})
+	t.Run("postgres_statement_timeout", func(t *testing.T) {
+		testRecoveryMetadataTimeout(t, 10*time.Second, "1s")
+	})
+}
+
+func testRecoveryMetadataTimeout(t *testing.T, jobTimeout time.Duration, statementTimeout string) {
+	t.Helper()
 	f := newQueueFixture(t)
 	ctx := context.Background()
 	input := targetInput(t, "TEST_TARGET_DATABASE_URL", "audit-timeout")
@@ -290,6 +301,17 @@ func TestRecoveryMetadataTimeoutPreservesRetryCause(t *testing.T) {
 	if before.ErrorCode == nil || *before.ErrorCode != "commit_unknown" {
 		t.Fatalf("unexpected original job: %+v", before)
 	}
+	healthy := queuedJob(t, f, f.second, "SELECT 2")
+	claim, err := f.service.Claim(ctx, "expired-test-worker", 30*time.Second)
+	if err != nil || claim == nil || claim.Job.ID != healthy.ID {
+		t.Fatalf("could not claim healthy job %d: %v", healthy.ID, err)
+	}
+	if _, err := f.a.db.Exec(ctx, `UPDATE migration_jobs SET
+ available_at=clock_timestamp()-CASE WHEN id=$1 THEN interval '2 seconds' ELSE interval '1 second' END,
+ lease_expires_at=CASE WHEN id=$2 THEN clock_timestamp()-interval '1 second' ELSE lease_expires_at END
+ WHERE id IN ($1,$2)`, j.ID, healthy.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := f.a.db.Exec(ctx, `CREATE FUNCTION audit_retry_write() RETURNS trigger LANGUAGE plpgsql AS $$
  BEGIN PERFORM pg_sleep(2); RETURN NEW; END $$;
  CREATE TRIGGER audit_retry_write BEFORE UPDATE OF status ON migration_jobs
@@ -301,8 +323,17 @@ func TestRecoveryMetadataTimeoutPreservesRetryCause(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	recoveryDue(t, f, j.ID)
-	probe, err := worker.New(f.service, runner.New(f.a.db, f.a.targets, f.a.key), worker.Options{JobTimeout: time.Second})
+	metadata := f.a.db
+	if statementTimeout != "" {
+		cfg := metadata.Config()
+		cfg.ConnConfig.RuntimeParams["statement_timeout"] = statementTimeout
+		metadata, err = pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer metadata.Close()
+	}
+	probe, err := worker.New(jobs.New(metadata), runner.New(metadata, f.a.targets, f.a.key), worker.Options{JobTimeout: jobTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,9 +341,17 @@ func TestRecoveryMetadataTimeoutPreservesRetryCause(t *testing.T) {
 		t.Fatalf("found=%v err=%v", found, err)
 	}
 	delayed := jobPhase(t, f, j, jobs.Unknown)
-	if delayed.ErrorCode == nil || *delayed.ErrorCode != *before.ErrorCode {
+	if delayed.AttemptCount != before.AttemptCount || delayed.ErrorCode == nil || *delayed.ErrorCode != *before.ErrorCode {
 		t.Fatalf("unexpected delayed job: %+v", delayed)
 	}
+	candidate, err := f.service.RecoveryCandidate(ctx)
+	if err != nil || candidate == nil || candidate.Job.ID != healthy.ID {
+		t.Fatalf("expected healthy job %d next, got %v, err=%v", healthy.ID, candidate, err)
+	}
+	if found, err := probe.RecoverNext(ctx); !found || err != nil {
+		t.Fatalf("healthy recovery did not progress: found=%v err=%v", found, err)
+	}
+	jobPhase(t, f, healthy, jobs.RetryWait)
 	if _, err = f.a.db.Exec(ctx, "DROP TRIGGER audit_retry_write ON migration_jobs"); err != nil {
 		t.Fatal(err)
 	}

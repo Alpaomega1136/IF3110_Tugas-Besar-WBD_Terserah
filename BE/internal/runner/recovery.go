@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"terserah/backend/internal/approval"
 	"terserah/backend/internal/batch"
 	"terserah/backend/internal/connections"
@@ -123,7 +124,9 @@ func (s *Service) RecoverJob(ctx context.Context, r *jobs.Recovery) error {
 	if errors.Is(err, jobs.ErrConflict) {
 		return s.deferRecovery(ctx, r, "recovery_conflict", 5*time.Second)
 	}
-	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	var pgErr *pgconn.PgError
+	if err != nil && (errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+		(errors.As(err, &pgErr) && pgErr.Code == "57014")) {
 		return s.deferRecovery(ctx, r, "metadata_unavailable", 5*time.Second)
 	}
 	return err
