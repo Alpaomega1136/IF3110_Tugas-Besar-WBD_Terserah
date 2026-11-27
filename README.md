@@ -599,18 +599,18 @@ Hasil ini memvalidasi instrumentasi pada workload lokal terkontrol, bukan jamina
 
 ### Security: SAST dengan CodeQL
 
-Static Application Security Testing (SAST) dilakukan menggunakan CodeQL melalui GitHub Actions dengan konfigurasi pada `.github/workflows/codeql.yml`. Analisis mencakup source code Go pada backend dan frontend serta JavaScript pada frontend SPA.
+Static Application Security Testing (SAST) dilakukan menggunakan CodeQL melalui GitHub Actions dengan konfigurasi pada [`.github/workflows/codeql.yml`](.github/workflows/codeql.yml). Analisis menggunakan default query suite dan mencakup Go pada backend dan frontend, JavaScript pada frontend SPA, serta script pengujian k6 pada scan final.
 
-Hasil initial scan branch `feat/bonus-codeql`, commit `5f44c76`, menggunakan CodeQL 2.27.6:
+Initial scan dan final scan dilakukan menggunakan CodeQL 2.27.6. Final scan (CodeQL #12) menganalisis branch `main` pada commit `1323527`, setelah integrasi fitur bonus k6 dan observability.
 
-| Bahasa | Baris kode terukur | Temuan |
-|---|---:|---:|
-| Go | 9.811 | 0 |
-| JavaScript/TypeScript | 6.983 | 0 |
+| Bahasa | Baris kode initial | Temuan initial | Baris kode final | Temuan final |
+|---|---:|---:|---:|---:|
+| Go | 9.811 | 0 | 10.183 | 0 |
+| JavaScript/TypeScript | 6.983 | 0 | 7.478 | 0 |
 
-Kedua analisis berhasil dan tidak menghasilkan temuan keamanan. Oleh karena itu, tidak terdapat temuan yang memerlukan perbaikan maupun scan ulang terkait perbaikan.
+Kedua job analisis pada final scan berhasil dalam total durasi workflow 1 menit 18 detik. Artifact SARIF menunjukkan `executionSuccessful: true` dan tidak memuat temuan; halaman Code scanning branch `main` menampilkan 0 open alerts dan 0 closed alerts. Seluruh 68 file Go non-test dan 43 file JavaScript/MJS pada snapshot yang diperiksa berhasil diekstraksi. Tidak terdapat temuan yang membutuhkan perbaikan, dismissal, atau penerimaan risiko.
 
-Hasil scan bersih tidak berarti aplikasi pasti aman. Cakupan analisis, batasan, konfigurasi, dan bukti hasil scan dapat dilihat pada [Laporan CodeQL](docs/security/codeql-report.md).
+Hasil scan bersih terbatas pada cakupan ekstraksi dan query yang digunakan, sehingga bukan jaminan keamanan menyeluruh. Konfigurasi, perbandingan cakupan, batasan, dan bukti kedua scan tersedia pada [Laporan CodeQL](docs/security/codeql-report.md). Bukti final mencakup [workflow berhasil](docs/security/evidence/final-scan/workflow-success.png), [Code scanning alerts](docs/security/evidence/final-scan/code-scanning-alerts.png), [SARIF Go](docs/security/evidence/final-scan/codeql-go-sarif.zip), dan [SARIF JavaScript/TypeScript](docs/security/evidence/final-scan/codeql-javascript-typescript-sarif.zip).
 
 ### Stress Testing dengan k6
 
