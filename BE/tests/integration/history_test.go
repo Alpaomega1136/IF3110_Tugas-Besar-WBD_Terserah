@@ -54,6 +54,61 @@ func TestReconcileReachesAttemptsBeyondFirstHundred(t *testing.T) {
 	}
 }
 
+func TestReconcileSavesProgressBeforeDeadline(t *testing.T) {
+	f := newQueueFixture(t)
+	ctx := context.Background()
+	const attempts = 40
+	_, err := f.a.db.Exec(ctx, `
+		INSERT INTO migration_history (database_id, version, sql, executed_by, status, execution_id, receipt_version)
+		SELECT $1, n, 'SELECT 1', $2, 'unknown', 'slow-reconcile-' || n, 1
+		FROM generate_series(1, $3::integer) AS n`, f.first, f.actor.ID, attempts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.a.db.Exec(ctx, `
+		CREATE FUNCTION test_slow_reconcile() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			PERFORM pg_sleep(0.10);
+			RETURN NEW;
+		END
+		$$;
+		CREATE TRIGGER test_slow_reconcile BEFORE UPDATE OF status ON migration_history
+		FOR EACH ROW EXECUTE FUNCTION test_slow_reconcile();`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := f.a.db.Exec(ctx, "DROP FUNCTION IF EXISTS test_slow_reconcile() CASCADE"); err != nil {
+			t.Error(err)
+		}
+	})
+
+	path := fmt.Sprintf("/api/v1/databases/%d/migrations/reconcile", f.first)
+	limited, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	w := f.editor.requestContext(limited, "POST", path, nil)
+	status(t, w, 200)
+
+	var completed int
+	err = f.a.db.QueryRow(ctx, `SELECT count(*) FROM migration_history
+		WHERE database_id = $1 AND status = 'failed' AND error_code = 'reconciled_rollback'`, f.first).Scan(&completed)
+	if err != nil || completed == 0 || completed >= attempts {
+		t.Fatalf("expected a committed prefix, got %d of %d attempts, err=%v", completed, attempts, err)
+	}
+
+	if _, err = f.a.db.Exec(ctx, "DROP TRIGGER test_slow_reconcile ON migration_history"); err != nil {
+		t.Fatal(err)
+	}
+	w = f.editor.request("POST", path, nil)
+	status(t, w, 200)
+	var response struct {
+		Results []runner.Result `json:"reconciled"`
+	}
+	if err = json.Unmarshal(w.Body.Bytes(), &response); err != nil || len(response.Results) != attempts-completed {
+		t.Fatalf("expected remaining %d attempts, got %d, err=%v", attempts-completed, len(response.Results), err)
+	}
+}
+
 func TestHistoryAndReconciliation(t *testing.T) {
 	a := newM1App(t)
 	ctx := context.Background()

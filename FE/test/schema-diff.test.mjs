@@ -33,6 +33,7 @@ test("compares two 100-table schemas with two requests and inserts SQL only on d
     globalThis.document = { getElementById: (id) => elements[id], createElement: (tag) => new Element(tag) };
     const common = Array.from({ length: 99 }, (_, i) => table("table_" + i, [column("id")]));
     const requests = [];
+    let delayedResponse;
     globalThis.fetch = async (url) => {
         const path = String(url);
         requests.push(path);
@@ -41,6 +42,7 @@ test("compares two 100-table schemas with two requests and inserts SQL only on d
         else if (path.endsWith('/current/structure')) result = { tables: [...common, table('old', [])] };
         else if (path.endsWith('/desired/structure')) result = { tables: [...common, table('items', [column('name')])] };
         else throw new Error(`Unexpected request ${path}`);
+        if (delayedResponse && path.endsWith('/desired/structure')) await delayedResponse;
         return new Response(JSON.stringify(result), { status: 200 });
     };
     let inserted = null;
@@ -57,4 +59,21 @@ test("compares two 100-table schemas with two requests and inserts SQL only on d
     elements['diff-desired'].value = 'current';
     await elements['diff-desired'].fire('change');
     assert.equal(elements['diff-use'].disabled, true);
+
+    elements['diff-desired'].value = 'desired';
+    await elements['diff-desired'].fire('change');
+    let finishRequest;
+    delayedResponse = new Promise((resolve) => { finishRequest = resolve; });
+    const pending = elements['diff-compare'].fire('click');
+    for (const schema of ['current', 'desired']) {
+        elements['diff-desired'].value = schema;
+        await elements['diff-desired'].fire('change');
+    }
+    finishRequest();
+    await pending;
+    assert.equal(elements['diff-use'].disabled, true);
+    assert.equal(elements['diff-result'].textContent, '');
+    assert.match(elements['diff-status'].textContent, /Pilihan schema berubah/);
+    await elements['diff-compare'].fire('click');
+    assert.equal(elements['diff-use'].disabled, false);
 });

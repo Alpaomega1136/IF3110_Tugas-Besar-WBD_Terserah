@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"terserah/backend/internal/auth"
 	"terserah/backend/internal/batch"
 	"terserah/backend/internal/connections"
@@ -245,18 +246,37 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 
 	results := make([]Result, 0, len(items))
 	var unresolved []int64
+	verifyCtx := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		// Leave time to persist verified results even if a target query stalls.
+		var cancel context.CancelFunc
+		verifyCtx, cancel = context.WithDeadline(ctx, deadline.Add(-time.Second))
+		defer cancel()
+	}
+	var verificationTimeout error
 	for _, item := range items {
+		if err := verifyCtx.Err(); err != nil {
+			verificationTimeout = err
+			break
+		}
 		var out Result
 		var finished *time.Time
 		var progress batch.Checkpoint
 		if item.action == "compensate" {
-			out, finished, progress, err = s.verifyCompensationPending(ctx, tx, dbID, item, item.root, item.compensationRoot)
+			out, finished, progress, err = s.verifyCompensationPending(verifyCtx, tx, dbID, item, item.root, item.compensationRoot)
 		} else if item.isBatch {
-			out, finished, progress, err = s.verifyBatchAttempt(ctx, tx, dbID, item, item.root)
+			out, finished, progress, err = s.verifyBatchAttempt(verifyCtx, tx, dbID, item, item.root)
 		} else {
-			out, finished, err = s.verifyPendingAttempt(ctx, tx, dbID, item)
+			out, finished, err = s.verifyPendingAttempt(verifyCtx, tx, dbID, item)
 		}
 		if err != nil {
+			var pgErr *pgconn.PgError
+			if ctx.Err() == nil && (errors.Is(verifyCtx.Err(), context.DeadlineExceeded) ||
+				(errors.As(err, &pgErr) && pgErr.Code == "57014")) {
+				verificationTimeout = err
+				unresolved = append(unresolved, item.version)
+				break
+			}
 			return nil, err
 		}
 		if item.execution == nil {
@@ -300,6 +320,9 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 	}
 	if err = meta.Commit(ctx); err != nil {
 		return nil, err
+	}
+	if len(results) == 0 && verificationTimeout != nil {
+		return nil, verificationTimeout
 	}
 	return results, nil
 }
