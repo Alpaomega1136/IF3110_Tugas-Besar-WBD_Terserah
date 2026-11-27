@@ -193,29 +193,72 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 		return nil, connections.ErrForbidden
 	}
 
+	// Reserve time to defer a timed-out candidate after its transaction rolls back.
+	workCtx := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		workCtx, cancel = context.WithDeadline(ctx, deadline.Add(-time.Second))
+		defer cancel()
+	}
+
+	const limit = 100
+	results := make([]Result, 0, limit)
+	checked := make([]int64, 0, limit)
+	for len(checked) < limit {
+		out, version, err := s.reconcileAttempt(workCtx, tx, dbID, checked)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			timedOut := errors.Is(workCtx.Err(), context.DeadlineExceeded) ||
+				(errors.As(err, &pgErr) && pgErr.Code == "57014")
+			if timedOut && version != 0 && ctx.Err() == nil {
+				// Move the candidate back without changing its migration status.
+				if deferErr := markReconciled(ctx, s.db, dbID, version); deferErr != nil {
+					return nil, deferErr
+				}
+			}
+			if len(results) > 0 && (timedOut || errors.Is(err, errActiveJob)) {
+				return results, nil
+			}
+			return nil, err
+		}
+		if version == 0 {
+			break
+		}
+		checked = append(checked, version)
+		results = append(results, out)
+	}
+	return results, nil
+}
+
+func (s *Service) reconcileAttempt(ctx context.Context, target pgx.Tx, dbID int64, checked []int64) (Result, int64, error) {
+	if err := ctx.Err(); err != nil {
+		return Result{}, 0, err
+	}
 	meta, err := s.db.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return Result{}, 0, err
 	}
 	defer rollback(ctx, meta)
 
+	// Recheck the lease under the metadata lock, which is released after each candidate.
 	var locked int64
 	if err = meta.QueryRow(ctx, `SELECT id FROM database_connections WHERE id = $1 FOR UPDATE`, dbID).Scan(&locked); err != nil {
-		return nil, err
+		return Result{}, 0, err
 	}
-	if err = bindTarget(ctx, meta, tx, dbID); err != nil {
-		return nil, err
+	if err = bindTarget(ctx, meta, target, dbID); err != nil {
+		return Result{}, 0, err
 	}
 	var live bool
 	err = meta.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id AND a.attempt_no=j.attempt_count
  JOIN migration_history h ON h.execution_id=a.execution_id WHERE j.database_id=$1 AND j.status='running' AND j.lease_expires_at>clock_timestamp() AND h.status='running')`, dbID).Scan(&live)
 	if err != nil {
-		return nil, err
+		return Result{}, 0, err
 	}
 	if live {
-		return nil, errActiveJob
+		return Result{}, 0, errActiveJob
 	}
-	rows, err := meta.Query(ctx, `
+	var item pendingExecution
+	err = meta.QueryRow(ctx, `
 		SELECT h.execution_id, h.version, h.sql, h.executed_by, h.receipt_version,
 		       EXISTS (
 		           SELECT 1 FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id = j.id
@@ -224,107 +267,74 @@ func (s *Service) reconcilePending(ctx context.Context, p auth.Principal, dbID i
 		       COALESCE(h.batch_root_execution_id, ''), h.action_type, COALESCE(job.compensation_root_execution_id, '')
 		FROM migration_history h
 		LEFT JOIN migration_jobs job ON job.id = h.job_id
-		WHERE h.database_id = $1 AND h.status IN ('running', 'unknown', 'partial', 'partially_reverted')
+		WHERE h.database_id = $1 AND h.version <> ALL($2::bigint[]) AND h.status IN ('running', 'unknown', 'partial', 'partially_reverted')
 		  AND NOT EXISTS (
 		      SELECT 1 FROM migration_job_attempts a WHERE a.execution_id = h.execution_id AND a.retry_scheduled
 		  )
 		ORDER BY COALESCE(h.last_reconciled_at, h.started_at), h.version
-		LIMIT 100
+		LIMIT 1
 		FOR UPDATE OF h
-	`, dbID)
-	if err != nil {
-		return nil, err
+	`, dbID, checked).Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format, &item.isBatch, &item.root, &item.action, &item.compensationRoot)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Result{}, 0, meta.Commit(ctx)
 	}
-	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (pendingExecution, error) {
-		var item pendingExecution
-		err := row.Scan(&item.execution, &item.version, &item.sql, &item.actor, &item.format, &item.isBatch, &item.root, &item.action, &item.compensationRoot)
-		return item, err
-	})
 	if err != nil {
-		return nil, err
+		return Result{}, 0, err
 	}
 
-	results := make([]Result, 0, len(items))
-	var unresolved []int64
-	verifyCtx := ctx
-	if deadline, ok := ctx.Deadline(); ok {
-		// Leave time to persist verified results even if a target query stalls.
-		var cancel context.CancelFunc
-		verifyCtx, cancel = context.WithDeadline(ctx, deadline.Add(-time.Second))
-		defer cancel()
+	var out Result
+	var finished *time.Time
+	var progress batch.Checkpoint
+	if item.action == "compensate" {
+		out, finished, progress, err = s.verifyCompensationPending(ctx, target, dbID, item, item.root, item.compensationRoot)
+	} else if item.isBatch {
+		out, finished, progress, err = s.verifyBatchAttempt(ctx, target, dbID, item, item.root)
+	} else {
+		out, finished, err = s.verifyPendingAttempt(ctx, target, dbID, item)
 	}
-	var verificationTimeout error
-	for _, item := range items {
-		if err := verifyCtx.Err(); err != nil {
-			verificationTimeout = err
-			break
+	if err != nil {
+		return Result{}, item.version, err
+	}
+	if item.execution == nil {
+		// Riwayat legacy tanpa execution ID tetap dapat direkonsiliasi.
+		_, err = meta.Exec(ctx, `UPDATE migration_history SET status=$1,error_code=$2,finished_at=$3
+			WHERE database_id=$4 AND version=$5 AND status IN ('running','unknown')`,
+			out.Status, out.ErrorCode, finished, dbID, item.version)
+	} else {
+		err = simpanHasilAttemptTx(ctx, meta, out, finished)
+	}
+	if err != nil {
+		return Result{}, item.version, err
+	}
+	final := out.Status == "success" || out.Status == "failed"
+	if item.isBatch || final {
+		outcome := jobs.Outcome{Status: jobs.Status(out.Status)}
+		if out.ErrorCode != nil {
+			outcome.ErrorCode = *out.ErrorCode
 		}
-		var out Result
-		var finished *time.Time
-		var progress batch.Checkpoint
-		if item.action == "compensate" {
-			out, finished, progress, err = s.verifyCompensationPending(verifyCtx, tx, dbID, item, item.root, item.compensationRoot)
-		} else if item.isBatch {
-			out, finished, progress, err = s.verifyBatchAttempt(verifyCtx, tx, dbID, item, item.root)
+		if item.isBatch {
+			err = jobs.ResolveBatchTx(ctx, meta, out.ExecutionID, outcome, progress.BatchNo, progress.CommittedRows)
 		} else {
-			out, finished, err = s.verifyPendingAttempt(verifyCtx, tx, dbID, item)
+			err = jobs.ResolveUnknownTx(ctx, meta, out.ExecutionID, outcome)
 		}
 		if err != nil {
-			var pgErr *pgconn.PgError
-			if ctx.Err() == nil && (errors.Is(verifyCtx.Err(), context.DeadlineExceeded) ||
-				(errors.As(err, &pgErr) && pgErr.Code == "57014")) {
-				verificationTimeout = err
-				unresolved = append(unresolved, item.version)
-				break
-			}
-			return nil, err
-		}
-		if item.execution == nil {
-			// Riwayat legacy tanpa execution ID tetap dapat direkonsiliasi.
-			_, err = meta.Exec(ctx, `UPDATE migration_history SET status=$1,error_code=$2,finished_at=$3
-				WHERE database_id=$4 AND version=$5 AND status IN ('running','unknown')`,
-				out.Status, out.ErrorCode, finished, dbID, item.version)
-		} else {
-			err = simpanHasilAttemptTx(ctx, meta, out, finished)
-		}
-		if err != nil {
-			return nil, err
-		}
-		final := out.Status == "success" || out.Status == "failed"
-		if item.isBatch || final {
-			outcome := jobs.Outcome{Status: jobs.Status(out.Status)}
-			if out.ErrorCode != nil {
-				outcome.ErrorCode = *out.ErrorCode
-			}
-			if item.isBatch {
-				err = jobs.ResolveBatchTx(ctx, meta, out.ExecutionID, outcome, progress.BatchNo, progress.CommittedRows)
-			} else {
-				err = jobs.ResolveUnknownTx(ctx, meta, out.ExecutionID, outcome)
-			}
-			if err != nil {
-				return nil, err
-			}
-		}
-		if !final {
-			unresolved = append(unresolved, item.version)
-		}
-		results = append(results, out)
-	}
-	// Put attempts without conclusive evidence behind the rest of the queue.
-	if len(unresolved) > 0 {
-		_, err = meta.Exec(ctx, `UPDATE migration_history SET last_reconciled_at = statement_timestamp()
-			WHERE database_id = $1 AND version = ANY($2)`, dbID, unresolved)
-		if err != nil {
-			return nil, err
+			return Result{}, item.version, err
 		}
 	}
-	if err = meta.Commit(ctx); err != nil {
-		return nil, err
+	if !final {
+		if err = markReconciled(ctx, meta, dbID, item.version); err != nil {
+			return Result{}, item.version, err
+		}
 	}
-	if len(results) == 0 && verificationTimeout != nil {
-		return nil, verificationTimeout
-	}
-	return results, nil
+	return out, item.version, meta.Commit(ctx)
+}
+
+func markReconciled(ctx context.Context, db interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}, dbID, version int64) error {
+	_, err := db.Exec(ctx, `UPDATE migration_history SET last_reconciled_at = statement_timestamp()
+		WHERE database_id = $1 AND version = $2 AND status IN ('running','unknown','partial','partially_reverted')`, dbID, version)
+	return err
 }
 
 func (s *Service) verifyPendingAttempt(ctx context.Context, targetTx pgx.Tx, dbID int64, item pendingExecution) (Result, *time.Time, error) {

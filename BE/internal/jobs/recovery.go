@@ -16,6 +16,7 @@ type Recovery struct {
 	Version                                        int64  `json:"-"`
 	HistoryStatus                                  Status `json:"-"`
 	HistoryCode                                    string `json:"-"`
+	AttemptCode                                    string `json:"-"`
 	CompensationRoot                               string `json:"-"`
 }
 
@@ -37,9 +38,9 @@ func (s *Service) RecoveryCandidate(ctx context.Context) (*Recovery, error) {
 	var version *int64
 	var state, code *string
 	var hash string
-	err = tx.QueryRow(ctx, `SELECT a.execution_id,j.sql_snapshot,j.trace_parent,COALESCE(j.batch_root_execution_id,''),j.snapshot_hash,COALESCE(j.compensation_root_execution_id,''),h.version,h.status,h.error_code
+	err = tx.QueryRow(ctx, `SELECT a.execution_id,j.sql_snapshot,j.trace_parent,COALESCE(j.batch_root_execution_id,''),j.snapshot_hash,COALESCE(j.compensation_root_execution_id,''),h.version,h.status,h.error_code,COALESCE(a.error_code,h.error_code,'')
  FROM migration_jobs j JOIN migration_job_attempts a ON a.job_id=j.id AND a.attempt_no=j.attempt_count
- LEFT JOIN migration_history h ON h.execution_id=a.execution_id WHERE j.id=$1`, j.ID).Scan(&r.ExecutionID, &r.SQL, &r.TraceParent, &r.RootExecutionID, &hash, &r.CompensationRoot, &version, &state, &code)
+ LEFT JOIN migration_history h ON h.execution_id=a.execution_id WHERE j.id=$1`, j.ID).Scan(&r.ExecutionID, &r.SQL, &r.TraceParent, &r.RootExecutionID, &hash, &r.CompensationRoot, &version, &state, &code, &r.AttemptCode)
 	if err != nil {
 		return nil, err
 	}
@@ -68,12 +69,12 @@ func (s *Service) RecoveryCandidate(ctx context.Context) (*Recovery, error) {
 }
 
 // DeferRecovery changes probe timing only; it never releases the target or retries SQL.
-func (s *Service) DeferRecovery(ctx context.Context, r *Recovery, code string, delay time.Duration) error {
-	if r == nil || delay < time.Second || delay > time.Minute || (code != "" && !codePattern.MatchString(code)) {
+func (s *Service) DeferRecovery(ctx context.Context, r *Recovery, delay time.Duration) error {
+	if r == nil || delay < time.Second || delay > time.Minute {
 		return ErrInvalid
 	}
-	_, err := s.db.Exec(ctx, `UPDATE migration_jobs SET available_at=clock_timestamp()+$3::bigint*interval '1 millisecond',error_code=CASE WHEN $4='' THEN error_code ELSE $4 END
- WHERE id=$1 AND attempt_count=$2 AND (status IN ('unknown','recovering') OR (status='running' AND lease_expires_at<=clock_timestamp()))`, r.Job.ID, r.Job.AttemptCount, delay.Milliseconds(), code)
+	_, err := s.db.Exec(ctx, `UPDATE migration_jobs SET available_at=clock_timestamp()+$3::bigint*interval '1 millisecond'
+ WHERE id=$1 AND attempt_count=$2 AND (status IN ('unknown','recovering') OR (status='running' AND lease_expires_at<=clock_timestamp()))`, r.Job.ID, r.Job.AttemptCount, delay.Milliseconds())
 	return err
 }
 
@@ -87,13 +88,13 @@ func RetryCause(r *Recovery) string {
 		}
 		return ""
 	}
-	if r.Job.ErrorCode != nil && Transient(*r.Job.ErrorCode) {
-		return *r.Job.ErrorCode
+	if Transient(r.AttemptCode) {
+		return r.AttemptCode
 	}
-	if r.Job.Status == Running || r.Job.ErrorCode == nil {
+	if r.Job.Status == Running || r.AttemptCode == "" {
 		return "worker_interrupted"
 	}
-	switch *r.Job.ErrorCode {
+	switch r.AttemptCode {
 	case "commit_unknown", "ledger_unavailable", "progress_unavailable", "lease_lost":
 		return "worker_interrupted"
 	}

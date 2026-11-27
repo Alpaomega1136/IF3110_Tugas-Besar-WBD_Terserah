@@ -433,3 +433,43 @@ func TestLostLeaseCannotCommitOrUnblockTarget(t *testing.T) {
 		t.Fatal("unresolved lease stopped blocking target", err)
 	}
 }
+
+func TestWorkerRecoveryTimeoutDefersJobAndProbesNextTarget(t *testing.T) {
+	f := newQueueFixture(t)
+	ctx := context.Background()
+	stalled := queuedJob(t, f, f.first, "SELECT 1")
+	healthy := queuedJob(t, f, f.second, "SELECT 2")
+	for _, j := range []jobs.Job{stalled, healthy} {
+		claim, err := f.service.Claim(ctx, "audit-expired-worker", 30*time.Second)
+		if err != nil || claim == nil || claim.Job.ID != j.ID {
+			t.Fatalf("could not claim job %d: %v", j.ID, err)
+		}
+	}
+	_, err := f.a.db.Exec(ctx, `UPDATE migration_jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id IN ($1,$2)`, stalled.ID, healthy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	_, err = f.a.db.Exec(ctx, `UPDATE database_connections SET host='127.0.0.1',port=$1 WHERE id=$2`, listener.Addr().(*net.TCPAddr).Port, f.first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := worker.New(f.service, runner.New(f.a.db, f.a.targets, f.a.key), worker.Options{JobTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, err := w.RecoverNext(ctx); !found || err != nil {
+		t.Fatalf("expected stalled recovery to be deferred, found=%v err=%v", found, err)
+	}
+	next, err := f.service.RecoveryCandidate(ctx)
+	if err != nil || next == nil || next.Job.ID != healthy.ID {
+		t.Fatalf("expected healthy recovery job %d next, got %v, err=%v", healthy.ID, next, err)
+	}
+	if found, err := w.RecoverNext(ctx); !found || err != nil {
+		t.Fatalf("healthy recovery did not progress, found=%v err=%v", found, err)
+	}
+}

@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"terserah/backend/internal/database"
 	"terserah/backend/internal/jobs"
+	"terserah/backend/internal/runner"
+	"terserah/backend/internal/worker"
 )
 
 func recoveryDue(t *testing.T, f *queueFixture, id int64) {
@@ -268,5 +270,62 @@ func TestRecoveryVerifiesWithRevokedActorButDoesNotRetrySQL(t *testing.T) {
 	var count int
 	if err = target.QueryRow(ctx, `SELECT count(*) FROM _terserah.migration_receipts WHERE execution_id=$1`, c.ExecutionID).Scan(&count); err != nil || count != 0 {
 		t.Fatal("recovery executed actor SQL", err)
+	}
+}
+
+func TestRecoveryMetadataTimeoutPreservesRetryCause(t *testing.T) {
+	f := newQueueFixture(t)
+	ctx := context.Background()
+	input := targetInput(t, "TEST_TARGET_DATABASE_URL", "audit-timeout")
+	port := commitProxy(t, net.JoinHostPort(input.Host, strconv.Itoa(input.Port)), true, false)
+	if _, err := f.a.db.Exec(ctx, `UPDATE database_connections SET port=$1 WHERE id=$2`, port, f.first); err != nil {
+		t.Fatal(err)
+	}
+	j := queuedJob(t, f, f.first, "SELECT 1")
+	w := queueWorker(t, f)
+	if _, err := w.ProcessNext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before := jobPhase(t, f, j, jobs.Unknown)
+	if before.ErrorCode == nil || *before.ErrorCode != "commit_unknown" {
+		t.Fatalf("unexpected original job: %+v", before)
+	}
+	if _, err := f.a.db.Exec(ctx, `CREATE FUNCTION audit_retry_write() RETURNS trigger LANGUAGE plpgsql AS $$
+ BEGIN PERFORM pg_sleep(2); RETURN NEW; END $$;
+ CREATE TRIGGER audit_retry_write BEFORE UPDATE OF status ON migration_jobs
+ FOR EACH ROW WHEN (OLD.status = 'unknown' AND NEW.status = 'retry_wait') EXECUTE FUNCTION audit_retry_write();`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := f.a.db.Exec(ctx, "DROP FUNCTION IF EXISTS audit_retry_write() CASCADE"); err != nil {
+			t.Error(err)
+		}
+	})
+	recoveryDue(t, f, j.ID)
+	probe, err := worker.New(f.service, runner.New(f.a.db, f.a.targets, f.a.key), worker.Options{JobTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, err := probe.RecoverNext(ctx); !found || err != nil {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	delayed := jobPhase(t, f, j, jobs.Unknown)
+	if delayed.ErrorCode == nil || *delayed.ErrorCode != *before.ErrorCode {
+		t.Fatalf("unexpected delayed job: %+v", delayed)
+	}
+	if _, err = f.a.db.Exec(ctx, "DROP TRIGGER audit_retry_write ON migration_jobs"); err != nil {
+		t.Fatal(err)
+	}
+	// An earlier server could have overwritten the job code, while the attempt still has the original cause.
+	if _, err = f.a.db.Exec(ctx, "UPDATE migration_jobs SET error_code='metadata_unavailable' WHERE id=$1", j.ID); err != nil {
+		t.Fatal(err)
+	}
+	recoveryDue(t, f, j.ID)
+	if found, err := w.RecoverNext(ctx); !found || err != nil {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	next := jobPhase(t, f, j, jobs.RetryWait)
+	if next.AttemptCount != 1 || next.ErrorCode == nil || *next.ErrorCode != "worker_interrupted" {
+		t.Fatalf("rollback proof did not schedule retry for the original attempt: %+v", next)
 	}
 }
