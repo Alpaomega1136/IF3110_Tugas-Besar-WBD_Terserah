@@ -6,6 +6,8 @@ const databaseId = byId("viewer-page").dataset.databaseId;
 const endpoint = `/api/v1/databases/${encodeURIComponent(databaseId)}`;
 const workspace = byId("viewer-workspace");
 const state = { schema: null, table: null, schemas: [], tables: [], offset: 0, limit: 50 };
+const controller = new AbortController();
+const requestOptions = { signal: controller.signal };
 
 let schemaRun = 0;
 let tableRun = 0;
@@ -40,11 +42,20 @@ function errorText(error, fallback) {
     return error.message || fallback;
 }
 
-function revokeAccess(message) {
+function invalidateRequests() {
     schemaLoadRun++;
     schemaRun++;
     tableRun++;
     rowsRun++;
+}
+
+window.__spaCleanup = () => {
+    invalidateRequests();
+    controller.abort();
+};
+
+function revokeAccess(message) {
+    invalidateRequests();
     workspace.hidden = true;
     byId("viewer-rows-body").replaceChildren();
     byId("viewer-rows-head").replaceChildren();
@@ -155,7 +166,7 @@ async function loadSchemas(initial = false) {
     byId("viewer-schemas-list").replaceChildren();
     byId("viewer-schemas-empty").hidden = true;
     try {
-        const result = await authenticatedRequest(`${endpoint}/schemas`);
+        const result = await authenticatedRequest(`${endpoint}/schemas`, requestOptions);
         if (request !== schemaLoadRun) return;
         if (!Array.isArray(result?.schemas) || !result.schemas.every(validName)) {
             throw new Error("Format daftar schema tidak valid.");
@@ -186,7 +197,7 @@ async function selectSchema(name) {
     byId("viewer-refresh-tables").disabled = true;
     renderSchemas();
     try {
-        const result = await authenticatedRequest(`${endpoint}/schemas/${encodeURIComponent(name)}/tables`);
+        const result = await authenticatedRequest(`${endpoint}/schemas/${encodeURIComponent(name)}/tables`, requestOptions);
         if (request !== schemaRun) return;
         if (!Array.isArray(result?.tables) || !result.tables.every((entry) => validName(entry?.name) && ["table", "partitioned_table"].includes(entry.kind))) {
             throw new Error("Format daftar tabel tidak valid.");
@@ -260,7 +271,7 @@ async function loadMetadata() {
     clearRows();
     const path = `${endpoint}/schemas/${encodeURIComponent(schema)}/tables/${encodeURIComponent(table)}`;
     try {
-        const result = await authenticatedRequest(path);
+        const result = await authenticatedRequest(path, requestOptions);
         if (request !== tableRun) return;
         if (!validMetadata(result)) throw new Error("Format metadata tabel tidak valid.");
         renderMetadata(result);
@@ -335,7 +346,7 @@ async function loadRows() {
     byId("viewer-rows-status").hidden = false;
     const path = `${endpoint}/schemas/${encodeURIComponent(schema)}/tables/${encodeURIComponent(table)}/rows`;
     try {
-        const result = await authenticatedRequest(`${path}?limit=${limit}&offset=${offset}`);
+        const result = await authenticatedRequest(`${path}?limit=${limit}&offset=${offset}`, requestOptions);
         if (active !== rowsRun) return;
         if (!validRows(result)) throw new Error("Format data baris tidak valid.");
         renderRows(result);
@@ -355,9 +366,10 @@ async function initialize() {
     workspace.hidden = true;
     try {
         const user = await requireAuthenticatedUser();
-        if (!user) return;
+        if (!user || controller.signal.aborted) return;
         if (!positiveInt64(databaseId)) throw new Error("ID database tidak valid.");
-        const data = await authenticatedRequest("/api/v1/databases");
+        const data = await authenticatedRequest("/api/v1/databases", requestOptions);
+        if (controller.signal.aborted) return;
         if (!Array.isArray(data?.databases)) throw new Error("Format database tidak valid.");
         const database = data.databases.find((entry) => entry.id === databaseId);
         if (!database || !["view", "edit"].includes(database.access)) {
@@ -368,14 +380,14 @@ async function initialize() {
         byId("viewer-access").textContent = database.access === "edit" ? "View + Edit" : "View Only";
         await loadSchemas(true);
     } catch (error) {
-        handleError(error, "viewer-error", "Gagal membuka database viewer.");
+        if (!controller.signal.aborted) handleError(error, "viewer-error", "Gagal membuka database viewer.");
     } finally {
-        byId("viewer-status").hidden = true;
+        if (!controller.signal.aborted) byId("viewer-status").hidden = true;
     }
 }
 
 byId("viewer-refresh-schemas").addEventListener("click", () => loadSchemas());
-byId("viewer-refresh-tables").addEventListener("click", () => state.schema ? selectSchema(state.schema) : undefined);
+byId("viewer-refresh-tables").addEventListener("click", () => selectSchema(state.schema));
 byId("viewer-refresh-detail").addEventListener("click", () => loadMetadata());
 byId("viewer-refresh-rows").addEventListener("click", () => loadRows());
 byId("viewer-row-limit").addEventListener("change", () => {

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"terserah/backend/internal/approval"
 	"terserah/backend/internal/batch"
 	"terserah/backend/internal/connections"
@@ -123,12 +124,23 @@ func (s *Service) RecoverJob(ctx context.Context, r *jobs.Recovery) error {
 	if errors.Is(err, jobs.ErrConflict) {
 		return s.deferRecovery(ctx, r, "recovery_conflict", 5*time.Second)
 	}
+	var pgErr *pgconn.PgError
+	if err != nil && (errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+		(errors.As(err, &pgErr) && pgErr.Code == "57014")) {
+		return s.deferRecovery(ctx, r, "metadata_unavailable", 5*time.Second)
+	}
 	return err
 }
 
 func (s *Service) deferRecovery(ctx context.Context, r *jobs.Recovery, code string, delay time.Duration) error {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return ctx.Err()
+	}
+	// Recording backoff must still work after the recovery query's deadline.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	defer cancel()
 	telemetry.Event(ctx, "recovery_deferred", "actor_id", r.Job.RequestedBy, "database_id", r.Job.DatabaseID, "job_id", r.Job.ID, "execution_id", r.ExecutionID, "error_code", code, "delay_ms", delay.Milliseconds())
-	return jobs.New(s.db).DeferRecovery(ctx, r, code, delay)
+	return jobs.New(s.db).DeferRecovery(ctx, r, delay)
 }
 
 func (s *Service) bindRecoveryTarget(ctx context.Context, target pgx.Tx, r *jobs.Recovery) error {

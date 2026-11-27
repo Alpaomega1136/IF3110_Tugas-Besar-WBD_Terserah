@@ -423,6 +423,7 @@ Semua endpoint API diakses oleh browser melalui `http://localhost:3000/api/v1/..
 |---|---|---|
 | GET | `/api/v1/databases/{id}/schemas` | Daftar schema |
 | GET | `/api/v1/databases/{id}/schemas/{schema}/tables` | Daftar tabel |
+| GET | `/api/v1/databases/{id}/schemas/{schema}/structure` | Struktur tabel dan kolom untuk Schema Diff |
 | GET | `/api/v1/databases/{id}/schemas/{schema}/tables/{table}` | Metadata tabel |
 | GET | `/api/v1/databases/{id}/schemas/{schema}/tables/{table}/rows` | Data tabel dan pagination |
 | GET / POST | `/api/v1/databases/{id}/drafts` | Daftar / tambah draft |
@@ -445,7 +446,7 @@ Semua endpoint API diakses oleh browser melalui `http://localhost:3000/api/v1/..
 | POST | `/api/v1/databases/{id}/migration-executions/{executionID}/rollback` | Antrekan rollback yang disetujui |
 | POST | `/api/v1/databases/{id}/migration-executions/{executionID}/forward` | Antrekan forward yang disetujui |
 | POST | `/api/v1/databases/{id}/migration-executions/{executionID}/compensate` | Antrekan kompensasi batch yang disetujui |
-| POST | `/api/v1/databases/{id}/migrations/reconcile` | Reconcile status ambigu |
+| POST | `/api/v1/databases/{id}/migrations/reconcile` | Periksa receipt hingga 100 eksekusi yang belum pasti. Pemeriksaan berikutnya mendahulukan eksekusi yang paling lama menunggu. |
 
 Daftar review menerima `limit`, `before`, `status`, dan `only_actionable`. Gunakan nilai `next_before` dari respons sebagai cursor berikutnya. Halaman pertama dengan `only_actionable=true` juga mengembalikan `total` review yang cocok. History menerima `limit`, `before`, dan `hide_rollback` untuk pagination dan penyaringan pasangan rollback.
 
@@ -513,7 +514,7 @@ Hasil tersebut menunjukkan bahwa UPDATE tunggal pada dataset pengujian membutuhk
 
 Pada halaman Draft, pengguna dengan grant `edit` dapat membandingkan dua schema dalam database target yang sama. Aplikasi menampilkan perbedaan dan kandidat SQL yang dapat dimasukkan ke draft baru; proses perbandingan tidak menjalankan SQL.
 
-Generator mendukung pembuatan tabel biasa dengan tipe kolom sederhana dan penambahan kolom nullable tanpa default. Penghapusan, perubahan kolom yang sudah ada, constraint, index, dan atribut atau tipe tertentu tidak dibuat otomatis. Perbandingan dibatasi hingga 100 tabel per schema. Tinjau peringatan dan SQL sebelum menjalankan migration.
+Generator mendukung pembuatan tabel biasa dengan tipe kolom sederhana dan penambahan kolom nullable tanpa default. Penghapusan, perubahan kolom yang sudah ada, constraint, index, dan atribut atau tipe tertentu tidak dibuat otomatis. Setiap perbandingan mengambil struktur kedua schema dengan satu permintaan per schema. Batas per schema adalah 100 tabel dan 4 MiB metadata. Tinjau peringatan dan SQL sebelum menjalankan migration.
 
 ### Query Execution Plan Analysis
 

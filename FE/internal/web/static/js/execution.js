@@ -1,12 +1,11 @@
-const int64Pattern = /^[1-9][0-9]*$/;
-const validVersion = (value) => typeof value === "string" && int64Pattern.test(value) &&
-    BigInt(value) <= 9223372036854775807n;
-const validCount = (value) => typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value) && BigInt(value) <= 9223372036854775807n;
+import { positiveInt64 } from "./pagination.js";
+
+const validCount = (value) => value === "0" || positiveInt64(value);
 const validProgress = (item) => ["committed_batches", "committed_rows"].every((field) => item[field] == null || validCount(item[field]));
 
 export function parseExecutionResult(result) {
     if (!result || typeof result.execution_id !== "string" || !result.execution_id ||
-        !validVersion(result.version) ||
+        !positiveInt64(result.version) ||
         !["success", "failed", "running", "unknown", "partial", "partially_reverted"].includes(result.status) || !validProgress(result) ||
         (result.error_code != null && typeof result.error_code !== "string")) {
         throw new Error("Respons eksekusi tidak valid. Hasil tidak dapat dipastikan; periksa History.");
@@ -16,10 +15,10 @@ export function parseExecutionResult(result) {
 
 export function parseJobResponse(response, databaseID) {
     const job = response?.job;
-    if (!job || !validVersion(job.id) || job.database_id !== databaseID ||
+    if (!job || !positiveInt64(job.id) || job.database_id !== databaseID ||
         !["queued", "running", "success", "failed", "unknown", "partial", "recovering", "retry_wait", "resumed", "partially_reverted"].includes(job.status) || !validProgress(job) ||
-        ["parent_job_id", "resumed_by_job_id"].some((field) => job[field] != null && !validVersion(job[field])) ||
-        (job.status === "resumed" && !validVersion(job.resumed_by_job_id)) ||
+        ["parent_job_id", "resumed_by_job_id"].some((field) => job[field] != null && !positiveInt64(job[field])) ||
+        (job.status === "resumed" && !positiveInt64(job.resumed_by_job_id)) ||
         (job.target_execution_id != null && (typeof job.target_execution_id !== "string" || !job.target_execution_id)) ||
         (job.available_at != null && (typeof job.available_at !== "string" || !Number.isFinite(Date.parse(job.available_at)))) ||
         ["attempt_count", "max_attempts"].some((field) => job[field] != null && (!Number.isSafeInteger(job[field]) || job[field] < (field === "max_attempts" ? 1 : 0))) ||

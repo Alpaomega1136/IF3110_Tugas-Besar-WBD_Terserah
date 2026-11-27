@@ -25,7 +25,7 @@ export function compareSchemas(currentName, current, desired) {
             warnings.push(`Tabel ${table.name} bukan tabel biasa; tinjau manual.`);
             continue;
         }
-        if (table.constraints.length || table.indexes.length || existing?.constraints.length || existing?.indexes.length) {
+        if (table.has_constraints || table.has_indexes || existing?.has_constraints || existing?.has_indexes) {
             warnings.push(`Constraint dan index pada ${table.name} tidak dibandingkan atau dibuat; tinjau manual.`);
         }
         if (!existing) {
@@ -61,17 +61,13 @@ export function compareSchemas(currentName, current, desired) {
 }
 
 async function readSchema(base, schema) {
-    const path = `${base}/schemas/${encodeURIComponent(schema)}/tables`;
-    const list = await authenticatedRequest(path);
-    if (!Array.isArray(list.tables) || list.tables.length > 100) throw new Error("Daftar tabel tidak valid atau melebihi 100 tabel.");
-    return Promise.all(list.tables.map(async (table) => {
-        if (typeof table.name !== "string") throw new Error("Nama tabel tidak valid.");
-        const metadata = await authenticatedRequest(`${path}/${encodeURIComponent(table.name)}`);
-        if (!Array.isArray(metadata.columns) || !Array.isArray(metadata.constraints) || !Array.isArray(metadata.indexes)) {
-            throw new Error("Metadata tabel tidak lengkap.");
-        }
-        return { ...table, ...metadata };
-    }));
+    const result = await authenticatedRequest(`${base}/schemas/${encodeURIComponent(schema)}/structure`);
+    if (!Array.isArray(result?.tables) || !result.tables.every((table) =>
+        typeof table?.name === "string" && typeof table.kind === "string" && Array.isArray(table.columns) &&
+        typeof table.has_constraints === "boolean" && typeof table.has_indexes === "boolean")) {
+        throw new Error("Metadata schema tidak lengkap.");
+    }
+    return result.tables;
 }
 
 export function initializeSchemaDiff(databaseId, useSQL) {
@@ -84,7 +80,14 @@ export function initializeSchemaDiff(databaseId, useSQL) {
     const output = document.getElementById("diff-result");
     const base = `/api/v1/databases/${encodeURIComponent(databaseId)}`;
     let sql = "";
-    const invalidate = () => { sql = ""; use.disabled = true; output.textContent = ""; };
+    let selection = 0;
+    const invalidate = () => {
+        selection++;
+        sql = "";
+        use.disabled = true;
+        output.textContent = "";
+        if (compare.disabled) status.textContent = "Pilihan schema berubah. Jalankan perbandingan kembali.";
+    };
     current.addEventListener("change", invalidate);
     desired.addEventListener("change", invalidate);
     use.addEventListener("click", async () => { if (sql) await useSQL(sql); });
@@ -96,13 +99,11 @@ export function initializeSchemaDiff(databaseId, useSQL) {
         }
         compare.disabled = true;
         status.textContent = "Membandingkan schema...";
+        const request = selection;
         const currentSchema = current.value, desiredSchema = desired.value;
         try {
             const [before, after] = await Promise.all([readSchema(base, currentSchema), readSchema(base, desiredSchema)]);
-            if (current.value !== currentSchema || desired.value !== desiredSchema) {
-                status.textContent = "Pilihan schema berubah. Jalankan perbandingan kembali.";
-                return;
-            }
+            if (request !== selection) return;
             const result = compareSchemas(currentSchema, before, after);
             sql = result.sql;
             output.textContent = ["Perubahan:", ...(result.changes.length ? result.changes : ["Tidak ada tabel atau kolom baru."]),
@@ -110,7 +111,7 @@ export function initializeSchemaDiff(databaseId, useSQL) {
             use.disabled = !sql;
             status.textContent = "Perbandingan selesai. Tinjau peringatan dan SQL sebelum membuat draft.";
         } catch (error) {
-            status.textContent = error.message || "Gagal membaca schema.";
+            if (request === selection) status.textContent = error.message || "Gagal membaca schema.";
         } finally { compare.disabled = false; }
     });
     authenticatedRequest(`${base}/schemas`).then((result) => {

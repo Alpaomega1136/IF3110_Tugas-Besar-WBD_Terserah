@@ -45,38 +45,31 @@ func New(queue *jobs.Service, executor *runner.Service, options Options) (*Worke
 	return &Worker{queue: queue, executor: executor, id: hex.EncodeToString(id[:]), options: options}, nil
 }
 
-// Run waits for every active execution to stop before callers close metadata pools.
+// Run keeps recovery probes off the execution slots and waits for both on shutdown.
 func (w *Worker) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	for i := 0; i < w.options.Concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for ctx.Err() == nil {
-				if _, err := w.RecoverNext(ctx); err != nil && ctx.Err() == nil {
-					telemetry.Event(ctx, "worker_recovery_failed", "error_code", "recovery_unavailable")
-				}
-				if ctx.Err() != nil {
-					return
-				}
-				found, err := w.ProcessNext(ctx)
-				if err != nil {
-					telemetry.Event(ctx, "worker_dispatch_failed", "error_code", "dispatch_unavailable")
-				}
-				if found && err == nil {
-					continue
-				}
-				timer := time.NewTimer(250 * time.Millisecond)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					return
-				case <-timer.C:
-				}
-			}
-		}()
+	wg.Go(func() { poll(ctx, "recovery", w.RecoverNext) })
+	for range w.options.Concurrency {
+		wg.Go(func() { poll(ctx, "dispatch", w.ProcessNext) })
 	}
 	wg.Wait()
+}
+
+func poll(ctx context.Context, operation string, next func(context.Context) (bool, error)) {
+	for ctx.Err() == nil {
+		found, err := next(ctx)
+		if err != nil && ctx.Err() == nil {
+			telemetry.Event(ctx, "worker_"+operation+"_failed", "error_code", operation+"_unavailable")
+		}
+		if found && err == nil {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 func (w *Worker) RecoverNext(ctx context.Context) (bool, error) {
