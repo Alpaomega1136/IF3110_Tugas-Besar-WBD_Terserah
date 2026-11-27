@@ -17,6 +17,7 @@ import (
 	"terserah/backend/internal/batch"
 	"terserah/backend/internal/connections"
 	"terserah/backend/internal/jobs"
+	"terserah/backend/internal/metrics"
 	"terserah/backend/internal/telemetry"
 )
 
@@ -37,6 +38,7 @@ func (s *Service) ExecuteJob(ctx context.Context, c *jobs.Claim) (Result, error)
 	}
 	// Closing the hijacked connection releases every session lock; it never returns to a pool.
 	conn := acquired.Hijack()
+	defer metrics.TrackHijacked()()
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -45,6 +47,7 @@ func (s *Service) ExecuteJob(ctx context.Context, c *jobs.Claim) (Result, error)
 	lockCtx, lockSpan := telemetry.Start(ctx, "migration.lock")
 	started := time.Now()
 	_, err = conn.Exec(lockCtx, `SET statement_timeout='5min'; SET lock_timeout='2s'; SET standard_conforming_strings=on; SELECT pg_catalog.pg_advisory_lock(3110003)`)
+	metrics.ObserveLock("session", err, time.Since(started))
 	if err != nil {
 		telemetry.Failure(lockSpan, executionCode(err))
 		lockSpan.End()
@@ -53,10 +56,10 @@ func (s *Service) ExecuteJob(ctx context.Context, c *jobs.Claim) (Result, error)
 	lockSpan.End()
 	telemetry.Event(ctx, "target_lock_acquired", "job_id", c.Job.ID, "database_id", c.Job.DatabaseID, "wait_ms", time.Since(started).Milliseconds())
 	if c.Job.ActionType == "compensate" {
-		return s.runCompensation(ctx, pool, conn, c)
+		return s.runCompensation(ctx, pool.Pool, conn, c)
 	}
 	if c.Job.ExecutionMode == "batch" {
-		return s.runBatch(ctx, pool, conn, c)
+		return s.runBatch(ctx, pool.Pool, conn, c)
 	}
 	targetTx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -66,7 +69,9 @@ func (s *Service) ExecuteJob(ctx context.Context, c *jobs.Claim) (Result, error)
 	path, err := internalSearchPath(ctx, targetTx)
 	// Transaction locks cannot be released by migration SQL calling pg_advisory_unlock_all.
 	if err == nil {
+		lockStarted := time.Now()
 		_, err = targetTx.Exec(ctx, `SELECT pg_catalog.pg_advisory_xact_lock(3110003); SELECT pg_catalog.pg_advisory_xact_lock(3110004)`)
+		metrics.ObserveLock("transaction", err, time.Since(lockStarted))
 	}
 	if err == nil {
 		err = protectedHistory(ctx, targetTx)

@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"terserah/backend/internal/batch"
 	"terserah/backend/internal/jobs"
+	"terserah/backend/internal/metrics"
 	"terserah/backend/internal/telemetry"
 )
 
@@ -26,7 +27,9 @@ func beginBatch(ctx context.Context, pool *pgxpool.Pool, isolation pgx.TxIsoLeve
 	if err != nil {
 		return nil, err
 	}
+	lockStarted := time.Now()
 	_, err = tx.Exec(ctx, `SET LOCAL statement_timeout='5min'; SET LOCAL lock_timeout='2s'; SET LOCAL standard_conforming_strings=on; SET LOCAL search_path=pg_catalog,pg_temp; SELECT pg_catalog.pg_advisory_xact_lock(3110004)`)
+	metrics.ObserveLock("batch", err, time.Since(lockStarted))
 	if err != nil {
 		rollback(ctx, tx)
 		return nil, err
@@ -291,6 +294,7 @@ func (s *Service) executeBatch(ctx context.Context, pool *pgxpool.Pool, guard *p
 		telemetry.Failure(span, "batch_commit_failed")
 		return cp, false, err
 	}
+	metrics.BatchCommitted(false, cp.RowCount)
 	span.SetAttributes(attribute.Int64("batch.rows", cp.RowCount))
 	return cp, last, nil
 }

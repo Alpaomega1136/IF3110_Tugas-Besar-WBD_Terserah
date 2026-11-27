@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"terserah/backend/internal/jobs"
+	"terserah/backend/internal/metrics"
 	"terserah/backend/internal/runner"
 	"terserah/backend/internal/telemetry"
 )
@@ -93,6 +94,11 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 	if err != nil || c == nil {
 		return false, err
 	}
+	waitFrom := c.Job.CreatedAt
+	if c.Job.AttemptCount > 1 {
+		waitFrom = c.Job.AvailableAt
+	}
+	metrics.ObserveQueue(c.Job.AttemptCount > 1, time.Since(waitFrom))
 	ctx, span := telemetry.Start(telemetry.Restore(ctx, c.TraceParent), "migration.worker", trace.WithSpanKind(trace.SpanKindConsumer),
 		trace.WithAttributes(attribute.Int64("job.id", c.Job.ID), attribute.Int64("database.id", c.Job.DatabaseID), attribute.String("execution.id", c.ExecutionID), attribute.Int64("queue.wait_ms", time.Since(c.Job.CreatedAt).Milliseconds())))
 	defer span.End()
@@ -123,7 +129,13 @@ func (w *Worker) ProcessNext(ctx context.Context) (bool, error) {
 			}
 		}
 	}()
+	started := time.Now()
 	result, err := w.executor.ExecuteJob(jobCtx, c)
+	outcome := result.Status
+	if err != nil {
+		outcome = "unknown"
+	}
+	metrics.ObserveDuration(outcome, time.Since(started))
 	close(stopHeartbeat)
 	<-heartbeatDone
 	if err != nil {

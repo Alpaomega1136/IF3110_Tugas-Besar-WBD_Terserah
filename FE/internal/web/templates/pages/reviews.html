@@ -44,7 +44,7 @@
                         <p id="reviews-list-error" class="error-message" role="alert" hidden></p>
                         <p id="reviews-list-empty" hidden>Belum ada pengajuan review yang sesuai dengan filter.</p>
 
-                        <div id="reviews-list-table" class="users-table-wrapper" hidden>
+                        <div id="reviews-list-table" class="users-table-wrapper" role="region" aria-labelledby="reviews-list-heading" tabindex="0" hidden>
                             <table class="users-table">
                                 <thead>
                                     <tr>
@@ -96,8 +96,8 @@
                                 <a id="review-jobs-link" class="workspace-button workspace-button--subtle">Pantau job database</a>
                                 <p id="review-job-message" role="status" aria-live="polite" hidden></p>
                             </div>
-                            <h3>Status Persetujuan Leader Group</h3>
-                            <div class="users-table-wrapper">
+                            <h3 id="review-approvals-heading">Status Persetujuan Leader Group</h3>
+                            <div class="users-table-wrapper" role="region" aria-labelledby="review-approvals-heading" tabindex="0">
                                 <table class="users-table">
                                     <thead>
                                         <tr>

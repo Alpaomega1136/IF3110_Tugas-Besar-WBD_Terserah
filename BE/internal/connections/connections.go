@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"terserah/backend/internal/auth"
+	"terserah/backend/internal/metrics"
 	"terserah/backend/internal/policy"
 	"terserah/backend/internal/secretbox"
 	"terserah/backend/internal/telemetry"
@@ -340,9 +341,7 @@ func (s *Service) Test(ctx context.Context, p auth.Principal, id int64) error {
 	return nil
 }
 
-// OpenTarget checks RBAC against the metadata DB, decrypts the target credential,
-// and opens a request-scoped connection pool to the target PostgreSQL database.
-func (s *Service) OpenTarget(ctx context.Context, p auth.Principal, id int64, write bool) (*pgxpool.Pool, error) {
+func (s *Service) OpenTarget(ctx context.Context, p auth.Principal, id int64, write bool) (*metrics.Pool, error) {
 	if p.ID < 1 {
 		return nil, auth.ErrUnauthenticated
 	}
@@ -360,9 +359,7 @@ func (s *Service) OpenTarget(ctx context.Context, p auth.Principal, id int64, wr
 	return s.open(ctx, c)
 }
 
-// OpenForRecovery is internal to receipt/checkpoint verification after an actor loses access.
-// It must never execute user SQL; execution still requires OpenTarget and fresh authorization.
-func (s *Service) OpenForRecovery(ctx context.Context, id int64) (*pgxpool.Pool, error) {
+func (s *Service) OpenForRecovery(ctx context.Context, id int64) (*metrics.Pool, error) {
 	if id < 1 {
 		return nil, ErrInvalid
 	}
@@ -373,7 +370,7 @@ func (s *Service) OpenForRecovery(ctx context.Context, id int64) (*pgxpool.Pool,
 	return s.open(ctx, c)
 }
 
-func (s *Service) open(ctx context.Context, c Connection) (*pgxpool.Pool, error) {
+func (s *Service) open(ctx context.Context, c Connection) (*metrics.Pool, error) {
 	password, err := s.box.Open(c.passwordEncrypted, fmt.Sprintf("target:%d", c.ID))
 	if err != nil {
 		return nil, errors.New("cannot decrypt target credential")
@@ -397,10 +394,11 @@ func (s *Service) open(ctx context.Context, c Connection) (*pgxpool.Pool, error)
 	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.NewWithConfig(connectCtx, cfg)
+	rawPool, err := pgxpool.NewWithConfig(connectCtx, cfg)
 	if err != nil {
 		return nil, ErrTargetUnavailable
 	}
+	pool := metrics.TrackPool(rawPool, "target")
 	if err = pool.Ping(connectCtx); err != nil {
 		pool.Close()
 		return nil, ErrTargetUnavailable
